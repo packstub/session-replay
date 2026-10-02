@@ -2,7 +2,7 @@
 
 All notable changes to `packstub/session-replay` are documented here.
 
-## Unreleased
+## 1.0.0-beta.2 — 2026-10-02
 
 ### Added
 
