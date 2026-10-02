@@ -161,6 +161,37 @@ it('masks rich editors and redacts secret query parameters by default', function
         ->and($privacy['redactQuery'])->toContain('token', 'signature', 'code', 'state', 'email');
 });
 
+it('records signed-in people without naming them when privacy.anonymous is on', function () {
+    config()->set('session-replay.privacy.anonymous', true);
+
+    $team = $this->team();
+    SessionReplay::tenantUsing(fn () => $team)->impersonatorUsing(fn () => 42);
+
+    $ada = $this->user();
+    $grace = $this->user();
+
+    $config = recorderConfig((string) $this->actingAs($ada)->get('page')->getContent());
+    $token = ContextToken::decode($config['token']);
+
+    // Recorded although guests are off, with the workspace but without the person or the impersonator.
+    expect($token->userId)->toBeNull()
+        ->and($token->userType)->toBeNull()
+        ->and($token->impersonatorId)->toBeNull()
+        ->and($token->tenantId)->toBe((string) $team->id)
+        ->and($token->pseudonym)->toHaveLength(32);
+
+    // Another person is another recording, though neither is named.
+    $other = recorderConfig((string) $this->actingAs($grace)->get('page')->getContent());
+
+    expect($config['identity'])->not->toBeNull()
+        ->and($other['identity'])->not->toBe($config['identity'])
+        ->and(ContextToken::decode($other['token'])->pseudonym)->not->toBe($token->pseudonym);
+
+    // Guests are still left out unless the app turns them on.
+    auth()->logout();
+    $this->get('page')->assertDontSee('__sessionReplay', false);
+});
+
 it('escapes what goes into the script tag', function () {
     SessionReplay::propertiesUsing(fn () => ['note' => '</script><script>alert(1)</script>']);
 

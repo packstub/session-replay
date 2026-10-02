@@ -28,7 +28,25 @@ class ContextToken
         public int $issuedAt = 0,
         // Random per rendered page: what a guest's uploads are throttled by, since the client cannot choose it.
         public ?string $nonce = null,
+        // privacy.anonymous: a keyed hash of the person, never stored; their uploads are limited per person and a
+        // change of person still starts a new recording, while the recording names nobody.
+        public ?string $pseudonym = null,
     ) {}
+
+    /**
+     * The same context with the person and the impersonator taken out (privacy.anonymous): the workspace and the
+     * app's properties stay, the person becomes a pseudonym the server can limit uploads by and never stores.
+     */
+    public function withoutPerson(): self
+    {
+        if ($this->userId === null) {
+            return $this;
+        }
+
+        $pseudonym = substr(hash_hmac('sha256', 'session-replay-person|'.$this->userType.'|'.$this->userId, self::key()), 0, 32);
+
+        return new self(null, null, $this->tenantType, $this->tenantId, null, $this->properties, $this->issuedAt, $this->nonce, $pseudonym);
+    }
 
     /** @param array<string, mixed> $properties */
     public static function for(?Model $user, ?Model $tenant = null, ?string $impersonatorId = null, array $properties = []): self
@@ -50,10 +68,16 @@ class ContextToken
         return $this->userId === null;
     }
 
-    /** Names nobody: no person, no workspace, no impersonator. Only such a token may be exempt from expiry. */
+    /** Names nobody: no person, no workspace, no impersonator, no pseudonym. Only such a token may be exempt from expiry. */
     public function isAnonymous(): bool
     {
-        return $this->userId === null && $this->tenantId === null && $this->impersonatorId === null;
+        return $this->userId === null && $this->tenantId === null && $this->impersonatorId === null && $this->pseudonym === null;
+    }
+
+    /** Nobody was signed in: neither a person nor a pseudonym for one. */
+    public function isVisitor(): bool
+    {
+        return $this->userId === null && $this->pseudonym === null;
     }
 
     public function isExpired(): bool
@@ -82,6 +106,10 @@ class ContextToken
     /** What the ingest limits count against: the person, or for guests the page render the token came from. */
     public function throttleKey(): string
     {
+        if ($this->pseudonym !== null) {
+            return 'person:'.$this->pseudonym;
+        }
+
         return $this->isGuest() ? 'guest:'.($this->nonce ?? 'none') : $this->userType.':'.$this->userId;
     }
 
@@ -100,6 +128,7 @@ class ContextToken
             'p' => $this->properties,
             'iat' => $this->issuedAt,
             'n' => $this->nonce,
+            'a' => $this->pseudonym,
         ], JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE));
 
         return $payload.'.'.self::sign($payload);
@@ -133,6 +162,7 @@ class ContextToken
             is_array($data['p'] ?? null) ? $data['p'] : [],
             $data['iat'],
             isset($data['n']) ? (string) $data['n'] : null,
+            isset($data['a']) ? (string) $data['a'] : null,
         );
 
         return $token->isExpired() ? null : $token;
@@ -140,13 +170,14 @@ class ContextToken
 
     protected static function sign(string $payload): string
     {
+        return self::base64UrlEncode(hash_hmac('sha256', 'session-replay|'.$payload, self::key(), true));
+    }
+
+    protected static function key(): string
+    {
         $key = (string) config('app.key');
 
-        if (str_starts_with($key, 'base64:')) {
-            $key = (string) base64_decode(substr($key, 7));
-        }
-
-        return self::base64UrlEncode(hash_hmac('sha256', 'session-replay|'.$payload, $key, true));
+        return str_starts_with($key, 'base64:') ? (string) base64_decode(substr($key, 7)) : $key;
     }
 
     protected static function base64UrlEncode(string $value): string

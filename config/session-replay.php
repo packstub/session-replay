@@ -83,6 +83,13 @@ return [
         'mask_text_selector' => '[data-replay-mask], [data-replay-mask] *, [contenteditable], [contenteditable] *',
         'block_selector' => '[data-replay-block]',
         'ignore_selector' => '[data-replay-ignore]',
+        // true: recordings are not linked to the signed-in person. Who is signed in still decides whether a page is
+        // recorded (guests, recordWhen()), and a change of person still starts a new recording, but no person and no
+        // impersonator are stored; the workspace and your properties stay. Signed-in people are recorded with
+        // guests off, and their uploads are limited per person like anyone else's.
+        'anonymous' => false,
+        // false: the browser's user agent is not stored; the device class (desktop, tablet, mobile) still is.
+        'store_user_agent' => true,
         'redact_query' => ['token', 'access_token', 'refresh_token', 'id_token', 'signature', 'code', 'state', 'password', 'secret', 'key', 'api_key', 'email'],
     ],
 

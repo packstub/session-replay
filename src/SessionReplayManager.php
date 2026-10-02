@@ -184,11 +184,15 @@ class SessionReplayManager
             $properties,
         );
 
+        if (config('session-replay.privacy.anonymous', false)) {
+            $token = $token->withoutPerson();
+        }
+
         $config = [
             'token' => $token->encode(),
             // Who and where the token was signed for, so the browser starts a new recording when the person, the
             // workspace or the impersonator changes: a recording belongs to one person in one workspace.
-            'identity' => $token->isAnonymous() ? null : substr(hash('sha256', implode('|', [$token->userType, $token->userId, $token->tenantType, $token->tenantId, $token->impersonatorId, config('app.key')])), 0, 16),
+            'identity' => $token->isAnonymous() ? null : substr(hash('sha256', implode('|', [$token->userType, $token->userId, $token->tenantType, $token->tenantId, $token->impersonatorId, $token->pseudonym, config('app.key')])), 0, 16),
             'ingestUrl' => $this->route('ingest'),
             'assetUrl' => $this->route('ingest.asset'),
             'sampleRate' => (float) config('session-replay.sample_rate', 1.0),

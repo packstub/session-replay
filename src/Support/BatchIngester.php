@@ -48,7 +48,7 @@ class BatchIngester
                 'impersonator_id' => $context->impersonatorId,
                 'properties' => $context->properties ?: null,
                 'entry_url' => Str::limit((string) Arr::get($meta, 'url', ''), 2000, '') ?: null,
-                'user_agent' => $userAgent === null ? null : Str::limit($userAgent, 500, ''),
+                'user_agent' => $userAgent === null || ! config('session-replay.privacy.store_user_agent', true) ? null : Str::limit($userAgent, 500, ''),
                 'device' => SessionReplay::device($userAgent),
                 'viewport_width' => $this->smallInt(Arr::get($meta, 'viewport.width')),
                 'viewport_height' => $this->smallInt(Arr::get($meta, 'viewport.height')),

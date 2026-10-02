@@ -30,6 +30,8 @@
 | `privacy.mask_text_selector` | `[data-replay-mask], [data-replay-mask] *, [contenteditable], [contenteditable] *` | Elements whose text is replaced with asterisks. Rich editors are in the default, so what people type there is masked like an input. |
 | `privacy.block_selector` | `[data-replay-block]` | Elements recorded as an empty box of the same size. |
 | `privacy.ignore_selector` | `[data-replay-ignore]` | Elements whose input events are not recorded. |
+| `privacy.anonymous` | `false` | Record signed-in people without storing who they are (no person, no impersonator; the workspace stays). Uploads are still limited per person. See [Privacy](privacy.md#recordings-that-name-nobody). |
+| `privacy.store_user_agent` | `true` | `false` drops the user agent; the device class is kept. |
 | `privacy.redact_query` | `token`, `access_token`, `refresh_token`, `id_token`, `signature`, `code`, `state`, `password`, `secret`, `key`, `api_key`, `email` | Query parameters whose value is replaced with `redacted` in every URL the recorder sends. |
 
 ## Capture

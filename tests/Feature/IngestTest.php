@@ -315,6 +315,41 @@ it('never lets an impersonated recording and the person\'s own write into each o
     $this->ingest(['token' => $this->token($ada), 'session' => $session->id, 'seq' => 1])->assertOk();
 });
 
+it('stores an anonymous recording without a person, with guests off, and limits it per person', function () {
+    config()->set('session-replay.ingest.daily_mb', 1);
+
+    $ada = ContextToken::for($this->user(), null, '7')->withoutPerson()->encode();
+    $grace = ContextToken::for($this->user())->withoutPerson()->encode();
+    $id = (string) Str::uuid();
+
+    $this->ingest(['token' => $ada, 'session' => $id])->assertCreated();
+
+    $session = ReplaySession::query()->findOrFail($id);
+
+    expect($session->user_id)->toBeNull()->and($session->user_type)->toBeNull()->and($session->impersonator_id)->toBeNull();
+
+    // Each person has their own daily allowance, not the guests' shared one.
+    $noise = json_encode([str_repeat('x', 1100 * 1024)]);
+
+    $this->ingest(['token' => $ada, 'events' => $noise, 'gzip' => false])->assertStatus(429);
+    $this->ingest(['token' => $grace])->assertCreated();
+});
+
+it('keeps the device class but not the user agent when privacy.store_user_agent is off', function () {
+    $this->ingest()->assertCreated();
+
+    expect(ReplaySession::query()->sole()->user_agent)->toContain('Macintosh');
+
+    config()->set('session-replay.privacy.store_user_agent', false);
+    ReplaySession::query()->delete();
+
+    $this->ingest()->assertCreated();
+
+    $session = ReplaySession::query()->sole();
+
+    expect($session->user_agent)->toBeNull()->and($session->device)->toBe('desktop');
+});
+
 it('puts no web middleware on the upload routes, which carry no CSRF token', function () {
     $middleware = app('router')->getRoutes()->getByName('session-replay.ingest')->gatherMiddleware();
 

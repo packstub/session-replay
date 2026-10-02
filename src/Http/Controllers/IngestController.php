@@ -152,7 +152,7 @@ class IngestController
             return $this->refuse(401, 'The recording token is missing, invalid or expired.', stop: true);
         }
 
-        if ($context->isGuest() && ! config('session-replay.guests', false)) {
+        if ($context->isVisitor() && ! config('session-replay.guests', false)) {
             return $this->refuse(403, 'Guests are not recorded.', stop: true);
         }
 
@@ -162,13 +162,13 @@ class IngestController
     /** Counts the upload against the person's daily allowance (all guests share one) and says whether it is spent. */
     protected function overDailyLimit(ContextToken $context, int $bytes): bool
     {
-        $megabytes = $context->isGuest() ? config('session-replay.ingest.guest_daily_mb') : config('session-replay.ingest.daily_mb');
+        $megabytes = $context->isVisitor() ? config('session-replay.ingest.guest_daily_mb') : config('session-replay.ingest.daily_mb');
 
         if (! $megabytes) {
             return false;
         }
 
-        $key = 'session-replay|bytes|'.now()->format('Y-m-d').'|'.($context->isGuest() ? 'guests' : $context->throttleKey());
+        $key = 'session-replay|bytes|'.now()->format('Y-m-d').'|'.($context->isVisitor() ? 'guests' : $context->throttleKey());
 
         Cache::add($key, 0, now()->addDay());
 

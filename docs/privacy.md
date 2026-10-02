@@ -6,7 +6,7 @@ A recording shows what a person saw. The defaults are chosen so that a forgotten
 
 - The page's DOM when it loads and every change to it afterwards, the stylesheets, mouse movement, clicks, scrolling, viewport size and input events.
 - The markers described in [Recording](recording.md#markers): errors, `console.error` output, failed Livewire requests, web vitals, rage clicks, page views.
-- With the recording: who was signed in (morph type and key), the workspace and impersonator if your app provides them, your own properties, the first URL, the user agent and a device class (`desktop`, `tablet`, `mobile`).
+- With the recording: who was signed in (morph type and key; nobody with `privacy.anonymous`), the workspace and impersonator if your app provides them, your own properties, the first URL, the user agent (unless `privacy.store_user_agent` is off) and a device class (`desktop`, `tablet`, `mobile`).
 
 ## What is not recorded
 
@@ -81,10 +81,18 @@ SessionReplay.consent(false);
 
 - `guests` (default `false`): only signed-in people are recorded.
 - `SessionReplay::recordWhen(fn ($user, $request) => ...)`: leave out staff, a plan, a route group, anything you can decide from the user and the request.
-- `except`: request paths that never get the recorder.
+- `except` and `except_routes`: request paths and route names that never get the recorder.
 - `sample_rate`: record a share of sessions.
 
 See [Recording](recording.md#who-is-recorded).
+
+## Recordings that name nobody
+
+`privacy.anonymous = true` records signed-in people without linking the recording to them: no person and no impersonator are stored, the workspace and your properties stay. Who is signed in still decides whether a page is recorded (`guests`, `recordWhen()`), and a change of person still starts a new recording. The server limits uploads per person through a keyed hash of the person that travels in the signed token and is never stored. The Filament plugin follows the same setting.
+
+The list then shows "Guest" for every recording, a person's Session replays tab stays empty, and `WatchLastSessionAction` has nothing to open: support can no longer go from a user to their recordings, which is the point. Combine it with `privacy.mask_all_text` for recordings that cannot identify anyone from what is on screen either.
+
+`privacy.store_user_agent = false` drops the browser's user agent; the device class (desktop, tablet, mobile) is kept.
 
 ## Who may watch
 
