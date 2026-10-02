@@ -32,6 +32,16 @@ return [
         'email/verify*',
     ],
 
+    // Route names (Str::is patterns) that never get the recorder, next to the paths above: the same pages by the
+    // name Laravel's starter kits and Filament's panels give them, whatever their URL.
+    'except_routes' => [
+        'password.*',
+        'verification.*',
+        'filament.*.auth.password-reset.*',
+        'filament.*.auth.email-verification.*',
+        'filament.*.auth.email-change-verification.*',
+    ],
+
     // Minutes without activity after which the browser starts a new recording.
     'idle_timeout' => 30,
 

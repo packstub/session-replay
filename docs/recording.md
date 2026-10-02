@@ -35,7 +35,7 @@ Outside Blade, `SessionReplay::recorder($options)` returns the same HTML.
 `SessionReplay::shouldRecord()` runs these checks in order; the first that fails means the directive renders nothing:
 
 1. `enabled` is `true` (`SESSION_REPLAY_ENABLED`).
-2. The request path is not the package's own (`path` and everything under it) and matches none of the `except` patterns (`Str::is` style, for example `admin/secrets*`).
+2. The request path is not the package's own (`path` and everything under it) and matches none of the `except` patterns (`Str::is` style, for example `admin/secrets*`), and the route's name matches none of the `except_routes` patterns (for example `billing.*`).
 3. Someone is signed in, or `guests` is `true`.
 4. `SessionReplay::recordWhen()` was not registered, or returns `true`.
 

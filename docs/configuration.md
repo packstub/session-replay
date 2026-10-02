@@ -1,6 +1,6 @@
 # Configuration
 
-`php artisan session-replay:install` publishes `config/session-replay.php`; `php artisan vendor:publish --tag=session-replay-config` does the same on its own. Your file is merged over the package defaults key by key, so it may contain only what you change. A list you set (`except`, `capture.console`, `size.strip_attributes`, `size.keep_attributes`, `ingest.middleware`, `viewer.middleware`) replaces the default list as a whole, so `[]` really turns a list off.
+`php artisan session-replay:install` publishes `config/session-replay.php`; `php artisan vendor:publish --tag=session-replay-config` does the same on its own. Your file is merged over the package defaults key by key, so it may contain only what you change. A list you set (`except`, `except_routes`, `capture.console`, `size.strip_attributes`, `size.keep_attributes`, `ingest.middleware`, `viewer.middleware`) replaces the default list as a whole, so `[]` really turns a list off.
 
 ## Recording
 
@@ -10,6 +10,7 @@
 | `sample_rate` | `env('SESSION_REPLAY_SAMPLE_RATE', 1.0)` | Share of recordings kept, decided once per recording in the browser. |
 | `guests` | `env('SESSION_REPLAY_GUESTS', false)` | Record people who are not signed in. |
 | `except` | password-reset and verification pages | Request paths (`Str::is` patterns) that never get the recorder. The package's own pages are always left out. The default list covers `*password-reset*`, `*reset-password*`, `*forgot-password*`, `password/*`, `*email-verification*`, `*verify-email*` and `email/verify*`; a list you set replaces it, so keep those in yours. |
+| `except_routes` | password-reset and verification routes | Route names (`Str::is` patterns) that never get the recorder, whatever their URL. The default list covers `password.*` and `verification.*` (Laravel's starter kits) and `filament.*.auth.password-reset.*`, `filament.*.auth.email-verification.*` and `filament.*.auth.email-change-verification.*` (Filament panels). |
 | `idle_timeout` | `30` | Minutes without activity after which a tab starts a new recording. |
 | `flush_interval` | `5000` | Milliseconds between uploads while the page is open (minimum 1000). |
 

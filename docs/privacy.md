@@ -15,7 +15,7 @@ A recording shows what a person saw. The defaults are chosen so that a forgotten
 - **Rich editors.** Text in a `contenteditable` element (Tiptap, Trix, CodeMirror) is masked like an input, through the default `privacy.mask_text_selector`.
 - **Hidden inputs.** The value of every `<input type="hidden">` (a CSRF token, an id, a signature) is dropped before upload.
 - **Secrets in URLs.** The query parameters in `privacy.redact_query` (`token`, `signature`, `code`, `state`, `email` and others) keep their name and lose their value in every URL the recorder sends: the first page, page views, error sources, stack traces and the links, images and form actions in the page itself.
-- **Password-reset and verification pages.** The default `except` list leaves out the pages whose URL carries such a link (`*password-reset*`, `*reset-password*`, `email/verify*` and the like).
+- **Password-reset and verification pages.** The default `except` list leaves out the pages whose URL carries such a link (`*password-reset*`, `*reset-password*`, `email/verify*` and the like), and `except_routes` the same pages by route name (`password.*`, `verification.*`, Filament's `filament.*.auth.password-reset.*`), whatever their URL.
 - **Scripts.** Script contents are left out of the snapshot and the player never executes anything; it rebuilds the DOM in a sandboxed iframe.
 - **Livewire component state.** `wire:snapshot` and `wire:effects` are dropped before upload, along with Alpine expressions (`size.strip_attributes`).
 - **Guests**, unless you turn `guests` on.

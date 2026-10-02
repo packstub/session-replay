@@ -2,6 +2,12 @@
 
 All notable changes to `packstub/session-replay` are documented here.
 
+## Unreleased
+
+### Added
+
+- **`except_routes`.** Route names (`Str::is` patterns) that never get the recorder, next to the `except` paths. The default list leaves out the password-reset and verification pages of Laravel's starter kits (`password.*`, `verification.*`) and of Filament panels (`filament.*.auth.password-reset.*`, `filament.*.auth.email-verification.*`, `filament.*.auth.email-change-verification.*`), whatever their URL. An app that published its config before gets the default list from the package until it sets its own.
+
 ## 1.0.0-beta.1 — 2026-10-02
 
 First beta. Names and config may still change before 1.0; every change will be listed here with how to upgrade.

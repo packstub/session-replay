@@ -135,6 +135,23 @@ it('leaves pages with a password-reset or verification link in their URL out by 
     $this->get('page')->assertSee('__sessionReplay', false);
 });
 
+it('leaves pages out by route name, whatever their URL', function () {
+    $this->actingAs($this->user());
+
+    // password.reset is in the default list; the path matches none of the default path patterns.
+    $this->get('account/new-password')->assertOk()->assertDontSee('__sessionReplay', false);
+    $this->get('admin/support/secrets')->assertOk()->assertSee('__sessionReplay', false);
+
+    config()->set('session-replay.except_routes', ['support.*']);
+
+    $this->get('admin/support/secrets')->assertOk()->assertDontSee('__sessionReplay', false);
+    $this->get('account/new-password')->assertOk()->assertSee('__sessionReplay', false);
+
+    config()->set('session-replay.except_routes', []);
+
+    $this->get('account/new-password')->assertOk()->assertSee('__sessionReplay', false);
+});
+
 it('masks rich editors and redacts secret query parameters by default', function () {
     $this->actingAs($this->user());
 

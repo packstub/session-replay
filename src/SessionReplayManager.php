@@ -139,6 +139,12 @@ class SessionReplayManager
             return false;
         }
 
+        $routes = array_values((array) config('session-replay.except_routes', []));
+
+        if ($routes !== [] && $request->routeIs(...$routes)) {
+            return false;
+        }
+
         if ($user === null && ! config('session-replay.guests', false)) {
             return false;
         }
