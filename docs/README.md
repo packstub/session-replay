@@ -8,18 +8,16 @@ Record what a person did in the browser with rrweb, keep the recording on your o
 
 In a Filament panel, [Filament Session Replay](https://github.com/packstub/filament-session-replay/tree/main/docs) puts the sessions, the player and the masking macros on top of this package.
 
-## What you get
+## Features
 
-| Feature | What it means for you |
-| --- | --- |
-| **One directive** | `@sessionReplay` before `</body>` records the page. The recorder and the player are served by a package route, versioned and cached for a year. |
-| **Private by default** | Every input masked, passwords always, no IP address, guests off, scripts never replayed. `data-replay-mask`, `data-replay-block`, `data-replay-ignore` and `privacy.mask_all_text` for the rest. Opt-in consent and Global Privacy Control are one setting each. |
-| **Your storage** | Gzip chunks on any filesystem disk (local, S3, R2), the index in four tables on a connection you choose. No metering, no second service. |
-| **Markers** | Errors, console output, failed Livewire requests, web vitals, rage clicks, page views and your own moments are drawn on the timeline and indexed in `replay_markers`, so a list filters on them without opening a recording. |
-| **Small recordings** | Stylesheets stored once per SHA-256 of their content, Livewire and Alpine attributes dropped, comments and scripts left out, batches gzipped in the browser and stored as sent. |
-| **A gate, down to the file** | `viewSessionReplay` is asked for the list and, with the recording, for the player, the manifest, every chunk and every stylesheet. Undefined means local environment only. |
-| **Identity without a session** | Who is signed in, the workspace and an impersonator are signed into a token when the page renders. Ingest trusts only that, so it works with any guard, any tenancy setup and no CSRF token. |
-| **A link in every log line** | The running recording's id and URL are added to Laravel's `Context`. |
+- **[One Blade directive](recording.md#the-directive)**: `@sessionReplay` before `</body>` records the page, with nothing to build or publish.
+- **[Private by default](privacy.md)**: every input masked, no IP address stored, consent and an anonymous mode when you need them.
+- **[Recordings stay with you](storage.md)**: gzip chunks on any filesystem disk (local, S3, R2), the index in four tables on your connection.
+- **[Markers on the timeline](recording.md#markers)**: errors, failed Livewire requests, web vitals, rage clicks, page views and your own moments.
+- **[Small recordings](storage.md#sizes)**: stylesheets stored once, unused attributes dropped, batches gzipped in the browser.
+- **[A gate decides who watches](watching.md#the-gate)**: `viewSessionReplay` guards the list, the player and every file behind them.
+- **[Identity without a session](recording.md#who-is-recorded)**: who is signed in travels in a signed token, so any guard and any tenancy setup works.
+- **[A link in every log line](error-tracking.md)**: the recording's id and URL in Laravel's `Context`.
 
 ## Guides
 

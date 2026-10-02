@@ -21,16 +21,16 @@ Record what a person did in the browser, keep the recording on your own disk and
 
 ## Features
 
-- **One Blade directive.** `@sessionReplay` before `</body>` records the page. The recorder and the player are served by the package; there is nothing to build or publish.
-- **Private by default.** Every input is masked, password inputs always are, scripts are never replayed, no IP address is stored. `data-replay-mask`, `data-replay-block` and `data-replay-ignore` cover the rest, and `mask_all_text` records layout only.
-- **Recordings stay with you.** Gzip chunks on any Laravel filesystem disk, the index in four tables on a connection you choose.
-- **Markers on the timeline.** Uncaught errors, `console.error`, failed Livewire requests, LCP/INP/CLS, rage clicks, page views (`wire:navigate` included) and your own `SessionReplay.mark()`, indexed so a list can filter without opening a recording.
-- **Small recordings.** Stylesheets are stored once per SHA-256 of their content instead of inside every snapshot, attributes the player never uses (`wire:snapshot`, Alpine expressions) are dropped, batches are gzipped in the browser and stored and served as sent.
-- **A gate decides who watches.** `viewSessionReplay` receives the recording and guards the list, the player and every file behind them. Until your app defines it, only the local environment is let in.
-- **A link in every log line.** While a recording runs, its id and URL sit in Laravel's `Context`, so log lines and error reports point at the replay.
-- **Multi-tenant aware.** `SessionReplay::tenantUsing()` stores the workspace with the recording, a recording never spans two workspaces, and the tables can live on your central connection.
-- **Friendly to cached pages.** The recorder's token lives as long as you say (`ingest.token_days`), and a guest token can outlive a full-page cache.
-- **Five languages.** The viewer and the player in English, German, Spanish, Romanian and Russian.
+- **[One Blade directive](#quick-start)**: `@sessionReplay` before `</body>` records the page, with nothing to build or publish.
+- **[Private by default](#privacy-defaults)**: every input masked, no IP address stored, an anonymous mode, sensitive pages left out.
+- **[Recordings stay with you](docs/storage.md)**: gzip chunks on any Laravel disk, the index in four tables on your connection.
+- **[Markers on the timeline](docs/recording.md#markers)**: errors, failed Livewire requests, web vitals, rage clicks, page views and your own moments.
+- **[Small recordings](docs/storage.md#sizes)**: stylesheets stored once, unused attributes dropped, batches gzipped in the browser.
+- **[A gate decides who watches](docs/watching.md#the-gate)**: `viewSessionReplay` guards the list, the player and every file behind them.
+- **[A link in every log line](docs/error-tracking.md)**: the recording's id and URL in Laravel's `Context`, so error reports point at the replay.
+- **[Multi-tenant aware](docs/storage.md#multi-tenant-apps)**: a recording stays in one workspace, and the tables can live on your central connection.
+- **[Friendly to cached pages](docs/recording.md#cached-pages)**: the recorder's token can outlive a full-page cache.
+- **Five languages**: the viewer and the player in English, German, Spanish, Romanian and Russian.
 
 ## Quick start
 

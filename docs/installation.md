@@ -95,6 +95,8 @@ Everything lives under one prefix (`path`, default `session-replay`; `domain` op
 | `session-replay.chunk` | `GET {path}/{session}/chunks/{seq}` | same |
 | `session-replay.asset` | `GET {path}/{session}/assets/{hash}` | same |
 
+The script URLs carry a version, so browsers cache them for a year and pick up a new release on the next page load.
+
 `viewer.enabled = false` removes `index` and `show` and keeps the data routes, which the player component needs.
 
 ## PHP upload limit

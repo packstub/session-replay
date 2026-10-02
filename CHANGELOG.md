@@ -10,6 +10,10 @@ All notable changes to `packstub/session-replay` are documented here.
 - **`privacy.anonymous`.** Records signed-in people without storing who they are: no person and no impersonator, the workspace and your properties stay. Who is signed in still decides whether a page is recorded and when a new recording starts, and uploads are limited per person through a keyed hash in the signed token that is never stored. Filament panels follow it too.
 - **`privacy.store_user_agent`.** `false` drops the browser's user agent; the device class is kept.
 
+### Changed
+
+- **Docs.** A shorter Features list in the README and on the docs index, one line per area.
+
 ## 1.0.0-beta.1 — 2026-10-02
 
 First beta. Names and config may still change before 1.0; every change will be listed here with how to upgrade.
