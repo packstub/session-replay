@@ -144,7 +144,7 @@ The lab behind these numbers ships with the Filament package (`workbench/lab/mea
 | `ingest.max_batch_kb` | 1536 | The browser splits a batch that compresses to more; the server answers 413 to a larger upload. A gzip batch that inflates to more than 40 times this is refused (422). |
 | `ingest.max_session_mb` | 50 | The recording is marked `truncated` and the recorder is told to stop. |
 | `ingest.max_asset_kb` | 1536 | The limit on a stylesheet as sent (compressed); it may inflate to eight times this. A larger one is refused and stays missing in the replay. |
-| `ingest.throttle` | 240 | Uploads per minute, per signed-in person, or per recording for guests. Never per IP address. The recorder backs off on a 429. `null` turns it off. |
+| `ingest.throttle` | 240 | Uploads per minute, per signed-in person, or per rendered page for guests (a value in the signed token). Never per IP address. The recorder backs off on a 429. `null` turns it off. |
 
 **PHP's upload limit.** Both defaults stay under PHP's default `upload_max_filesize` of `2M`; a file above PHP's limit never reaches the package. Typical batches are tens of kilobytes and a typical stylesheet compresses to well under 100 KB. If your `upload_max_filesize` or `post_max_size` is lower than 2M, lower both keys to match; to raise them, raise PHP's limits first.
 
