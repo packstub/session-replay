@@ -135,7 +135,10 @@ class SessionReplayManager
 
         $own = trim((string) config('session-replay.path', 'session-replay'), '/');
 
-        if ($request->is($own, $own.'/*', ...(array) config('session-replay.except', []))) {
+        // array_values: a keyed entry in a published list would be spread as a named argument and throw.
+        $paths = array_values((array) config('session-replay.except', []));
+
+        if ($request->is($own, $own.'/*', ...$paths)) {
             return false;
         }
 

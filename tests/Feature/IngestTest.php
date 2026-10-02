@@ -335,6 +335,12 @@ it('stores an anonymous recording without a person, with guests off, and limits 
     $this->ingest(['token' => $grace])->assertCreated();
 });
 
+it('drops the impersonator from an anonymous token even when nobody is signed in', function () {
+    $token = (new ContextToken(impersonatorId: '7', issuedAt: time()))->withoutPerson();
+
+    expect($token->impersonatorId)->toBeNull()->and($token->pseudonym)->toBeNull()->and($token->isVisitor())->toBeTrue();
+});
+
 it('keeps the device class but not the user agent when privacy.store_user_agent is off', function () {
     $this->ingest()->assertCreated();
 

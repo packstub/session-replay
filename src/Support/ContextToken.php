@@ -39,11 +39,9 @@ class ContextToken
      */
     public function withoutPerson(): self
     {
-        if ($this->userId === null) {
-            return $this;
-        }
-
-        $pseudonym = substr(hash_hmac('sha256', 'session-replay-person|'.$this->userType.'|'.$this->userId, self::key()), 0, 32);
+        $pseudonym = $this->userId === null
+            ? $this->pseudonym
+            : substr(hash_hmac('sha256', 'session-replay-person|'.$this->userType.'|'.$this->userId, self::key()), 0, 32);
 
         return new self(null, null, $this->tenantType, $this->tenantId, null, $this->properties, $this->issuedAt, $this->nonce, $pseudonym);
     }

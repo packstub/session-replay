@@ -152,6 +152,18 @@ it('leaves pages out by route name, whatever their URL', function () {
     $this->get('account/new-password')->assertOk()->assertSee('__sessionReplay', false);
 });
 
+it('reads keyed entries in the except lists like plain ones', function () {
+    $this->actingAs($this->user());
+
+    config()->set('session-replay.except', ['secrets' => 'admin/secrets*', 'reset-password/*']);
+    config()->set('session-replay.except_routes', ['support' => 'support.*', 'password.*']);
+
+    $this->get('admin/secrets/keys')->assertOk()->assertDontSee('__sessionReplay', false);
+    $this->get('admin/support/secrets')->assertOk()->assertDontSee('__sessionReplay', false);
+    $this->get('account/new-password')->assertOk()->assertDontSee('__sessionReplay', false);
+    $this->get('page')->assertSee('__sessionReplay', false);
+});
+
 it('masks rich editors and redacts secret query parameters by default', function () {
     $this->actingAs($this->user());
 

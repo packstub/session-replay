@@ -14,6 +14,10 @@ All notable changes to `packstub/session-replay` are documented here.
 
 - **Docs.** A shorter Features list in the README and on the docs index, one line per area.
 
+### Fixed
+
+- **`except` with keyed entries.** A published `except` list with a keyed entry followed by a plain one (`['secrets' => 'admin/secrets*', 'billing/*']`) threw on every recorded page; keys are now ignored, in `except_routes` too.
+
 ## 1.0.0-beta.1 — 2026-10-02
 
 First beta. Names and config may still change before 1.0; every change will be listed here with how to upgrade.
