@@ -77,12 +77,22 @@ SessionReplay.consent(false);
 
 `respect_gpc = true` leaves people alone whose browser sends the Global Privacy Control signal, in both modes.
 
+## Asking before a replay is sent
+
+With `mode = on_error` and `on_error.ask = true`, the recorder asks the person after something went wrong whether to send the replay of what just happened. Nothing is uploaded unless they agree.
+
+- **Send** uploads the kept window, and the tab keeps recording for the rest of its session; the dialog says so.
+- **Don't send** (or Escape) drops what was kept, and the tab is not recorded again until its session ends (`idle_timeout`, or a change of person or workspace).
+- **Anonymously.** When someone is signed in, a checkbox sends the replay without their name: the same rule as `privacy.anonymous`, for this recording only. No person and no impersonator are stored, the workspace and your properties stay, and the upload still counts against the person's daily allowance. The choice only ever removes identity from the signed token; the request carries nothing else about who someone is.
+- **The dialog** is drawn by the recorder in plain DOM, inside a closed shadow root: your page's styles do not reach it, its styles do not leak into your page, and it never appears in a replay. It is a labelled modal dialog, takes focus when it opens, keeps it inside and gives it back when it closes, and follows the system's light or dark scheme. Its strings follow the app's locale; change them in `lang/vendor/session-replay/{locale}/recorder.php` (see [Languages](configuration.md#languages)).
+
 ## Who is recorded
 
 - `guests` (default `false`): only signed-in people are recorded.
 - `SessionReplay::recordWhen(fn ($user, $request) => ...)`: leave out staff, a plan, a route group, anything you can decide from the user and the request.
 - `except` and `except_routes`: request paths and route names that never get the recorder.
 - `sample_rate`: record a share of sessions.
+- `mode = on_error`: upload only the tabs where something went wrong, optionally after asking (see [above](#asking-before-a-replay-is-sent)).
 
 See [Recording](recording.md#who-is-recorded).
 

@@ -2,6 +2,13 @@
 
 All notable changes to `packstub/session-replay` are documented here.
 
+## Unreleased
+
+### Added
+
+- **Recording only when something goes wrong (`mode = on_error`).** The browser keeps the last `on_error.buffer_seconds` (60) in memory, with a fresh page snapshot every half window, and uploads nothing until a marker of a type in `on_error.triggers` (`error` and `request` by default; `console`, `rage-click` and `custom` on request) happens. Then it uploads that window and records the rest of the tab's session as usual. `mode` defaults to `session`, so nothing changes for existing apps. `SessionReplay.isBuffering()` in the browser.
+- **`on_error.ask`.** After a trigger, a small dialog drawn by the recorder (plain DOM in a closed shadow root, never part of a replay) asks whether to send the replay; "Don't send" drops it and leaves the tab alone for the rest of its session. Signed-in people can send it anonymously: the `privacy.anonymous` rule for that one recording (an `anonymous` field on the upload that only ever removes identity from the signed token). Strings in `recorder.php`, in all five languages.
+
 ## 1.0.0-beta.2 — 2026-10-02
 
 ### Added

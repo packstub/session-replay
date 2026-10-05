@@ -18,6 +18,9 @@ class SessionReplayManager
 {
     public const ABILITY = 'viewSessionReplay';
 
+    /** Marker types that may upload the window in mode "on_error". */
+    public const TRIGGERS = ['error', 'request', 'console', 'rage-click', 'custom'];
+
     protected ?Closure $recordWhen = null;
 
     protected ?Closure $userUsing = null;
@@ -227,6 +230,8 @@ class SessionReplayManager
                 'sampling' => (array) config('session-replay.size.sampling', []),
             ],
             'cookie' => config('session-replay.context.enabled', true) ? config('session-replay.context.cookie', 'session_replay_id') : null,
+            'mode' => $this->mode(),
+            'onError' => $this->onErrorConfig($token),
         ];
 
         $nonce = $options['nonce'] ?? Vite::cspNonce();
@@ -236,6 +241,43 @@ class SessionReplayManager
             '<script'.$nonceAttribute.'>window.__sessionReplay='.json_encode($config, JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_APOS | JSON_HEX_QUOT | JSON_UNESCAPED_SLASHES).';</script>'
             .'<script src="'.e($this->scriptUrl('recorder.js')).'" defer'.$nonceAttribute.'></script>'
         );
+    }
+
+    /** "session" (every recorded tab uploads from its first page) or "on_error" (only when something goes wrong). */
+    public function mode(): string
+    {
+        return config('session-replay.mode', 'session') === 'on_error' ? 'on_error' : 'session';
+    }
+
+    /**
+     * What the recorder needs for mode "on_error": the window, the marker
+     * types that upload it and, with on_error.ask, the dialog's strings in
+     * the app's locale. Null in mode "session".
+     *
+     * @return array<string, mixed>|null
+     */
+    protected function onErrorConfig(ContextToken $token): ?array
+    {
+        if ($this->mode() !== 'on_error') {
+            return null;
+        }
+
+        $ask = (bool) config('session-replay.on_error.ask', false);
+
+        return [
+            'bufferMs' => max(5, min(600, (int) config('session-replay.on_error.buffer_seconds', 60))) * 1000,
+            'triggers' => array_values(array_intersect(self::TRIGGERS, array_map('strval', (array) config('session-replay.on_error.triggers', ['error', 'request'])))),
+            'ask' => $ask,
+            // Only a token that names a person can be sent without them; an anonymous one already is.
+            'offerAnonymous' => $ask && $token->userId !== null,
+            'labels' => $ask ? [
+                'title' => __('session-replay::recorder.ask.title'),
+                'body' => __('session-replay::recorder.ask.body'),
+                'anonymous' => __('session-replay::recorder.ask.anonymous'),
+                'share' => __('session-replay::recorder.ask.share'),
+                'decline' => __('session-replay::recorder.ask.decline'),
+            ] : null,
+        ];
     }
 
     /** The player's stylesheet and script, for a page that embeds <x-session-replay::player>. */

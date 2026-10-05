@@ -47,6 +47,34 @@ return [
 
     /*
     |--------------------------------------------------------------------------
+    | Mode
+    |--------------------------------------------------------------------------
+    |
+    | "session": a recorded tab uploads from its first page. "on_error": the
+    | browser keeps only the last moments in memory and uploads nothing until
+    | something goes wrong (on_error.triggers); then it uploads those moments
+    | and records the rest of the tab's session as usual. A full page load
+    | while waiting starts the memory over, so the window holds the pages a
+    | tab went through with wire:navigate, not the ones before a reload.
+    |
+    */
+
+    'mode' => env('SESSION_REPLAY_MODE', 'session'),
+
+    'on_error' => [
+        // Seconds kept before the trigger (5 to 600). The window starts at a full page snapshot, taken every half
+        // window (at most every 30 s), so a replay starts up to that much earlier.
+        'buffer_seconds' => 60,
+        // Marker types that upload the window: error, request (a failed Livewire request), console, rage-click,
+        // custom (SessionReplay.mark()). A type must be captured too (capture.*) to fire.
+        'triggers' => ['error', 'request'],
+        // Ask the person first, in a small dialog the recorder draws: send the replay or not, and, when someone is
+        // signed in, without their name. A "no" drops what was kept and leaves the tab alone until its session ends.
+        'ask' => false,
+    ],
+
+    /*
+    |--------------------------------------------------------------------------
     | Consent
     |--------------------------------------------------------------------------
     |

@@ -14,6 +14,7 @@ In a Filament panel, [Filament Session Replay](https://github.com/packstub/filam
 - **[Private by default](privacy.md)**: every input masked, no IP address stored, consent and an anonymous mode when you need them.
 - **[Recordings stay with you](storage.md)**: gzip chunks on any filesystem disk (local, S3, R2), the index in four tables on your connection.
 - **[Markers on the timeline](recording.md#markers)**: errors, failed Livewire requests, web vitals, rage clicks, page views and your own moments.
+- **[Only when something goes wrong](recording.md#recording-only-when-something-goes-wrong)**: keep the last minute in the browser and upload it on an error, after asking if you like.
 - **[Small recordings](storage.md#sizes)**: stylesheets stored once, unused attributes dropped, batches gzipped in the browser.
 - **[A gate decides who watches](watching.md#the-gate)**: `viewSessionReplay` guards the list, the player and every file behind them.
 - **[Identity without a session](recording.md#who-is-recorded)**: who is signed in travels in a signed token, so any guard and any tenancy setup works.
