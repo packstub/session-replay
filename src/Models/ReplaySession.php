@@ -81,6 +81,12 @@ class ReplaySession extends ReplayModel
         return $this->hasMany(ReplayMarker::class)->orderBy('at_ms');
     }
 
+    /** The shared snapshots this recording points at (by hash). */
+    public function snapshotReferences(): HasMany
+    {
+        return $this->hasMany(ReplaySessionAsset::class);
+    }
+
     /** Wall-clock length of the recording in milliseconds. */
     public function durationMs(): int
     {

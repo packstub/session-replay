@@ -14,6 +14,7 @@ use Packstub\SessionReplay\Models\ReplayAsset;
 use Packstub\SessionReplay\Models\ReplayChunk;
 use Packstub\SessionReplay\Models\ReplayMarker;
 use Packstub\SessionReplay\Models\ReplaySession;
+use Packstub\SessionReplay\Models\ReplaySessionAsset;
 
 /**
  * Stores one upload: the gzip file, its chunk row, the markers the browser
@@ -96,6 +97,7 @@ class BatchIngester
         }
 
         $this->updateCounters($session, $meta, $bytes, $events, $markers);
+        $this->referenceSnapshots($sessionId, (array) Arr::get($meta, 'snapshots', []));
 
         if ($created) {
             ReplaySessionStarted::dispatch($session);
@@ -216,13 +218,41 @@ class BatchIngester
             return [];
         }
 
-        $known = ReplayAsset::query()->whereIn('hash', $hashes)->pluck('hash')->all();
+        // Only stylesheets count as known: whether a shared snapshot exists is never told to a browser.
+        $known = ReplayAsset::query()->whereIn('hash', $hashes)->where('kind', ReplayAsset::STYLESHEET)->pluck('hash')->all();
 
         if ($known !== []) {
             ReplayAsset::query()->whereIn('hash', $known)->where(fn ($query) => $query->whereNull('last_seen_at')->orWhere('last_seen_at', '<', now()->subDay()))->update(['last_seen_at' => now()]);
         }
 
         return array_values(array_diff($hashes, $known));
+    }
+
+    /**
+     * Remember which shared snapshots the recording points at, the ones that
+     * are stored; the viewer serves only those, and prune keeps them. Nothing
+     * of this goes back to the browser.
+     *
+     * @param  array<int, mixed>  $hashes
+     */
+    protected function referenceSnapshots(string $sessionId, array $hashes): void
+    {
+        $hashes = array_values(array_unique(array_filter(
+            array_slice($hashes, 0, 20),
+            fn ($hash): bool => is_string($hash) && preg_match('/^[a-f0-9]{64}$/', $hash) === 1,
+        )));
+
+        if ($hashes === []) {
+            return;
+        }
+
+        $stored = ReplayAsset::query()->whereIn('hash', $hashes)->pluck('hash')->all();
+
+        ReplaySessionAsset::query()->insertOrIgnore(array_map(fn (string $hash): array => [
+            'replay_session_id' => $sessionId,
+            'hash' => $hash,
+            'created_at' => now(),
+        ], $stored));
     }
 
     protected function connection(): ConnectionInterface

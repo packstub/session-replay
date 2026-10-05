@@ -135,16 +135,7 @@ class SessionReplayManager
 
         $own = trim((string) config('session-replay.path', 'session-replay'), '/');
 
-        // array_values: a keyed entry in a published list would be spread as a named argument and throw.
-        $paths = array_values((array) config('session-replay.except', []));
-
-        if ($request->is($own, $own.'/*', ...$paths)) {
-            return false;
-        }
-
-        $routes = array_values((array) config('session-replay.except_routes', []));
-
-        if ($routes !== [] && $request->routeIs(...$routes)) {
+        if ($request->is($own, $own.'/*') || $this->requestMatches($request, config('session-replay.except', []), config('session-replay.except_routes', []))) {
             return false;
         }
 
@@ -153,6 +144,22 @@ class SessionReplayManager
         }
 
         return $this->recordWhen === null || (bool) ($this->recordWhen)($user, $request);
+    }
+
+    /** Whether this page's snapshot is stored once per content hash (snapshots.share_routes, snapshots.share_paths). */
+    public function sharesSnapshots(?Request $request = null): bool
+    {
+        return $this->requestMatches($request ?? request(), config('session-replay.snapshots.share_paths', []), config('session-replay.snapshots.share_routes', []));
+    }
+
+    /** The request's path or route name matches one of the Str::is patterns; keys in a published list are ignored. */
+    protected function requestMatches(Request $request, mixed $paths, mixed $routes): bool
+    {
+        // array_values: a keyed entry in a published list would be spread as a named argument and throw.
+        $paths = array_values(array_filter((array) $paths, 'is_string'));
+        $routes = array_values(array_filter((array) $routes, 'is_string'));
+
+        return ($paths !== [] && $request->is(...$paths)) || ($routes !== [] && $request->routeIs(...$routes));
     }
 
     /**
@@ -225,6 +232,11 @@ class SessionReplayManager
                 'stripAttributes' => array_values((array) config('session-replay.size.strip_attributes', [])),
                 'keepAttributes' => array_values((array) config('session-replay.size.keep_attributes', [])),
                 'sampling' => (array) config('session-replay.size.sampling', []),
+            ],
+            'snapshots' => [
+                'share' => $this->sharesSnapshots($request),
+                'volatileIds' => array_values(array_filter((array) config('session-replay.snapshots.volatile_ids', []), 'is_string')),
+                'url' => $this->route('ingest.snapshot'),
             ],
             'cookie' => config('session-replay.context.enabled', true) ? config('session-replay.context.cookie', 'session_replay_id') : null,
         ];

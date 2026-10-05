@@ -11,7 +11,8 @@ it('removes the pages and keeps what the player component needs', function () {
     expect(Route::has('session-replay.index'))->toBeFalse()
         ->and(Route::has('session-replay.show'))->toBeFalse()
         ->and(Route::has('session-replay.manifest'))->toBeTrue()
-        ->and(Route::has('session-replay.chunk'))->toBeTrue();
+        ->and(Route::has('session-replay.chunk'))->toBeTrue()
+        ->and(Route::has('session-replay.snapshot'))->toBeTrue();
 
     $session = $this->recording($user = $this->user());
 

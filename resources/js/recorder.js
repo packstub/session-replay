@@ -2,7 +2,7 @@ import { record } from '@rrweb/record';
 import { getRecordConsolePlugin } from '@rrweb/rrweb-plugin-console-record';
 import { onCLS, onINP, onLCP } from 'web-vitals';
 import { dropHiddenValues, redactUrl, redactUrlAttributes, redactUrls } from './lib/privacy.js';
-import { EVENT_FULL_SNAPSHOT, assetPlaceholder, attributeMatcher, stripAttributes, styleSlots } from './lib/process.js';
+import { EVENT_FULL_SNAPSHOT, assetPlaceholder, attributeMatcher, renameVolatileIds, shareSnapshot, sharedSnapshots, stripAttributes, styleSlots } from './lib/process.js';
 
 /**
  * The recorder. Reads window.__sessionReplay (written by @sessionReplay),
@@ -294,7 +294,64 @@ async function uploadAssets(hashes) {
     }
 }
 
+const SHARED_KEY = 'sr:shared';
+const SHARED_TTL = 60 * 60 * 1000;
+
+/** Hashes this tab uploaded in the last hour (the server keeps a snapshot for a day after it was last sent). */
+function uploadedSnapshots() {
+    try {
+        const now = Date.now();
+
+        return Object.fromEntries(Object.entries(JSON.parse(read('sessionStorage', SHARED_KEY) || '{}')).filter(([, at]) => now - at < SHARED_TTL));
+    } catch {
+        return {};
+    }
+}
+
+/**
+ * On a page the app shares snapshots for: store the page's tree once per hash
+ * and keep only the hash in the batch. A tree is swapped only once the server
+ * has it; when the upload fails the batch carries it as before. The final
+ * request of a closing page never comes here, so it always carries its tree.
+ */
+async function shareSnapshots(batch) {
+    for (const event of batch.events) {
+        if (event.type !== EVENT_FULL_SNAPSHOT || !event.data || !event.data.node) continue;
+
+        try {
+            renameVolatileIds(event.data.node, config.snapshots.volatileIds);
+
+            const text = JSON.stringify(event.data.node);
+            const digest = await window.crypto.subtle.digest('SHA-256', new TextEncoder().encode(text));
+            const hash = [...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, '0')).join('');
+            const uploaded = uploadedSnapshots();
+
+            if (!uploaded[hash]) {
+                const data = new FormData();
+
+                data.append('token', config.token);
+                data.append('hash', hash);
+                data.append('content', await gzip(text), 'content');
+
+                // The answer is the same whether the server had it or not; only a failure keeps the tree inline.
+                if (!(await fetch(config.snapshots.url, { method: 'POST', body: data })).ok) continue;
+
+                uploaded[hash] = Date.now();
+                write('sessionStorage', SHARED_KEY, JSON.stringify(Object.fromEntries(Object.entries(uploaded).slice(-50))));
+            }
+
+            shareSnapshot(event, hash);
+        } catch {
+            // Offline or no crypto.subtle: the snapshot stays in the batch.
+        }
+    }
+
+    batch.meta.snapshots = sharedSnapshots(batch.events);
+}
+
 async function send(batch) {
+    if (config.snapshots && config.snapshots.share && canHash) await shareSnapshots(batch);
+
     const blob = await gzip(JSON.stringify(batch.events));
 
     if (blob.size > config.maxBatchBytes && batch.events.length > 1) {

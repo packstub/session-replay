@@ -36,6 +36,7 @@ class ReplayDataController
                 'to' => $chunk->to_ms,
             ])->all(),
             'assetUrl' => SessionReplay::route('asset', ['session' => $session->id, 'hash' => '__hash__']),
+            'snapshotUrl' => SessionReplay::route('snapshot', ['session' => $session->id, 'hash' => '__hash__']),
             'markers' => $session->markers->map(fn ($marker): array => [
                 'type' => $marker->type,
                 'label' => $marker->label,
@@ -60,6 +61,19 @@ class ReplayDataController
         $asset = ReplayAsset::query()->where('hash', $hash)->firstOrFail();
 
         return $this->gzip($asset->path, 'text/css; charset=utf-8', 'private, max-age=86400');
+    }
+
+    /**
+     * GET {path}/{session}/snapshots/{hash} — a shared page snapshot (JSON), only to a viewer of a
+     * recording that points at it: the hash alone opens nothing.
+     */
+    public function snapshot(ReplaySession $session, string $hash): StreamedResponse
+    {
+        abort_unless($session->snapshotReferences()->where('hash', $hash)->exists(), 404);
+
+        $asset = ReplayAsset::query()->where('hash', $hash)->firstOrFail();
+
+        return $this->gzip($asset->path, 'application/json', 'private, max-age=86400');
     }
 
     protected function gzip(string $path, string $type, string $cache): StreamedResponse

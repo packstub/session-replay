@@ -12,7 +12,7 @@ In a Filament panel, [Filament Session Replay](https://github.com/packstub/filam
 
 - **[One Blade directive](recording.md#the-directive)**: `@sessionReplay` before `</body>` records the page, with nothing to build or publish.
 - **[Private by default](privacy.md)**: every input masked, no IP address stored, consent and an anonymous mode when you need them.
-- **[Recordings stay with you](storage.md)**: gzip chunks on any filesystem disk (local, S3, R2), the index in four tables on your connection.
+- **[Recordings stay with you](storage.md)**: gzip chunks on any filesystem disk (local, S3, R2), the index in five tables on your connection.
 - **[Markers on the timeline](recording.md#markers)**: errors, failed Livewire requests, web vitals, rage clicks, page views and your own moments.
 - **[Small recordings](storage.md#sizes)**: stylesheets stored once, unused attributes dropped, batches gzipped in the browser.
 - **[A gate decides who watches](watching.md#the-gate)**: `viewSessionReplay` guards the list, the player and every file behind them.
@@ -27,6 +27,6 @@ In a Filament panel, [Filament Session Replay](https://github.com/packstub/filam
 | [Recording](recording.md) | The directive and its options, who is recorded, sessions and sampling, markers, the browser API, Livewire, CSP, known limits |
 | [Privacy](privacy.md) | What is and is not recorded, masking and blocking, consent, guests, retention, wording for a privacy policy |
 | [Watching replays](watching.md) | The `viewSessionReplay` gate, the built-in viewer, the player component, links, models and scopes |
-| [Storage](storage.md) | Disk layout, the four tables, multi-tenant apps, sizes and limits, pruning, S3 |
+| [Storage](storage.md) | Disk layout, the tables, multi-tenant apps, sizes and limits, pruning, S3 |
 | [Error tracking](error-tracking.md) | The recording in Laravel's `Context`, and where it shows up |
 | [Configuration](configuration.md) | Every key in `config/session-replay.php` |

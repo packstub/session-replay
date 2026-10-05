@@ -1,6 +1,6 @@
 # Configuration
 
-`php artisan session-replay:install` publishes `config/session-replay.php`; `php artisan vendor:publish --tag=session-replay-config` does the same on its own. Your file is merged over the package defaults key by key, so it may contain only what you change. A list you set (`except`, `except_routes`, `capture.console`, `size.strip_attributes`, `size.keep_attributes`, `ingest.middleware`, `viewer.middleware`) replaces the default list as a whole, so `[]` really turns a list off.
+`php artisan session-replay:install` publishes `config/session-replay.php`; `php artisan vendor:publish --tag=session-replay-config` does the same on its own. Your file is merged over the package defaults key by key, so it may contain only what you change. A list you set (`except`, `except_routes`, `capture.console`, `size.strip_attributes`, `size.keep_attributes`, `snapshots.share_routes`, `snapshots.share_paths`, `snapshots.volatile_ids`, `ingest.middleware`, `viewer.middleware`) replaces the default list as a whole, so `[]` really turns a list off.
 
 ## Recording
 
@@ -54,17 +54,27 @@
 | `size.keep_attributes` | `['x-cloak', 'wire:loading*', 'wire:offline*', 'wire:dirty*']` | Names (or `prefix*`) that stay even when a pattern matches: what stylesheets select on. |
 | `size.sampling` | `['mousemove' => 50, 'scroll' => 150, 'media' => 800, 'input' => 'last']` | rrweb's sampling options: milliseconds between recorded mouse moves, scrolls and media events; `input: 'last'` keeps the final value of a burst. |
 
+## Shared snapshots
+
+| Key | Default | Meaning |
+| --- | --- | --- |
+| `snapshots.share_routes` | `[]` | Route names (`Str::is` patterns) whose page snapshot is stored once per SHA-256 of its content and shared by every recording that saw the same page. Keyed entries are read like plain ones. |
+| `snapshots.share_paths` | `[]` | Request paths (`Str::is` patterns), the same way. A page matching either list shares; nothing does by default. |
+| `snapshots.volatile_ids` | `['fi-dropdown-panel-*']` | Ids a script makes up on every page load (`prefix*`). In a shared snapshot they are renamed in page order, together with every `aria-controls`, `aria-labelledby`, `for` and the like that points at them, so two loads of the same page still match. |
+
+Share pages that look the same for everyone who opens them: a pricing page, the docs, a sign-in form. A page that shows the person's name, a table of their data or a flash message gets a new snapshot for every difference, so sharing it only saves space when the same person reloads it. See [Shared snapshots](storage.md#shared-snapshots).
+
 ## Routes
 
 | Key | Default | Meaning |
 | --- | --- | --- |
 | `path` | `session-replay` | Prefix of every package route. |
 | `domain` | `null` | Restrict the routes to one domain. |
-| `ingest.middleware` | `[]` | Extra middleware for the two upload routes. None is needed: identity comes from the signed token. |
+| `ingest.middleware` | `[]` | Extra middleware for the upload routes. None is needed: identity comes from the signed token. |
 | `ingest.throttle` | `240` | Uploads per minute per person (for guests, per rendered page: a value in the signed token, not one the browser picks). `null` turns it off. |
 | `ingest.daily_mb` | `250` | Megabytes one person may upload per day, as sent. A day of steady work in a panel is well under 100 MB. `null` turns it off. |
 | `ingest.guest_daily_mb` | `2048` | Megabytes all guests together may upload per day. Guests cannot be told apart, so this is the cap that keeps a script from filling the disk. `null` turns it off. |
-| `ingest.max_batch_kb` | `1536` | Largest upload accepted, as sent. |
+| `ingest.max_batch_kb` | `1536` | Largest upload accepted, as sent; a shared snapshot gets the same limit. |
 | `ingest.max_session_mb` | `50` | A recording stops growing here and is marked truncated. |
 | `ingest.max_asset_kb` | `1536` | Largest stylesheet accepted, as sent (compressed). |
 | `ingest.token_days` | `7` | Days the token a page was rendered with is accepted. Keep it longer than your full-page cache (see [Cached pages](recording.md#cached-pages)). |
@@ -74,9 +84,9 @@
 
 | Key | Default | Meaning |
 | --- | --- | --- |
-| `storage.disk` | `env('SESSION_REPLAY_DISK', 'local')` | Filesystem disk for chunks and stylesheets. |
+| `storage.disk` | `env('SESSION_REPLAY_DISK', 'local')` | Filesystem disk for chunks, stylesheets and shared snapshots. |
 | `storage.directory` | `session-replay` | Folder on that disk. |
-| `storage.connection` | `env('SESSION_REPLAY_DB_CONNECTION')` | Database connection of the four tables; `null` is the default connection. |
+| `storage.connection` | `env('SESSION_REPLAY_DB_CONNECTION')` | Database connection of the package's tables; `null` is the default connection. |
 | `run_migrations` | `true` | Run the package migrations with `php artisan migrate`. |
 | `retention.days` | `30` | What `session-replay:prune` keeps. |
 
