@@ -2,6 +2,12 @@
 
 All notable changes to `packstub/session-replay` are documented here.
 
+## Unreleased
+
+### Fixed
+
+- **Player in Firefox 140 ESR.** Recordings failed to play with `rrweb-snapshot.rebuild() cannot rebuild into an unprotected browser document`; the player now keeps the replay frame's first document. Thanks @VincentBean.
+
 ## 1.0.0-beta.2 — 2026-10-02
 
 ### Added
