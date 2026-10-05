@@ -219,6 +219,10 @@ it('serves a shared snapshot only behind the gate, and only for a recording that
     // Stored, but not referenced by this recording: the hash alone opens nothing.
     $this->get(route('session-replay.snapshot', [$mine, $otherHash]))->assertNotFound();
 
+    // Nor does the stylesheet route, which serves any stylesheet to a viewer of any recording.
+    $this->get(route('session-replay.asset', [$mine, $otherHash]))->assertNotFound();
+    $this->get(route('session-replay.asset', [$mine, $hash]))->assertNotFound();
+
     // The recording that does reference it is one the gate refuses.
     $this->get(route('session-replay.snapshot', [$theirs, $otherHash]))->assertForbidden();
 

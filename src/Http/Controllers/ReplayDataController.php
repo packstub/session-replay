@@ -58,7 +58,8 @@ class ReplayDataController
     /** GET {path}/{session}/assets/{hash} — a stylesheet taken out of the snapshots. */
     public function asset(ReplaySession $session, string $hash): StreamedResponse
     {
-        $asset = ReplayAsset::query()->where('hash', $hash)->firstOrFail();
+        // Stylesheets only: a shared snapshot is served by snapshot(), to a viewer of a recording that points at it.
+        $asset = ReplayAsset::query()->where('hash', $hash)->where('kind', ReplayAsset::STYLESHEET)->firstOrFail();
 
         return $this->gzip($asset->path, 'text/css; charset=utf-8', 'private, max-age=86400');
     }
