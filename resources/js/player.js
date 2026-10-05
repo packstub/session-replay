@@ -325,6 +325,13 @@ async function mount(root, options = {}) {
         },
     });
 
+    // Firefox swaps a new iframe's first document for another a moment after insertion, and rrweb only rebuilds
+    // into the sandboxed document it registered at insertion. Opening that document cancels the swap.
+    const frame = player.getReplayer?.()?.iframe;
+
+    frame?.contentDocument?.open();
+    frame?.contentDocument?.close();
+
     pointer(player, root);
 
     if (root.dataset.markers !== 'false') {

@@ -8,6 +8,10 @@ All notable changes to `packstub/session-replay` are documented here.
 
 - **Shared snapshots.** Pages that look the same for everyone (a pricing page, the docs, a sign-in form) can have their snapshot stored once per SHA-256 of its content and shared by every recording, like stylesheets: opt in per route name or path with `snapshots.share_routes` and `snapshots.share_paths` (`Str::is` patterns, keyed entries read like plain ones). The chunk keeps the full snapshot event with `data.srSnapshot: <sha256>` in place of its tree; recordings without it, and pages not opted in, are stored as before. Ids a script makes up on every load (`snapshots.volatile_ids`, Filament's dropdown panels by default) are renamed in shared snapshots, so two loads of a page still match. The upload answers the same whether the snapshot was stored or not, the viewer serves one only for a recording that points at it, and `session-replay:prune` keeps it while a recording that is left does. New: the `replay_session_assets` table, `replay_assets.kind`, the `session-replay.ingest.snapshot` and `session-replay.snapshot` routes. Run `php artisan migrate` (or publish the migrations again with `run_migrations` off).
 
+### Fixed
+
+- **Player in Firefox 140 ESR.** Recordings failed to play with `rrweb-snapshot.rebuild() cannot rebuild into an unprotected browser document`; the player now keeps the replay frame's first document. Thanks @VincentBean.
+
 ## 1.0.0-beta.2 — 2026-10-02
 
 ### Added
