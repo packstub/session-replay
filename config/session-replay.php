@@ -118,6 +118,9 @@ return [
         'mask_all_inputs' => true,
         'mask_all_text' => false,
         'mask_text_selector' => '[data-replay-mask], [data-replay-mask] *, [contenteditable], [contenteditable] *',
+        // With mask_all_text: text inside these elements stays readable (the app's own menus and headings), unless
+        // mask_text_selector matches it. Input values are never affected.
+        'unmask_text_selector' => '[data-replay-unmask]',
         'block_selector' => '[data-replay-block]',
         'ignore_selector' => '[data-replay-ignore]',
         // true: recordings are not linked to the signed-in person. Who is signed in still decides whether a page is
