@@ -25,6 +25,7 @@ Record what a person did in the browser, keep the recording on your own disk and
 - **[Private by default](#privacy-defaults)**: every input masked, no IP address stored, an anonymous mode, sensitive pages left out.
 - **[Recordings stay with you](docs/storage.md)**: gzip chunks on any Laravel disk, the index in four tables on your connection.
 - **[Markers on the timeline](docs/recording.md#markers)**: errors, failed Livewire requests, web vitals, rage clicks, page views and your own moments.
+- **[Only when something goes wrong](docs/recording.md#recording-only-when-something-goes-wrong)**: keep the last minute in the browser and upload it on an error, after asking if you like.
 - **[Small recordings](docs/storage.md#sizes)**: stylesheets stored once, unused attributes dropped, batches gzipped in the browser.
 - **[A gate decides who watches](docs/watching.md#the-gate)**: `viewSessionReplay` guards the list, the player and every file behind them.
 - **[A link in every log line](docs/error-tracking.md)**: the recording's id and URL in Laravel's `Context`, so error reports point at the replay.

@@ -2,17 +2,26 @@ import { record } from '@rrweb/record';
 import { getRecordConsolePlugin } from '@rrweb/rrweb-plugin-console-record';
 import { onCLS, onINP, onLCP } from 'web-vitals';
 import { dropHiddenValues, redactUrl, redactUrlAttributes, redactUrls } from './lib/privacy.js';
-import { EVENT_FULL_SNAPSHOT, assetPlaceholder, attributeMatcher, stripAttributes, styleSlots } from './lib/process.js';
+import { EVENT_FULL_SNAPSHOT, assetPlaceholder, attributeMatcher, referencedAssets, stripAttributes, styleSlots } from './lib/process.js';
+import { ACTIVE_SOURCES, activeTime, checkoutInterval, estimateChars, isTrigger, trimWindow, windowStart } from './lib/buffer.js';
+import { ask } from './ask.js';
 
 /**
  * The recorder. Reads window.__sessionReplay (written by @sessionReplay),
  * decides whether this browser session is recorded, and uploads rrweb events
  * in gzip batches with a small index next to each one (markers, counts, the
  * stylesheets the batch references), so the server never has to open a batch.
+ *
+ * In mode "on_error" a tab starts in the "buffering" phase: the last
+ * onError.bufferMs stay in memory, nothing is uploaded, and the first marker
+ * of a trigger type uploads that window (after asking, with onError.ask) and
+ * moves the tab to "recording" for the rest of its session. "declined" means
+ * the person said no; the tab is left alone until its session ends.
  */
 
 const config = window.__sessionReplay;
 const EVENT_META = 4;
+const EVENT_INCREMENTAL = 3;
 const STORAGE_KEY = 'sr:session';
 const FIRST_FLUSH_MS = 800;
 const CONSENT_KEY = 'sr:consent';
@@ -21,9 +30,8 @@ const KEEPALIVE_LIMIT = 60 * 1024;
 const MAX_BUFFERED_EVENTS = 400;
 const MAX_BUFFERED_CHARS = 1_500_000;
 const MAX_RETRIES = 3;
-
-// Sources of incremental events that mean a person did something: mouse move, interaction, scroll, input, touch move, drag.
-const ACTIVE_SOURCES = new Set([1, 2, 3, 5, 6, 12]);
+// What the rolling window may hold, by the same estimate as above; past it the window shrinks to the newest snapshot.
+const MAX_WINDOW_CHARS = 5_000_000;
 
 let session = null;
 let stopRecording = null;
@@ -41,6 +49,14 @@ let flushInterval = config ? config.flushInterval : 5000;
 let activeMs = 0;
 let lastActiveAt = 0;
 let lastError = { at: 0, label: '' };
+let lastSnapshotAt = 0;
+let checkoutPending = false;
+let overWindow = false;
+let asking = false;
+
+const onError = config?.mode === 'on_error';
+const windowMs = onError ? config.onError.bufferMs : 0;
+const checkoutMs = onError ? checkoutInterval(windowMs) : 0;
 
 const matches = config ? attributeMatcher(config.size.stripAttributes, config.size.keepAttributes) : null;
 const canHash = !!(window.crypto && window.crypto.subtle && window.TextEncoder);
@@ -101,6 +117,10 @@ function loadSession() {
         state = { id: uuid(), seq: 0, lastActivity: now, sampled: Math.random() < config.sampleRate, identity: config.identity ?? null };
     }
 
+    // A tab from before mode "on_error" was turned on keeps recording; one that was buffering when it was turned off records.
+    if (!['buffering', 'recording', 'declined'].includes(state.phase)) state.phase = onError && state.seq === 0 ? 'buffering' : 'recording';
+    if (!onError && state.phase === 'buffering') state.phase = 'recording';
+
     return state;
 }
 
@@ -110,7 +130,8 @@ function saveSession() {
     session.lastActivity = Date.now();
     write('sessionStorage', STORAGE_KEY, JSON.stringify(session));
 
-    if (config.cookie) {
+    // While buffering the cookie is set too: the log line of the server error that triggers the upload names the recording.
+    if (config.cookie && session.phase !== 'declined') {
         const secure = location.protocol === 'https:' ? '; Secure' : '';
 
         document.cookie = `${config.cookie}=${session.id}; path=/; max-age=${Math.round(config.idleTimeout / 1000)}; SameSite=Lax${secure}`;
@@ -140,6 +161,8 @@ function mark(type, label, payload = {}) {
     } catch {
         // Recording ended between the check and the call.
     }
+
+    if (isTrigger(type, config.onError?.triggers)) trigger();
 }
 
 async function sha256(text) {
@@ -175,7 +198,118 @@ function push(event) {
     buffer.push(event);
     bufferedChars += event.type === EVENT_FULL_SNAPSHOT ? 200_000 : 300;
 
+    if (session?.phase === 'buffering') {
+        holdWindow(event);
+
+        return;
+    }
+
     if (buffer.length >= MAX_BUFFERED_EVENTS || bufferedChars >= MAX_BUFFERED_CHARS) flush();
+}
+
+/**
+ * Mode "on_error": a fresh snapshot every checkoutMs while something happens,
+ * so the window can always start at one, and the window cut at a snapshot
+ * when one arrives. While the person is being asked the window stops moving,
+ * or the error could slide out of it; only the memory ceiling still applies.
+ */
+function holdWindow(event) {
+    if (event.type === EVENT_FULL_SNAPSHOT) {
+        lastSnapshotAt = Math.max(lastSnapshotAt, event.timestamp);
+
+        if (!asking || overWindow) trimBuffer(overWindow ? Infinity : Date.now() - windowMs);
+
+        overWindow = false;
+
+        return;
+    }
+
+    if (bufferedChars >= MAX_WINDOW_CHARS) overWindow = true;
+
+    // Incremental events only: the meta event of a snapshot still being hashed must not ask for another one.
+    if (event.type === EVENT_INCREMENTAL && (overWindow || (lastSnapshotAt && event.timestamp - lastSnapshotAt > checkoutMs && !asking))) checkout();
+}
+
+function checkout() {
+    if (checkoutPending) return;
+
+    checkoutPending = true;
+
+    // Not from inside rrweb's own emit call.
+    setTimeout(() => {
+        checkoutPending = false;
+
+        try {
+            if (stopRecording && !stopped && session?.phase === 'buffering') {
+                record.takeFullSnapshot(true);
+                lastSnapshotAt = Date.now();
+            }
+        } catch {
+            // Recording ended in between.
+        }
+    }, 0);
+}
+
+function trimBuffer(cutoff) {
+    const kept = trimWindow(buffer, markers, windowStart(buffer, cutoff));
+
+    buffer = kept.events;
+    markers = kept.markers;
+    bufferedChars = estimateChars(buffer);
+    activeMs = activeTime(buffer);
+
+    // Stylesheets of dropped snapshots: forget their text, unless a snapshot still being hashed may need it.
+    if (pendingAsync === 0) {
+        assets = new Set(referencedAssets(buffer));
+
+        for (const hash of pendingAssetText.keys()) if (!assets.has(hash)) pendingAssetText.delete(hash);
+    }
+
+    saveSession();
+}
+
+/** A trigger fired while buffering: upload the window and keep recording, after asking when onError.ask is on. */
+function trigger() {
+    if (!session || session.phase !== 'buffering' || asking || stopped) return;
+
+    trimBuffer(Date.now() - windowMs);
+
+    if (!config.onError.ask) {
+        share(false);
+
+        return;
+    }
+
+    asking = true;
+
+    ask(config.onError.labels, { offerAnonymous: !!config.onError.offerAnonymous })
+        .then((answer) => {
+            asking = false;
+
+            if (stopped || !session || session.phase !== 'buffering') return;
+
+            if (answer.share) {
+                share(answer.anonymous);
+
+                return;
+            }
+
+            // Declined: the window is dropped and this tab is not recorded again until its session ends.
+            stop();
+            session.phase = 'declined';
+            saveSession();
+        })
+        .catch(() => {
+            asking = false;
+        });
+}
+
+function share(anonymous) {
+    session.phase = 'recording';
+    session.anonymous = !!anonymous;
+    saveSession();
+    flush();
+    schedule();
 }
 
 function trackActivity(event) {
@@ -196,6 +330,9 @@ function consoleMarker(event) {
     if (event.timestamp - lastError.at < 250 && label.includes(lastError.label.slice(0, 80))) return;
 
     markers.push({ type: 'console', label: label || 'console.error', payload: {}, at: event.timestamp });
+
+    // After the event is in the buffer: emit() pushes it right after this returns.
+    if (isTrigger('console', config.onError?.triggers)) setTimeout(trigger, 0);
 }
 
 function emit(event) {
@@ -240,7 +377,8 @@ function takeBatch() {
         seq: session.seq++,
         events: buffer,
         meta: {
-            url: redacted(location.href),
+            // The page the batch starts on, which for a window uploaded on error may be an earlier one (wire:navigate).
+            url: buffer.find((event) => event.type === EVENT_META)?.data?.href || redacted(location.href),
             viewport: { width: window.innerWidth, height: window.innerHeight },
             from: buffer[0].timestamp,
             to: buffer[buffer.length - 1].timestamp,
@@ -268,6 +406,9 @@ function form(batch, blob) {
     data.append('token', config.token);
     data.append('session', session.id);
     data.append('seq', String(batch.seq));
+
+    // The person chose to send this recording without their name: the server drops who they are from the token.
+    if (session.anonymous) data.append('anonymous', '1');
     data.append('meta', JSON.stringify(batch.meta));
     data.append('events', blob, 'events');
 
@@ -357,7 +498,7 @@ function retry(batch) {
 }
 
 function flush() {
-    if (stopped || !session || buffer.length === 0) return sending;
+    if (stopped || !session || session.phase !== 'recording' || buffer.length === 0) return sending;
 
     const batch = takeBatch();
 
@@ -368,7 +509,7 @@ function flush() {
 
 /** The page is going away: no time for compression or retries, one keepalive request with what is left. */
 function flushOnUnload() {
-    if (stopped || !session || buffer.length === 0) return;
+    if (stopped || !session || session.phase !== 'recording' || buffer.length === 0) return;
 
     const batch = takeBatch();
     const blob = new Blob([JSON.stringify(batch.events)], { type: 'application/json' });
@@ -516,9 +657,10 @@ function start() {
     session = loadSession();
     saveSession();
 
-    if (!session.sampled) return false;
+    if (!session.sampled || session.phase === 'declined') return false;
 
     stopped = false;
+    lastSnapshotAt = 0;
 
     const plugins = config.capture.console.length ? [getRecordConsolePlugin({ level: config.capture.console, lengthThreshold: 1000, logger: window.console })] : [];
 
@@ -540,6 +682,9 @@ function start() {
     if (!stopRecording) return false;
 
     markPage();
+
+    if (session.phase === 'buffering') return true;
+
     schedule();
 
     // The page snapshot goes up early and compressed: left to the unload request it is too large for keepalive
@@ -563,6 +708,7 @@ function stop() {
 
     stopRecording = null;
     buffer = [];
+    bufferedChars = 0;
     markers = [];
     clearCookie();
 }
@@ -591,7 +737,9 @@ if (config && !window.SessionReplay) {
 
             return given ? start() : (stop(), false);
         },
-        isRecording: () => !!stopRecording && !stopped,
+        isRecording: () => !!stopRecording && !stopped && session?.phase === 'recording',
+        /** Mode "on_error": keeping the last moments in the browser, waiting for a trigger. */
+        isBuffering: () => !!stopRecording && !stopped && session?.phase === 'buffering',
         sessionId: () => (stopRecording && session ? session.id : null),
     };
 

@@ -118,7 +118,7 @@ abstract class TestCase extends Orchestra
                 'assets' => [],
             ]),
             'events' => UploadedFile::fake()->createWithContent('events', $body),
-        ], ['User-Agent' => 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 Chrome/140.0 Safari/537.36']);
+        ] + array_intersect_key($overrides, ['anonymous' => true]), ['User-Agent' => 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 Chrome/140.0 Safari/537.36']);
     }
 
     protected function recording(?User $user = null, array $attributes = []): ReplaySession

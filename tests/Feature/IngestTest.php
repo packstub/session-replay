@@ -335,6 +335,40 @@ it('stores an anonymous recording without a person, with guests off, and limits 
     $this->ingest(['token' => $grace])->assertCreated();
 });
 
+it('stores a recording the person chose to send anonymously without them, and keeps it that way', function () {
+    config()->set('session-replay.ingest.daily_mb', 1);
+
+    $ada = $this->user();
+    $team = $this->team();
+    $token = $this->token($ada, $team, '7', ['plan' => 'pro']);
+    $id = (string) Str::uuid();
+
+    $this->ingest(['token' => $token, 'session' => $id, 'anonymous' => '1'])->assertCreated();
+
+    $session = ReplaySession::query()->findOrFail($id);
+
+    expect($session->user_id)->toBeNull()
+        ->and($session->user_type)->toBeNull()
+        ->and($session->impersonator_id)->toBeNull()
+        ->and($session->tenant->is($team))->toBeTrue()
+        ->and($session->properties)->toBe(['plan' => 'pro']);
+
+    // The rest of the recording comes anonymous too; an upload with the person in it is refused.
+    $this->ingest(['token' => $token, 'session' => $id, 'seq' => 1, 'anonymous' => '1'])->assertOk();
+    $this->ingest(['token' => $token, 'session' => $id, 'seq' => 2])->assertForbidden()->assertJson(['stop' => true]);
+
+    // A recording that names the person cannot be continued anonymously either.
+    $named = $this->recording($ada);
+
+    $this->ingest(['token' => $this->token($ada), 'session' => $named->id, 'seq' => 1, 'anonymous' => '1'])->assertForbidden();
+
+    // The daily allowance stays the person's own: sending anonymously does not open a second one.
+    $noise = json_encode([str_repeat('x', 1100 * 1024)]);
+
+    $this->ingest(['token' => $token, 'events' => $noise, 'gzip' => false, 'anonymous' => '1'])->assertStatus(429);
+    $this->ingest(['token' => $token])->assertStatus(429);
+});
+
 it('drops the impersonator from an anonymous token even when nobody is signed in', function () {
     $token = (new ContextToken(impersonatorId: '7', issuedAt: time()))->withoutPerson();
 

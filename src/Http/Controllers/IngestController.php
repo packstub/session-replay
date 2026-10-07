@@ -27,7 +27,7 @@ class IngestController
 
     public function __construct(protected ReplayStorage $storage, protected BatchIngester $ingester) {}
 
-    /** POST {path}/ingest — multipart: token, session, seq, meta (JSON), events (file; gzip or JSON). */
+    /** POST {path}/ingest — multipart: token, session, seq, meta (JSON), events (file; gzip or JSON), anonymous (optional). */
     public function store(Request $request): JsonResponse
     {
         $context = $this->context($request);
@@ -54,6 +54,13 @@ class IngestController
 
         if ($this->overDailyLimit($context, strlen($body))) {
             return $this->refuse(429, 'The daily upload limit was reached.', stop: true);
+        }
+
+        // The person chose to send this recording without their name (on_error.ask): the same rule as
+        // privacy.anonymous, for this recording. It can only take identity away, and the daily allowance above
+        // stays counted against the person.
+        if ($request->boolean('anonymous')) {
+            $context = $context->withoutPerson();
         }
 
         if ($session !== null && (! $context->sameUserAs($session->user_type, $session->user_id) || ! $context->sameImpersonatorAs($session->impersonator_id))) {
