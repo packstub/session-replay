@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { REDACTED, dropHiddenValues, inputMaskOptions, maskTextAttributes, redactPluginUrls, redactUrl, redactUrlAttributes, redactUrls } from '../lib/privacy.js';
+import { REDACTED, dropHiddenValues, inputMaskOptions, isUnmasked, maskTextAttributes, redactPluginUrls, redactUrl, redactUrlAttributes, redactUrls, textMasker } from '../lib/privacy.js';
 
 const names = ['token', 'signature', 'code', 'email'];
 
@@ -186,4 +186,26 @@ test('masking is looked up only for elements that carry text attributes', () => 
     maskTextAttributes(snapshot, (id) => asked.push(id) && false);
 
     assert.deepEqual(asked, [3]);
+});
+
+/** An element whose closest() matches the selectors it was given, the way the browser would. */
+function element(...matching) {
+    return { closest: (selector) => (selector.split(',').some((part) => matching.includes(part.trim())) ? {} : null) };
+}
+
+test('with mask_all_text, text inside the unmask selector stays readable unless the mask selector matches', () => {
+    const mask = textMasker('[data-replay-unmask]', '[data-replay-mask], [contenteditable]');
+
+    assert.equal(mask('Orders', element('[data-replay-unmask]')), 'Orders');
+    assert.equal(mask('Jane Doe', element()), '**** ***');
+    assert.equal(mask('Jane Doe', element('[data-replay-unmask]', '[data-replay-mask]')), '**** ***');
+    assert.equal(mask('Draft', element('[data-replay-unmask]', '[contenteditable]')), '*****');
+    assert.equal(mask('Orders', null), '******');
+});
+
+test('an unmask selector the browser rejects masks', () => {
+    const throwing = { closest: () => { throw new Error('SyntaxError'); } };
+
+    assert.equal(isUnmasked(throwing, '[bad', null), false);
+    assert.equal(isUnmasked(element('[data-replay-unmask]'), '', null), false);
 });
