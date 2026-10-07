@@ -5,15 +5,18 @@ import { lastingPlugin, navigationPause } from '../lib/navigation.js';
 function setup(options = {}) {
     const calls = [];
     const timers = new Map();
+    // What the page Livewire swapped in rendered: a config, or null for a page the app does not record.
+    const page = { config: 'config' in options ? options.config : { token: 'next' } };
     let next = 1;
 
     const pause = navigationPause({
+        current: () => page.config,
         pause: () => {
             calls.push('pause');
 
             return options.pauseResult;
         },
-        resume: () => calls.push('resume'),
+        resume: (config, paused) => calls.push(paused ? 'resume' : 'config'),
         setTimer: (callback, ms) => {
             const id = next++;
 
@@ -32,7 +35,7 @@ function setup(options = {}) {
         }
     };
 
-    return { pause, calls, timers, fire };
+    return { pause, calls, timers, fire, page };
 }
 
 test('navigating then navigated pauses once and resumes once', () => {
@@ -52,6 +55,16 @@ test('navigating then navigated pauses once and resumes once', () => {
     assert.deepEqual(calls, ['pause', 'resume']);
 });
 
+test('resume gets the config the new page rendered', () => {
+    const seen = [];
+    const pause = navigationPause({ current: () => ({ token: 'second page' }), pause: () => {}, resume: (config, paused) => seen.push([config.token, paused]), setTimer: () => 1, clearTimer: () => {} });
+
+    pause.navigating(true);
+    pause.navigated();
+
+    assert.deepEqual(seen, [['second page', true]]);
+});
+
 test('navigated without navigating does nothing (first load, fragment restore)', () => {
     const { pause, calls } = setup();
 
@@ -59,21 +72,22 @@ test('navigated without navigating does nothing (first load, fragment restore)',
     assert.deepEqual(calls, []);
 });
 
-test('nothing pauses when nothing is recorded', () => {
-    const { pause, calls, timers } = setup();
+test('nothing pauses when nothing is recorded, but the new page config is still taken', () => {
+    const { pause, calls } = setup();
 
     assert.equal(pause.navigating(false), false);
     assert.equal(pause.isPaused(), false);
-    assert.equal(timers.size, 0);
-    assert.deepEqual(calls, []);
+    assert.equal(pause.navigated(), false);
+    assert.deepEqual(calls, ['config']);
 });
 
-test('a pause the recorder refuses leaves no timer behind', () => {
-    const { pause, timers } = setup({ pauseResult: false });
+test('a pause the recorder refuses does not resume', () => {
+    const { pause, calls } = setup({ pauseResult: false });
 
     assert.equal(pause.navigating(true), false);
     assert.equal(pause.isPaused(), false);
-    assert.equal(timers.size, 0);
+    assert.equal(pause.navigated(), false);
+    assert.deepEqual(calls, ['pause', 'config']);
 });
 
 test('the recording resumes after the timeout when navigated never comes', () => {
@@ -101,16 +115,17 @@ test('a second navigating during the pause keeps one pause and one timer', () =>
 });
 
 test('stop during the pause ends it without resuming', () => {
-    const { pause, calls, timers, fire } = setup();
+    const { pause, calls, timers } = setup();
 
     pause.navigating(true);
     pause.stop();
-    fire();
 
     assert.equal(pause.isPaused(), false);
     assert.equal(timers.size, 0);
+
+    // The new page still hands over its config, for a later start; rrweb is not started again.
     assert.equal(pause.navigated(), false);
-    assert.deepEqual(calls, ['pause']);
+    assert.deepEqual(calls, ['pause', 'config']);
 });
 
 test('the next navigation pauses again', () => {
@@ -138,6 +153,95 @@ test('swapped is set by any navigating, recorded or not', () => {
 
     other.navigated();
     assert.equal(other.swapped(), false);
+});
+
+test('a page without a config stays paused: the app does not record it', () => {
+    const { pause, calls, timers, page } = setup({ config: null });
+
+    pause.navigating(true);
+    assert.equal(pause.navigated(), false);
+
+    assert.equal(pause.isPaused(), true);
+    assert.equal(pause.isExcluded(), true);
+    assert.equal(pause.isAwaiting(), false);
+    assert.equal(timers.size, 0);
+    assert.deepEqual(calls, ['pause']);
+
+    // The next page is recorded again: rrweb was already stopped, so no second pause, and it starts on that page.
+    page.config = { token: 'next' };
+    assert.equal(pause.navigating(true), false);
+    assert.equal(pause.navigated(), true);
+
+    assert.equal(pause.isExcluded(), false);
+    assert.equal(pause.isPaused(), false);
+    assert.deepEqual(calls, ['pause', 'resume']);
+});
+
+test('a page without a config is not resumed by the timeout either', () => {
+    const { pause, calls, fire, page } = setup({ config: null });
+
+    pause.navigating(true);
+    fire();
+
+    assert.equal(pause.isPaused(), true);
+    assert.equal(pause.isExcluded(), true);
+    assert.deepEqual(calls, ['pause']);
+
+    // A late navigated looks again: a head script that took longer than the timeout wrote the config after all.
+    page.config = { token: 'late' };
+    assert.equal(pause.navigated(), true);
+    assert.deepEqual(calls, ['pause', 'resume']);
+});
+
+test('what happens during the swap is held, then kept on a recorded page', () => {
+    const { pause, calls } = setup();
+    const ran = [];
+
+    assert.equal(pause.defer(() => ran.push('before')), false);
+
+    pause.navigating(true);
+    assert.equal(pause.defer(() => ran.push('during')), true);
+    assert.deepEqual(ran, []);
+
+    pause.navigated();
+
+    // After resume: the held work lands in the restarted recording.
+    assert.deepEqual(calls, ['pause', 'resume']);
+    assert.deepEqual(ran, ['during']);
+    assert.equal(pause.defer(() => ran.push('after')), false);
+});
+
+test('what happens during the swap or on a page left out is dropped', () => {
+    const { pause, page } = setup({ config: null });
+    const ran = [];
+
+    pause.navigating(true);
+    pause.defer(() => ran.push('during'));
+    pause.navigated();
+
+    // On the page itself too: an error, a console message or a marker of a page that is not recorded.
+    assert.equal(pause.defer(() => ran.push('on the page')), true);
+
+    // Leaving it: until the next page is in place, what happens may still be the page left out (its teardown).
+    page.config = { token: 'next' };
+    pause.navigating(true);
+    assert.equal(pause.defer(() => ran.push('swap away')), true);
+    pause.navigated();
+
+    assert.deepEqual(ran, []);
+    assert.equal(pause.defer(() => ran.push('next page')), false);
+});
+
+test('stop drops what was held', () => {
+    const { pause } = setup();
+    const ran = [];
+
+    pause.navigating(true);
+    pause.defer(() => ran.push('during'));
+    pause.stop();
+    pause.navigated();
+
+    assert.deepEqual(ran, []);
 });
 
 /** A console plugin as rrweb's: the observer patches, its return value restores. */

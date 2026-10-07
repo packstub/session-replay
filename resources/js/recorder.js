@@ -26,9 +26,14 @@ import { deletePending, listPending, savePending } from './pending.js';
  * through (onError.keepPending): the server that is down is usually the one
  * whose failed request fired the trigger, and a reload must not lose the
  * replay of it. The next page load of the tab sends it first.
+ *
+ * With wire:navigate the document stays, so the config is read again on every
+ * page Livewire swaps in (see navigationPause): a page the app does not record
+ * is not recorded, and the token follows the page. A page signed for another
+ * person or workspace starts a new recording, as a page load would.
  */
 
-const config = window.__sessionReplay;
+let config = window.__sessionReplay;
 const EVENT_META = 4;
 const EVENT_INCREMENTAL = 3;
 const EVENT_CUSTOM = 5;
@@ -71,8 +76,12 @@ let overWindow = false;
 let asking = false;
 /** What a failed request tells the question ({ status, message }), set around the mark() that may put it up. */
 let askError = null;
-// seq of the kept window batches (IndexedDB) of this recording, dropped when the tab stops.
+// The kept window batches (IndexedDB) of this recording, dropped when the tab stops.
 let kept = new Set();
+// Bumped when a recording ends for a new one on the same page: stylesheet hashing still running belongs to the old one.
+let generation = 0;
+// start() was called on a page the app does not record (consent given there): it runs on the next page that is.
+let startOnNextPage = false;
 
 const onError = config?.mode === 'on_error';
 const windowMs = onError ? config.onError.bufferMs : 0;
@@ -170,17 +179,23 @@ function hasConsent() {
 }
 
 /** Add a marker to the index and, as a custom event, to the recording itself. */
-function mark(type, label, payload = {}) {
-    if (!stopRecording || stopped) return;
+function mark(type, label, payload = {}, heldAt = null) {
+    if (!stopRecording || stopped) return false;
+
+    const at = heldAt ?? Date.now();
+
+    // During a wire:navigate swap: kept until the new page is known, dropped when the app does not record it.
+    if (navigation.defer(() => mark(type, label, payload, at))) return false;
 
     const text = String(label ?? '').slice(0, 480) || type;
 
-    markers.push({ type, label: text, payload, at: Date.now() });
+    markers.push({ type, label: text, payload, at });
 
     try {
-        // While wire:navigate swaps the page rrweb is stopped; the event goes into the recording all the same.
-        if (stopRrweb) record.addCustomEvent(`sr:${type}`, { label: text, ...payload });
-        else emit({ type: EVENT_CUSTOM, data: { tag: `sr:${type}`, payload: { label: text, ...payload } }, timestamp: Date.now() });
+        // While wire:navigate swaps the page rrweb is stopped, and a held marker keeps its time; either goes into
+        // the recording all the same.
+        if (stopRrweb && heldAt === null) record.addCustomEvent(`sr:${type}`, { label: text, ...payload });
+        else emit({ type: EVENT_CUSTOM, data: { tag: `sr:${type}`, payload: { label: text, ...payload } }, timestamp: at });
     } catch {
         // Recording ended between the check and the call.
     }
@@ -385,6 +400,8 @@ function emit(event) {
     // Once the tab used wire:navigate its snapshots are numbered after the first page's, so they never match a shared
     // one, and the page is not the one the server rendered for share_routes.
     if (event.type === EVENT_FULL_SNAPSHOT && navigation.swapped()) unshared.add(event);
+    // Whether a snapshot may be shared is the setting of the page it was taken on.
+    if (event.type === EVENT_FULL_SNAPSHOT && !config.snapshots?.share) unshared.add(event);
 
     const slots = config.size.dedupeStylesheets && canHash ? styleSlots(event, config.size.dedupeMinBytes) : [];
 
@@ -395,12 +412,15 @@ function emit(event) {
     }
 
     // Hashing is asynchronous; the player sorts by timestamp, so arriving a little late is fine.
+    const current = generation;
+
     pendingAsync++;
     dedupeStyles(event, slots)
         .catch(() => event)
         .then((processed) => {
             pendingAsync--;
-            push(processed);
+
+            if (current === generation) push(processed);
         });
 }
 
@@ -428,6 +448,10 @@ function takeBatch() {
             assets: [...assets],
         },
         anonymous: !!session.anonymous,
+        // What the batch was recorded under: after a wire:navigate to another workspace it is still sent with these.
+        session,
+        token: config.token,
+        identity: config.identity ?? null,
         tries: 0,
         blob: null,
         window: false,
@@ -447,8 +471,8 @@ function takeBatch() {
 function form(batch, blob) {
     const data = new FormData();
 
-    data.append('token', config.token);
-    data.append('session', session.id);
+    data.append('token', batch.token);
+    data.append('session', batch.session.id);
     data.append('seq', String(batch.seq));
 
     // The person chose to send this recording without their name: the server drops who they are from the token.
@@ -459,7 +483,7 @@ function form(batch, blob) {
     return data;
 }
 
-async function uploadAssets(hashes) {
+async function uploadAssets(hashes, token) {
     for (const hash of hashes) {
         const text = pendingAssetText.get(hash);
 
@@ -467,7 +491,7 @@ async function uploadAssets(hashes) {
 
         const data = new FormData();
 
-        data.append('token', config.token);
+        data.append('token', token);
         data.append('hash', hash);
         data.append('content', await gzip(text), 'content');
 
@@ -514,7 +538,7 @@ async function shareSnapshots(batch) {
             if (!uploaded[hash]) {
                 const data = new FormData();
 
-                data.append('token', config.token);
+                data.append('token', batch.token);
                 data.append('hash', hash);
                 data.append('content', await gzip(text), 'content');
 
@@ -536,14 +560,14 @@ async function shareSnapshots(batch) {
 
 async function send(batch) {
     // Before the gzip is made and cached: a retry or a batch kept from an earlier page keeps what it has.
-    if (config.snapshots && config.snapshots.share && canHash && !batch.blob) await shareSnapshots(batch);
+    if (config.snapshots && canHash && !batch.blob && batch.events.some((event) => event.type === EVENT_FULL_SNAPSHOT && !unshared.has(event))) await shareSnapshots(batch);
 
     const blob = batch.blob || (batch.blob = await gzip(JSON.stringify(batch.events)));
 
     if (blob.size > config.maxBatchBytes && batch.events.length > 1) {
         // Too big for one upload: split and send the halves in order.
         const middle = Math.ceil(batch.events.length / 2);
-        const tail = { ...batch, seq: session.seq++, events: batch.events.slice(middle), meta: { ...batch.meta, markers: [], assets: [], activeMs: 0 }, blob: null };
+        const tail = { ...batch, seq: batch.session.seq++, events: batch.events.slice(middle), meta: { ...batch.meta, markers: [], assets: [], activeMs: 0 }, blob: null };
 
         batch.blob = null;
         batch.events = batch.events.slice(0, middle);
@@ -591,7 +615,7 @@ async function send(batch) {
     }
 
     if (response.ok) {
-        await uploadAssets(body.missing_assets || []);
+        await uploadAssets(body.missing_assets || [], batch.token);
 
         for (const hash of batch.meta.assets) pendingAssetText.delete(hash);
     }
@@ -601,14 +625,14 @@ async function send(batch) {
 async function failed(batch) {
     if (batch.window && !batch.kept && !stopped) {
         batch.kept = true;
-        kept.add(batch.seq);
+        kept.add(batch);
 
         // The stylesheets the window references and the server may not have yet: the next page cannot hash them again.
         const assetText = {};
 
         for (const hash of batch.meta.assets) if (pendingAssetText.has(hash)) assetText[hash] = pendingAssetText.get(hash);
 
-        await savePending(session.id, batch, batch.blob, assetText, config.identity);
+        await savePending(batch.session.id, batch, batch.blob, assetText, batch.identity);
     }
 
     return retry(batch);
@@ -617,8 +641,8 @@ async function failed(batch) {
 /** The kept copy of a batch is no longer needed. */
 function settle(batch) {
     batch.kept = false;
-    kept.delete(batch.seq);
-    deletePending(session.id, batch.seq);
+    kept.delete(batch);
+    deletePending(batch.session.id, batch.seq);
 }
 
 function retry(batch) {
@@ -674,11 +698,12 @@ async function resumePending() {
     for (const record of own) {
         if (stopped) return;
 
-        kept.add(record.seq);
-
         for (const [hash, text] of Object.entries(record.assets || {})) if (!pendingAssetText.has(hash)) pendingAssetText.set(hash, text);
 
-        await send({ seq: record.seq, events: [], meta: record.meta, anonymous: !!record.anonymous, tries: 0, blob: record.blob, window: true, kept: true });
+        const batch = { seq: record.seq, events: [], meta: record.meta, anonymous: !!record.anonymous, session, token: config.token, identity: config.identity ?? null, tries: 0, blob: record.blob, window: true, kept: true };
+
+        kept.add(batch);
+        await send(batch);
     }
 }
 
@@ -876,8 +901,12 @@ function recordOptions() {
  * slower to make. So rrweb stops before the swap and starts again after it:
  * the new page arrives as a full snapshot, like a page load, and the player
  * can seek from it. The session, the buffer and the markers go on.
+ *
+ * The new page brings its own config, or none when the app does not record
+ * it: then rrweb stays stopped until a page that is recorded.
  */
 const navigation = navigationPause({
+    current: () => window.__sessionReplay || null,
     pause() {
         try {
             stopRrweb?.();
@@ -887,8 +916,23 @@ const navigation = navigationPause({
 
         stopRrweb = null;
     },
-    resume() {
-        if (stopped || !stopRecording) return;
+    resume(fresh, paused) {
+        // Signed for another person or workspace (a tenant switch with wire:navigate): a recording belongs to one.
+        if (stopRecording && !stopped && session && (fresh.identity ?? null) !== (session.identity ?? null)) {
+            restart(fresh);
+
+            return;
+        }
+
+        config = fresh;
+
+        if (startOnNextPage && !stopRecording) {
+            start();
+
+            return;
+        }
+
+        if (!paused || stopped || !stopRecording) return;
 
         try {
             stopRrweb = record(recordOptions()) || null;
@@ -906,7 +950,11 @@ const navigation = navigationPause({
 });
 
 function watchNavigation() {
-    document.addEventListener('livewire:navigating', () => navigation.navigating(!!stopRrweb && !stopped));
+    document.addEventListener('livewire:navigating', () => {
+        // The new page writes its own when it renders the recorder; one that does not is a page the app leaves out.
+        window.__sessionReplay = undefined;
+        navigation.navigating(!!stopRrweb && !stopped);
+    });
     document.addEventListener('livewire:navigated', () => navigation.navigated());
 }
 
@@ -914,6 +962,15 @@ function start() {
     if (stopRecording || !config) return false;
 
     if (!hasConsent()) return false;
+
+    // A page reached with wire:navigate that the app does not record, or one not in place yet.
+    if (navigation.isExcluded() || navigation.isAwaiting()) {
+        startOnNextPage = true;
+
+        return false;
+    }
+
+    startOnNextPage = false;
 
     session = loadSession();
     saveSession();
@@ -929,7 +986,11 @@ function start() {
     if (config.capture.console.length) {
         const plugin = getRecordConsolePlugin({ level: config.capture.console, lengthThreshold: 1000, logger: window.console });
 
-        consoleCapture = lastingPlugin(plugin, (payload) => emit({ type: EVENT_PLUGIN, data: { plugin: plugin.name, payload }, timestamp: Date.now() }), window);
+        const idle = (payload, at = Date.now()) => {
+            if (!navigation.defer(() => idle(payload, at))) emit({ type: EVENT_PLUGIN, data: { plugin: plugin.name, payload }, timestamp: at });
+        };
+
+        consoleCapture = lastingPlugin(plugin, idle, window);
     }
 
     stopRrweb = record(recordOptions()) || null;
@@ -967,8 +1028,39 @@ function start() {
     return true;
 }
 
+/**
+ * The page Livewire swapped in was signed for another person or workspace.
+ * What this recording holds goes up under its own token, and the page starts
+ * a new recording, as a page load would.
+ */
+function restart(fresh) {
+    flush();
+    clearTimeout(flushTimer);
+
+    try {
+        stopRecording?.();
+    } catch {
+        // Already stopped.
+    }
+
+    stopRecording = null;
+    generation++;
+    buffer = [];
+    bufferedChars = 0;
+    markers = [];
+    assets = new Set();
+    activeMs = 0;
+    lastActiveAt = 0;
+    overWindow = false;
+    session = null;
+    config = fresh;
+
+    start();
+}
+
 function stop() {
     stopped = true;
+    startOnNextPage = false;
     clearTimeout(flushTimer);
     navigation.stop();
 
@@ -985,7 +1077,7 @@ function stop() {
     clearCookie();
 
     // Stopped for good (consent withdrawn, the server said so, the person declined): nothing stays in the browser.
-    for (const seq of kept) deletePending(session.id, seq);
+    for (const batch of kept) deletePending(batch.session.id, batch.seq);
     kept = new Set();
 }
 
@@ -1016,9 +1108,9 @@ if (config && !window.SessionReplay) {
 
             return given ? start() : (stop(), false);
         },
-        isRecording: () => !!stopRecording && !stopped && session?.phase === 'recording',
+        isRecording: () => !!stopRecording && !stopped && !navigation.isExcluded() && session?.phase === 'recording',
         /** Mode "on_error": keeping the last moments in the browser, waiting for a trigger. */
-        isBuffering: () => !!stopRecording && !stopped && session?.phase === 'buffering',
+        isBuffering: () => !!stopRecording && !stopped && !navigation.isExcluded() && session?.phase === 'buffering',
         sessionId: () => (stopRecording && session ? session.id : null),
     };
 
