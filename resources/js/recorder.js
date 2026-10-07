@@ -4,7 +4,7 @@ import { onCLS, onINP, onLCP } from 'web-vitals';
 import { dropHiddenValues, redactUrl, redactUrlAttributes, redactUrls } from './lib/privacy.js';
 import { EVENT_FULL_SNAPSHOT, assetPlaceholder, attributeMatcher, referencedAssets, renameVolatileIds, shareSnapshot, sharedSnapshots, stripAttributes, styleSlots } from './lib/process.js';
 import { ACTIVE_SOURCES, activeTime, checkoutInterval, estimateChars, isTrigger, trimWindow, windowStart } from './lib/buffer.js';
-import { navigationPause } from './lib/navigation.js';
+import { lastingPlugin, navigationPause } from './lib/navigation.js';
 import { MAX_RETRIES, pendingFate, retryDelay } from './lib/pending.js';
 import { ask, notice } from './ask.js';
 import { deletePending, listPending, savePending } from './pending.js';
@@ -32,6 +32,7 @@ const config = window.__sessionReplay;
 const EVENT_META = 4;
 const EVENT_INCREMENTAL = 3;
 const EVENT_CUSTOM = 5;
+const EVENT_PLUGIN = 6;
 const STORAGE_KEY = 'sr:session';
 const FIRST_FLUSH_MS = 800;
 const CONSENT_KEY = 'sr:consent';
@@ -46,8 +47,9 @@ let session = null;
 // Set while this tab records: stops everything. stopRrweb is rrweb's own, null while wire:navigate swaps the page.
 let stopRecording = null;
 let stopRrweb = null;
-// Once the tab used wire:navigate its snapshots are numbered after the first page's, so they never match a shared one.
-let navigatedAway = false;
+// The console plugin of this recording, kept across the pause (see lastingPlugin).
+let consoleCapture = null;
+// Snapshots taken once Livewire swapped the page: never uploaded as shared ones.
 const unshared = new WeakSet();
 let stopped = false;
 let buffer = [];
@@ -380,7 +382,9 @@ function emit(event) {
     redactUrlAttributes(event, config.privacy.redactQuery, location.href);
 
     if (event.type === EVENT_META && event.data && event.data.href) event.data.href = redacted(event.data.href);
-    if (event.type === EVENT_FULL_SNAPSHOT && navigatedAway) unshared.add(event);
+    // Once the tab used wire:navigate its snapshots are numbered after the first page's, so they never match a shared
+    // one, and the page is not the one the server rendered for share_routes.
+    if (event.type === EVENT_FULL_SNAPSHOT && navigation.swapped()) unshared.add(event);
 
     const slots = config.size.dedupeStylesheets && canHash ? styleSlots(event, config.size.dedupeMinBytes) : [];
 
@@ -852,7 +856,7 @@ function watchVitals() {
 function recordOptions() {
     return {
         emit,
-        plugins: config.capture.console.length ? [getRecordConsolePlugin({ level: config.capture.console, lengthThreshold: 1000, logger: window.console })] : [],
+        plugins: consoleCapture ? [consoleCapture.plugin] : [],
         maskAllInputs: config.privacy.maskAllInputs,
         maskInputOptions: { password: true },
         maskTextSelector: config.privacy.maskAllText ? '*' : config.privacy.maskTextSelector || undefined,
@@ -882,7 +886,6 @@ const navigation = navigationPause({
         }
 
         stopRrweb = null;
-        navigatedAway = true;
     },
     resume() {
         if (stopped || !stopRecording) return;
@@ -920,15 +923,31 @@ function start() {
     stopped = false;
     lastSnapshotAt = 0;
 
+    // Console calls during a wire:navigate pause go into the recording all the same.
+    consoleCapture = null;
+
+    if (config.capture.console.length) {
+        const plugin = getRecordConsolePlugin({ level: config.capture.console, lengthThreshold: 1000, logger: window.console });
+
+        consoleCapture = lastingPlugin(plugin, (payload) => emit({ type: EVENT_PLUGIN, data: { plugin: plugin.name, payload }, timestamp: Date.now() }), window);
+    }
+
     stopRrweb = record(recordOptions()) || null;
 
-    if (!stopRrweb) return false;
+    if (!stopRrweb) {
+        consoleCapture?.stop();
+        consoleCapture = null;
+
+        return false;
+    }
 
     stopRecording = () => {
         const stopNow = stopRrweb;
 
         stopRrweb = null;
         stopNow?.();
+        consoleCapture?.stop();
+        consoleCapture = null;
     };
 
     markPage();
