@@ -1,13 +1,13 @@
 import { record } from '@rrweb/record';
 import { getRecordConsolePlugin } from '@rrweb/rrweb-plugin-console-record';
 import { onCLS, onINP, onLCP } from 'web-vitals';
-import { dropHiddenValues, redactUrl, redactUrlAttributes, redactUrls } from './lib/privacy.js';
+import { dropHiddenValues, inputMaskOptions, maskTextAttributes, redactPluginUrls, redactUrl, redactUrlAttributes, redactUrls } from './lib/privacy.js';
 import { EVENT_FULL_SNAPSHOT, assetPlaceholder, attributeMatcher, referencedAssets, renameVolatileIds, shareSnapshot, sharedSnapshots, stripAttributes, styleSlots } from './lib/process.js';
 import { ACTIVE_SOURCES, activeTime, checkoutInterval, estimateChars, isTrigger, trimWindow, windowStart } from './lib/buffer.js';
 import { lastingPlugin, navigationPause } from './lib/navigation.js';
 import { MAX_RETRIES, pendingFate, retryDelay } from './lib/pending.js';
 import { ask, notice } from './ask.js';
-import { deletePending, listPending, savePending } from './pending.js';
+import { deletePending, listPending, pendingStoreExists, savePending } from './pending.js';
 
 /**
  * The recorder. Reads window.__sessionReplay (written by @sessionReplay),
@@ -62,6 +62,8 @@ let bufferedChars = 0;
 let markers = [];
 let assets = new Set();
 let pendingAssetText = new Map();
+// Stylesheets whose upload failed: tried again after the next batch, or the replay shows the page unstyled.
+let assetRetry = new Set();
 let hashCache = new Map();
 let pendingAsync = 0;
 let sending = Promise.resolve();
@@ -161,7 +163,8 @@ function saveSession() {
     write('sessionStorage', STORAGE_KEY, JSON.stringify(session));
 
     // While buffering the cookie is set too: the log line of the server error that triggers the upload names the recording.
-    if (config.cookie && session.phase !== 'declined') {
+    // A tab that is not recorded (not sampled, declined) sets none: log lines would name a recording that never exists.
+    if (config.cookie && session.phase !== 'declined' && session.sampled) {
         const secure = location.protocol === 'https:' ? '; Secure' : '';
 
         document.cookie = `${config.cookie}=${session.id}; path=/; max-age=${Math.round(config.idleTimeout / 1000)}; SameSite=Lax${secure}`;
@@ -323,11 +326,14 @@ function trigger() {
 
     asking = true;
 
+    // The answer is about this recording: a wire:navigate to another workspace meanwhile starts a new one.
+    const asked = session;
+
     ask(config.onError.labels, { offerAnonymous: !!config.onError.offerAnonymous, error: askError })
         .then((answer) => {
             asking = false;
 
-            if (stopped || !session || session.phase !== 'buffering') return;
+            if (stopped || session !== asked || session.phase !== 'buffering') return;
 
             if (answer.share) {
                 share(answer.anonymous);
@@ -376,7 +382,7 @@ function trackActivity(event) {
 function consoleMarker(event) {
     if (event.type !== 6 || event.data?.plugin !== CONSOLE_PLUGIN || event.data.payload?.level !== 'error') return;
 
-    const label = (event.data.payload.payload || []).join(' ').slice(0, 480);
+    const label = redactUrls((event.data.payload.payload || []).join(' '), config.privacy.redactQuery).slice(0, 480);
 
     // An uncaught error is also logged by the console plugin; keep the "error" marker only.
     if (event.timestamp - lastError.at < 250 && label.includes(lastError.label.slice(0, 80))) return;
@@ -387,6 +393,25 @@ function consoleMarker(event) {
     if (isTrigger('console', config.onError?.triggers)) setTimeout(trigger, 0);
 }
 
+function textMaskingOn() {
+    return !!(config.privacy.maskAllText || config.privacy.maskTextSelector);
+}
+
+/** Whether the element rrweb serialized as `id` shows masked text (mask_all_text, or inside mask_text_selector). */
+function isTextMasked(id) {
+    if (config.privacy.maskAllText) return true;
+
+    try {
+        const node = record.mirror.getNode(id);
+        const element = node && node.nodeType === 1 ? node : node?.parentElement;
+
+        return !!element?.closest?.(config.privacy.maskTextSelector);
+    } catch {
+        // An invalid selector: mask rather than guess.
+        return true;
+    }
+}
+
 function emit(event) {
     if (stopped) return;
 
@@ -395,6 +420,8 @@ function emit(event) {
     stripAttributes(event, matches);
     dropHiddenValues(event);
     redactUrlAttributes(event, config.privacy.redactQuery, location.href);
+    redactPluginUrls(event, config.privacy.redactQuery);
+    if (textMaskingOn()) maskTextAttributes(event, isTextMasked);
 
     if (event.type === EVENT_META && event.data && event.data.href) event.data.href = redacted(event.data.href);
     // Once the tab used wire:navigate its snapshots are numbered after the first page's, so they never match a shared
@@ -483,7 +510,10 @@ function form(batch, blob) {
     return data;
 }
 
+/** Uploads the stylesheets the server is missing; returns the hashes whose upload failed and is worth trying again. */
 async function uploadAssets(hashes, token) {
+    const failed = [];
+
     for (const hash of hashes) {
         const text = pendingAssetText.get(hash);
 
@@ -496,11 +526,15 @@ async function uploadAssets(hashes, token) {
         data.append('content', await gzip(text), 'content');
 
         try {
-            await fetch(config.assetUrl, { method: 'POST', body: data });
+            const response = await fetch(config.assetUrl, { method: 'POST', body: data });
+
+            if (response.status === 429 || response.status >= 500) failed.push(hash);
         } catch {
-            // The next recording that references this stylesheet uploads it; the hash stays valid.
+            failed.push(hash);
         }
     }
+
+    return failed;
 }
 
 const SHARED_KEY = 'sr:shared';
@@ -583,6 +617,10 @@ async function send(batch) {
         return;
     }
 
+    // The window is kept before it goes up, not after the upload failed: a server that is down often answers only
+    // after half a minute, and a reload before that aborts the request without an answer.
+    if (batch.window && !batch.kept && !stopped) await keep(batch);
+
     let response;
 
     try {
@@ -615,27 +653,31 @@ async function send(batch) {
     }
 
     if (response.ok) {
-        await uploadAssets(body.missing_assets || [], batch.token);
+        // A stylesheet whose upload failed earlier goes again with the next batch; its text is kept until then.
+        assetRetry = new Set(await uploadAssets([...new Set([...(body.missing_assets || []), ...assetRetry])], batch.token));
 
-        for (const hash of batch.meta.assets) pendingAssetText.delete(hash);
+        for (const hash of batch.meta.assets) if (!assetRetry.has(hash)) pendingAssetText.delete(hash);
     }
 }
 
-/** The server could not take the batch: the window goes to IndexedDB the first time, then the batch is retried. */
+/** The server could not take the batch: the window is in IndexedDB (see send()), the batch is retried. */
 async function failed(batch) {
-    if (batch.window && !batch.kept && !stopped) {
-        batch.kept = true;
-        kept.add(batch);
-
-        // The stylesheets the window references and the server may not have yet: the next page cannot hash them again.
-        const assetText = {};
-
-        for (const hash of batch.meta.assets) if (pendingAssetText.has(hash)) assetText[hash] = pendingAssetText.get(hash);
-
-        await savePending(batch.session.id, batch, batch.blob, assetText, batch.identity);
-    }
+    if (batch.window && !batch.kept && !stopped) await keep(batch);
 
     return retry(batch);
+}
+
+/** The window a trigger uploads stays in IndexedDB until the server answers. */
+async function keep(batch) {
+    batch.kept = true;
+    kept.add(batch);
+
+    // The stylesheets the window references and the server may not have yet: the next page cannot hash them again.
+    const assetText = {};
+
+    for (const hash of batch.meta.assets) if (pendingAssetText.has(hash)) assetText[hash] = pendingAssetText.get(hash);
+
+    await savePending(batch.session.id, batch, batch.blob, assetText, batch.identity);
 }
 
 /** The kept copy of a batch is no longer needed. */
@@ -713,9 +755,12 @@ function flushOnUnload() {
 
     const batch = takeBatch();
     const blob = new Blob([JSON.stringify(batch.events)], { type: 'application/json' });
+    // The browser counts the whole body against keepalive's 64 KB, the index and the token included.
+    const size = blob.size + JSON.stringify(batch.meta).length + String(batch.token).length + 1024;
 
     try {
-        fetch(config.ingestUrl, { method: 'POST', body: form(batch, blob), keepalive: blob.size < KEEPALIVE_LIMIT });
+        // Caught: on a page that stays (a tab switch while offline) a rejection would count as the app's own error.
+        fetch(config.ingestUrl, { method: 'POST', body: form(batch, blob), keepalive: size < KEEPALIVE_LIMIT }).catch(() => {});
     } catch {
         // Nothing left to do on a closing page.
     }
@@ -735,6 +780,19 @@ function redacted(url) {
     return redactUrl(url, config.privacy.redactQuery, location.href);
 }
 
+/** Whether anything inside the element matches one of the selectors; a selector the browser rejects counts as a match. */
+function hasInside(element, selectors) {
+    const selector = selectors.filter(Boolean).join(', ');
+
+    if (!selector) return false;
+
+    try {
+        return !!element.querySelector(selector);
+    } catch {
+        return true;
+    }
+}
+
 function describe(element) {
     if (!(element instanceof Element)) return 'unknown';
 
@@ -751,7 +809,10 @@ function describe(element) {
     // button's own caption. Never the text of anything else (a link or a cell may hold a name).
     let name = (element.getAttribute('alt') || element.getAttribute('aria-label') || element.getAttribute('title') || '').trim();
 
-    if (!name && (tag === 'button' || element.getAttribute('role') === 'button')) name = (element.textContent || '').replace(/\s+/g, ' ').trim();
+    // Not when part of the caption is masked or blocked: "Remove <span data-replay-mask>Jane Doe</span>".
+    if (!name && !hasInside(element, [config.privacy.maskTextSelector, config.privacy.blockSelector]) && (tag === 'button' || element.getAttribute('role') === 'button')) {
+        name = (element.textContent || '').replace(/\s+/g, ' ').trim();
+    }
 
     if (name && !masked) return `${tag} "${name.slice(0, 60)}"`;
 
@@ -771,7 +832,8 @@ function markPage() {
 
     const page = new URL(redacted(location.href));
 
-    mark('navigation', page.pathname + page.search, { url: page.href, title: document.title.slice(0, 200) });
+    // With mask_all_text the title is text on screen like any other (a person's name on their profile page).
+    mark('navigation', page.pathname + page.search, config.privacy.maskAllText ? { url: page.href } : { url: page.href, title: document.title.slice(0, 200) });
 }
 
 function watchErrors() {
@@ -792,7 +854,7 @@ function watchErrors() {
         const label = String(event.reason?.message || event.reason || 'Unhandled promise rejection');
 
         lastError = { at: Date.now(), label };
-        mark('error', label, { stack: String(event.reason?.stack || '').slice(0, 2000) });
+        mark('error', redactUrls(label, config.privacy.redactQuery), { stack: redactUrls(String(event.reason?.stack || ''), config.privacy.redactQuery).slice(0, 2000) });
     });
 }
 
@@ -882,8 +944,9 @@ function recordOptions() {
     return {
         emit,
         plugins: consoleCapture ? [consoleCapture.plugin] : [],
-        maskAllInputs: config.privacy.maskAllInputs,
-        maskInputOptions: { password: true },
+        // By tag, not rrweb's list of input types (see inputMaskOptions).
+        maskAllInputs: false,
+        maskInputOptions: inputMaskOptions(config.privacy.maskAllInputs),
         maskTextSelector: config.privacy.maskAllText ? '*' : config.privacy.maskTextSelector || undefined,
         blockSelector: config.privacy.blockSelector || undefined,
         ignoreSelector: config.privacy.ignoreSelector || undefined,
@@ -918,7 +981,8 @@ const navigation = navigationPause({
     },
     resume(fresh, paused) {
         // Signed for another person or workspace (a tenant switch with wire:navigate): a recording belongs to one.
-        if (stopRecording && !stopped && session && (fresh.identity ?? null) !== (session.identity ?? null)) {
+        // Idle for longer than idle_timeout: a page load would start a new one too.
+        if (stopRecording && !stopped && session && ((fresh.identity ?? null) !== (session.identity ?? null) || Date.now() - session.lastActivity > fresh.idleTimeout)) {
             restart(fresh);
 
             return;
@@ -958,10 +1022,35 @@ function watchNavigation() {
     document.addEventListener('livewire:navigated', () => navigation.navigated());
 }
 
+/**
+ * Kept windows this tab may no longer hold: too old, kept for someone else,
+ * all of them without the person's agreement or with keep_pending off, and
+ * the given recording's (stopped for good). On every start, recorded or not,
+ * so nothing waits at rest for a page load that would send it.
+ */
+async function sweepPending({ all = false, recording = null } = {}) {
+    const exists = await pendingStoreExists();
+
+    // Never create the database to look into it; where the browser cannot tell, only mode on_error ever made one.
+    if (exists === false || (exists === null && !onError)) return;
+
+    const now = Date.now();
+
+    for (const record of await listPending()) {
+        const drop = all || record.session === recording || pendingFate(record, { sessionId: session?.id ?? '', identity: config.identity, now, idleTimeout: config.idleTimeout }) === 'drop';
+
+        if (drop) deletePending(record.session, record.seq);
+    }
+}
+
 function start() {
     if (stopRecording || !config) return false;
 
-    if (!hasConsent()) return false;
+    if (!hasConsent()) {
+        sweepPending({ all: true }).catch(() => {});
+
+        return false;
+    }
 
     // A page reached with wire:navigate that the app does not record, or one not in place yet.
     if (navigation.isExcluded() || navigation.isAwaiting()) {
@@ -974,6 +1063,9 @@ function start() {
 
     session = loadSession();
     saveSession();
+    sweepPending({ all: !keepPending }).catch(() => {});
+
+    if (!session.sampled) clearCookie();
 
     if (!session.sampled || session.phase === 'declined') return false;
 
@@ -1029,13 +1121,17 @@ function start() {
 }
 
 /**
- * The page Livewire swapped in was signed for another person or workspace.
- * What this recording holds goes up under its own token, and the page starts
- * a new recording, as a page load would.
+ * The page Livewire swapped in was signed for another person or workspace,
+ * or the tab sat idle past idle_timeout. What this recording holds goes up
+ * under its own token, and the page starts a new recording, as a page load
+ * would.
  */
 function restart(fresh) {
     flush();
     clearTimeout(flushTimer);
+    // The batches in flight keep their recording; the tab's next one is new, whatever the old one's last activity.
+    write('sessionStorage', STORAGE_KEY, 'null');
+    asking = false;
 
     try {
         stopRecording?.();
@@ -1076,9 +1172,11 @@ function stop() {
     markers = [];
     clearCookie();
 
-    // Stopped for good (consent withdrawn, the server said so, the person declined): nothing stays in the browser.
+    // Stopped for good (consent withdrawn, the server said so, the person declined): nothing stays in the browser,
+    // also not what earlier pages of this recording kept.
     for (const batch of kept) deletePending(batch.session.id, batch.seq);
     kept = new Set();
+    if (session) sweepPending({ recording: session.id }).catch(() => {});
 }
 
 if (config && !window.SessionReplay) {
@@ -1106,7 +1204,12 @@ if (config && !window.SessionReplay) {
         consent(given) {
             write('localStorage', CONSENT_KEY, given ? '1' : '0');
 
-            return given ? start() : (stop(), false);
+            if (given) return start();
+
+            stop();
+            sweepPending({ all: true }).catch(() => {});
+
+            return false;
         },
         isRecording: () => !!stopRecording && !stopped && !navigation.isExcluded() && session?.phase === 'recording',
         /** Mode "on_error": keeping the last moments in the browser, waiting for a trigger. */

@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { REDACTED, dropHiddenValues, redactUrl, redactUrlAttributes, redactUrls } from '../lib/privacy.js';
+import { REDACTED, dropHiddenValues, inputMaskOptions, maskTextAttributes, redactPluginUrls, redactUrl, redactUrlAttributes, redactUrls } from '../lib/privacy.js';
 
 const names = ['token', 'signature', 'code', 'email'];
 
@@ -82,4 +82,108 @@ test('links, sources and form actions in the page are redacted, in snapshots and
     redactUrlAttributes(change, names, 'https://app.test');
 
     assert.equal(change.data.attributes[0].attributes.href, `https://app.test/verify?code=${REDACTED}`);
+});
+
+test('srcset, poster and ping URLs are redacted too', () => {
+    const snapshot = {
+        type: 2,
+        data: {
+            node: {
+                type: 2,
+                tagName: 'img',
+                attributes: { srcset: '/a.jpg?signature=1 1x, https://cdn.test/b.jpg?token=2&w=3 2x', poster: '/p.jpg?token=4', ping: '/track?code=5 /other' },
+                childNodes: [],
+            },
+        },
+    };
+
+    redactUrlAttributes(snapshot, names, 'https://app.test');
+
+    const attributes = snapshot.data.node.attributes;
+
+    assert.equal(attributes.srcset, `https://app.test/a.jpg?signature=${REDACTED} 1x, https://cdn.test/b.jpg?token=${REDACTED}&w=3 2x`);
+    assert.equal(attributes.poster, `https://app.test/p.jpg?token=${REDACTED}`);
+    assert.equal(attributes.ping, `https://app.test/track?code=${REDACTED} /other`);
+});
+
+test('every input is masked by tag with mask_all_inputs, hidden and file inputs always', () => {
+    const all = inputMaskOptions(true);
+    const some = inputMaskOptions(false);
+
+    // rrweb masks when the tag or the type is listed; "input" covers hidden, file and any type rrweb's own list misses.
+    for (const key of ['input', 'textarea', 'select', 'password']) assert.equal(all[key], true, key);
+    for (const key of ['password', 'hidden', 'file']) assert.equal(some[key], true, key);
+    assert.equal(some.input, undefined);
+    assert.equal(some.textarea, undefined);
+});
+
+test('text attributes of masked elements are masked, in snapshots, added nodes and changed attributes', () => {
+    const masked = new Set([2, 3, 7]);
+    const snapshot = {
+        type: 2,
+        data: {
+            node: {
+                type: 0,
+                id: 1,
+                childNodes: [
+                    { type: 2, id: 2, tagName: 'img', attributes: { alt: 'Avatar of Jane Doe', src: '/a.png', class: 'avatar' }, childNodes: [] },
+                    { type: 2, id: 3, tagName: 'input', attributes: { type: 'submit', value: 'Remove Jane', placeholder: 'Name' }, childNodes: [] },
+                    { type: 2, id: 4, tagName: 'button', attributes: { title: 'Save changes' }, childNodes: [] },
+                ],
+            },
+        },
+    };
+
+    maskTextAttributes(snapshot, (id) => masked.has(id));
+
+    const [avatar, submit, plain] = snapshot.data.node.childNodes;
+
+    assert.equal(avatar.attributes.alt, '****** ** **** ***');
+    assert.equal(avatar.attributes.src, '/a.png');
+    assert.equal(avatar.attributes.class, 'avatar');
+    assert.equal(submit.attributes.value, '****** ****');
+    assert.equal(submit.attributes.placeholder, '****');
+    assert.equal(plain.attributes.title, 'Save changes');
+
+    const change = { type: 3, data: { source: 0, adds: [], attributes: [{ id: 7, attributes: { 'aria-label': 'Jane' } }, { id: 8, attributes: { 'aria-label': 'Menu' } }] } };
+
+    maskTextAttributes(change, (id) => masked.has(id));
+
+    assert.equal(change.data.attributes[0].attributes['aria-label'], '****');
+    assert.equal(change.data.attributes[1].attributes['aria-label'], 'Menu');
+});
+
+test('a text input keeps its value attribute for the input masking to handle', () => {
+    const snapshot = { type: 2, data: { node: { type: 2, id: 1, tagName: 'input', attributes: { type: 'text', value: '***' }, childNodes: [] } } };
+
+    maskTextAttributes(snapshot, () => true);
+
+    assert.equal(snapshot.data.node.attributes.value, '***');
+});
+
+test('URLs in console messages and stack frames are redacted', () => {
+    const event = {
+        type: 6,
+        data: {
+            plugin: 'rrweb/console@1',
+            payload: { level: 'error', payload: ['"failed https://app.test/reset?token=abc"'], trace: ['at https://app.test/app.js?signature=x:10:5'] },
+        },
+    };
+
+    redactPluginUrls(event, names);
+
+    assert.equal(event.data.payload.payload[0], `"failed https://app.test/reset?token=${REDACTED}"`);
+    assert.equal(event.data.payload.trace[0], `at https://app.test/app.js?signature=${REDACTED}:10:5`);
+});
+
+test('masking is looked up only for elements that carry text attributes', () => {
+    const asked = [];
+    const snapshot = {
+        type: 2,
+        data: { node: { type: 0, id: 1, childNodes: [{ type: 2, id: 2, tagName: 'div', attributes: { class: 'row' }, childNodes: [] }, { type: 2, id: 3, tagName: 'img', attributes: { alt: 'x' }, childNodes: [] }] } },
+    };
+
+    maskTextAttributes(snapshot, (id) => asked.push(id) && false);
+
+    assert.deepEqual(asked, [3]);
 });
