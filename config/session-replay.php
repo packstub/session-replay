@@ -71,6 +71,11 @@ return [
         // Ask the person first, in a small dialog the recorder draws: send the replay or not, and, when someone is
         // signed in, without their name. A "no" drops what was kept and leaves the tab alone until its session ends.
         'ask' => false,
+        // Livewire opens its own modal with the error page when a request fails. When that request puts the question
+        // up (ask), "keep" shows the question over Livewire's modal, "replace" shows the question instead of it,
+        // and "production" replaces it only while app.debug is off: the production error page says no more than
+        // "500 | Server Error", the debug one is worth keeping.
+        'livewire_error_modal' => 'production',
         // Keep the uploaded window in the browser (IndexedDB) while its upload fails, so a page reload during the
         // outage does not lose it: the tab's next page load sends it first. Dropped after idle_timeout, when the
         // person changes or when the tab stops. false keeps nothing recorded at rest in the browser.

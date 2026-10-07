@@ -9,6 +9,10 @@ return [
         'anonymous' => 'Отправить анонимно, без привязки к моему аккаунту',
         'share' => 'Отправить запись',
         'decline' => 'Не отправлять',
+        // Under the title when a failed request put the question up, next to the status code and the error page's title.
+        'failed' => 'Последнее действие не удалось выполнить. Вы можете попробовать ещё раз или перезагрузить страницу, если это повторится.',
+        // A short notice after the replay was sent.
+        'sent' => 'Спасибо, запись отправлена.',
     ],
 
 ];
