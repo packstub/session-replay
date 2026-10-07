@@ -84,6 +84,40 @@ A page served from a full-page cache (a response cache, a CDN, a static export) 
 - **`flush_interval`** (milliseconds, default 5000, minimum 1000): how often events upload while the page is open. A batch also uploads when the tab is hidden and when the page goes away.
 - A recording that reaches `ingest.max_session_mb` is marked truncated and the recorder stops.
 
+## Recording only when something goes wrong
+
+Most of the replays worth watching show something going wrong. `mode = on_error` keeps only those:
+
+```php
+// config/session-replay.php
+'mode' => 'on_error',
+
+'on_error' => [
+    'buffer_seconds' => 60,
+    'triggers' => ['error', 'request'],
+    'ask' => false,
+],
+```
+
+- **Nothing leaves the browser until a trigger fires.** The recorder keeps the last `buffer_seconds` in memory and takes a fresh page snapshot every half window (at most every 30 seconds), so what it keeps always starts from something playable. No recording row exists until then.
+- **A trigger uploads the window and recording carries on.** The first marker of a type in `on_error.triggers` uploads the kept window and the tab records as usual for the rest of its session, page loads included, so the replay shows what happened before and after. The recording starts where the window starts, and the page it starts on keeps its `navigation` marker.
+- **Triggers** are marker types: `error` (uncaught errors and unhandled rejections) and `request` (failed Livewire requests) by default, and `console` (`console.error`), `rage-click` and `custom` (`SessionReplay.mark()`) when you add them. A type must also be captured (`capture.errors`, `capture.livewire`, `capture.console`, `capture.rage_clicks`). With `custom` in the list, your own code decides: `SessionReplay.mark('Payment declined')` uploads the window.
+- **The window covers `wire:navigate` page swaps**, which keep the page alive. A full page load starts the memory over: the window holds the pages a tab went through without a reload, not the ones before it.
+- **`sample_rate`** still applies, to the tabs that keep a window. **`consent = opt-in`**: nothing is kept in memory before consent either.
+- **Memory stays bounded.** A page that changes a lot shrinks the window to its newest snapshot rather than grow without limit.
+- **`on_error.ask`** asks the person before anything is sent; see [Privacy](privacy.md#asking-before-a-replay-is-sent).
+- **Log context.** The recording's cookie is set while the window is kept, so the log line of the server error behind a failed request already points at the recording the browser is about to upload. Log lines of requests where nothing went wrong point at a recording that never comes.
+
+`SessionReplay.isBuffering()` is `true` while a tab keeps a window and waits; `isRecording()` turns `true` once it uploads.
+
+### When the upload fails
+
+The server that cannot take an upload is often the one whose failed request fired the trigger, so the window's upload is treated with more care than an ordinary batch:
+
+- **Retries while the page stays open.** Every upload that fails, in both modes, is retried for about four minutes (after 2, 4, 8, 16 and 32 seconds, then once a minute), or sooner when the browser reports it is back online. Later batches wait in memory, in order.
+- **The window survives a reload** (`on_error.keep_pending`, default `true`). The first time its upload fails, the window is kept in the browser's IndexedDB. The tab's next page load sends it before anything that page records, with its original place in the recording, and the kept copy goes as soon as the server has answered. It is dropped unsent after `idle_timeout`, when a different person is signed in, when the tab stops recording (consent withdrawn, the person declined, the server said stop), and it is never sent by another tab. With `on_error.ask`, nothing is kept before the person agreed, and their anonymous choice is kept with it.
+- **`keep_pending = false`** keeps nothing recorded at rest in the browser; a reload during the outage then loses the window, as a browser without IndexedDB does.
+
 ## Markers
 
 Markers are the moments worth jumping to. Each one is stored in `replay_markers` (type, label, payload, time) and drawn on the player's timeline.
@@ -117,8 +151,9 @@ SessionReplay.mark('Checkout started', { cart: 3 });
 | `flush()` | Uploads what is buffered now. Returns a promise. |
 | `mark(label, payload = {})` | Adds a `custom` marker. |
 | `consent(given)` | `true` remembers the answer and starts; `false` remembers it and stops. See [Privacy](privacy.md#consent). |
-| `isRecording()` | `true` while events are being recorded. |
-| `sessionId()` | The recording's id while recording, otherwise `null`. |
+| `isRecording()` | `true` while events are being recorded and uploaded. |
+| `isBuffering()` | `true` while mode `on_error` keeps the last moments in memory and waits for a trigger. |
+| `sessionId()` | The recording's id while recording (in mode `on_error` also while waiting, the id the recording will get), otherwise `null`. |
 
 ## Livewire
 

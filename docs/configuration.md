@@ -14,6 +14,16 @@
 | `idle_timeout` | `30` | Minutes without activity after which a tab starts a new recording. |
 | `flush_interval` | `5000` | Milliseconds between uploads while the page is open (minimum 1000). |
 
+## Mode
+
+| Key | Default | Meaning |
+| --- | --- | --- |
+| `mode` | `env('SESSION_REPLAY_MODE', 'session')` | `session`: a recorded tab uploads from its first page. `on_error`: the browser keeps the last moments in memory and uploads only when something goes wrong. See [Recording only when something goes wrong](recording.md#recording-only-when-something-goes-wrong). |
+| `on_error.buffer_seconds` | `60` | Seconds kept before the trigger, 5 to 600. The window starts at a full page snapshot, so a replay may start up to half a window (at most 30 s) earlier. |
+| `on_error.triggers` | `['error', 'request']` | Marker types that upload the window: `error`, `request`, `console`, `rage-click`, `custom`. A type also has to be captured (`capture.*`). |
+| `on_error.ask` | `false` | Ask the person before anything is sent, in a small dialog the recorder draws. See [Privacy](privacy.md#asking-before-a-replay-is-sent). |
+| `on_error.keep_pending` | `true` | Keep the uploaded window in the browser (IndexedDB) while its upload fails, so a reload during the outage does not lose it. See [When the upload fails](recording.md#when-the-upload-fails). |
+
 ## Consent
 
 | Key | Default | Meaning |
@@ -128,7 +138,7 @@ The viewer and the player ship in English, German, Spanish, Romanian and Russian
 php artisan vendor:publish --tag=session-replay-translations
 ```
 
-They land in `lang/vendor/session-replay/{locale}/viewer.php` and `player.php`. The player reads its strings from the `<x-session-replay::player>` component, so a page that embeds it is translated too.
+They land in `lang/vendor/session-replay/{locale}/viewer.php`, `player.php` and `recorder.php` (the dialog of `on_error.ask`). The player reads its strings from the `<x-session-replay::player>` component and the recorder from the page that renders `@sessionReplay`, so both follow the app's locale.
 
 ## Commands
 

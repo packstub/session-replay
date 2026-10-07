@@ -216,3 +216,58 @@ it('compiles the Blade directive with and without options', function () {
     expect(Blade::compileString('@sessionReplay'))->toContain('->recorder([])')
         ->and(Blade::compileString("@sessionReplay(['nonce' => \$nonce])"))->toContain("->recorder(['nonce' => \$nonce])");
 });
+
+it('keeps mode "session" by default, with nothing about errors for the browser', function () {
+    $config = recorderConfig($this->actingAs($this->user())->get('page')->getContent());
+
+    expect($config['mode'])->toBe('session')
+        ->and($config['onError'])->toBeNull()
+        ->and((require __DIR__.'/../../config/session-replay.php')['mode'])->toBe('session');
+});
+
+it('tells the browser the window and the triggers in mode "on_error"', function () {
+    config()->set('session-replay.mode', 'on_error');
+    config()->set('session-replay.on_error.triggers', ['error', 'console', 'navigation', 'custom']);
+
+    $config = recorderConfig($this->actingAs($this->user())->get('page')->getContent());
+
+    expect($config['mode'])->toBe('on_error')
+        ->and($config['onError']['bufferMs'])->toBe(60_000)
+        ->and($config['onError']['triggers'])->toBe(['error', 'console', 'custom'])
+        ->and($config['onError']['ask'])->toBeFalse()
+        ->and($config['onError']['keepPending'])->toBeTrue()
+        ->and($config['onError']['labels'])->toBeNull();
+
+    config()->set('session-replay.on_error.keep_pending', false);
+    expect(recorderConfig((string) SessionReplay::recorder())['onError']['keepPending'])->toBeFalse();
+
+    config()->set('session-replay.on_error.buffer_seconds', 5000);
+    expect(recorderConfig((string) SessionReplay::recorder())['onError']['bufferMs'])->toBe(600_000);
+
+    config()->set('session-replay.on_error.buffer_seconds', 1);
+    expect(recorderConfig((string) SessionReplay::recorder())['onError']['bufferMs'])->toBe(5_000);
+
+    config()->set('session-replay.mode', 'something else');
+    expect(recorderConfig((string) SessionReplay::recorder())['mode'])->toBe('session');
+});
+
+it('hands the browser the question in the app\'s language, with the anonymous choice only for a named person', function () {
+    config()->set('session-replay.mode', 'on_error');
+    config()->set('session-replay.on_error.ask', true);
+    config()->set('session-replay.guests', true);
+
+    app()->setLocale('de');
+
+    $signedIn = recorderConfig($this->actingAs($this->user())->get('page')->getContent())['onError'];
+
+    expect($signedIn['ask'])->toBeTrue()
+        ->and($signedIn['offerAnonymous'])->toBeTrue()
+        ->and($signedIn['labels']['share'])->toBe('Aufzeichnung senden')
+        ->and(array_keys($signedIn['labels']))->toBe(['title', 'body', 'anonymous', 'share', 'decline']);
+
+    config()->set('session-replay.privacy.anonymous', true);
+    expect(recorderConfig((string) SessionReplay::recorder())['onError']['offerAnonymous'])->toBeFalse();
+
+    config()->set('session-replay.privacy.anonymous', false);
+    expect(recorderConfig((string) SessionReplay::recorder(['user' => null]))['onError']['offerAnonymous'])->toBeFalse();
+});

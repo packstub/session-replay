@@ -184,7 +184,7 @@ it('speaks the app\'s language, in the pages and in the player', function () {
 });
 
 it('ships every string in every language', function () {
-    foreach (['viewer', 'player'] as $file) {
+    foreach (['viewer', 'player', 'recorder'] as $file) {
         $english = array_keys(Arr::dot(require __DIR__."/../../resources/lang/en/{$file}.php"));
 
         foreach (['de', 'es', 'ro', 'ru'] as $locale) {
