@@ -81,7 +81,7 @@ A page served from a full-page cache (a response cache, a CDN, a static export) 
 
 - **One recording per browser tab.** The recording's id (a UUID) lives in `sessionStorage` and continues across page loads: every full page load adds a new snapshot to the same recording.
 - **One person, one workspace per recording.** A tab that signs in, signs out, switches to another person, moves to another workspace or starts impersonating starts a new recording on that page load. A visitor's walk through your public pages and their signed-in session are two recordings, and a recording filed under one workspace never holds pages of another. The server holds the same line: an upload whose token names another person or workspace than the recording's first batch is refused.
-- **`idle_timeout`** (minutes, default 30): a tab without activity for longer starts a new recording on its next page load.
+- **`idle_timeout`** (minutes, default 30): a tab without activity for longer starts a new recording on its next page load, or its next page with `wire:navigate`.
 - **`sample_rate`** (0 to 1, default 1): the share of recordings that are kept. The decision is made once, in the browser, when a recording starts, and stays with it.
 - **`flush_interval`** (milliseconds, default 5000, minimum 1000): how often events upload while the page is open. A batch also uploads when the tab is hidden and when the page goes away.
 - A recording that reaches `ingest.max_session_mb` is marked truncated and the recorder stops.
@@ -108,7 +108,7 @@ Most of the replays worth watching show something going wrong. `mode = on_error`
 - **`sample_rate`** still applies, to the tabs that keep a window. **`consent = opt-in`**: nothing is kept in memory before consent either.
 - **Memory stays bounded.** A page that changes a lot shrinks the window to its newest snapshot rather than grow without limit.
 - **`on_error.ask`** asks the person before anything is sent, and `on_error.livewire_error_modal` decides whether the question replaces Livewire's own error modal in production; see [Privacy](privacy.md#asking-before-a-replay-is-sent).
-- **Log context.** The recording's cookie is set while the window is kept, so the log line of the server error behind a failed request already points at the recording the browser is about to upload. Log lines of requests where nothing went wrong point at a recording that never comes.
+- **Log context.** The recording's cookie is set while the window is kept (never in a tab that is not sampled), so the log line of the server error behind a failed request already points at the recording the browser is about to upload. Log lines of requests where nothing went wrong point at a recording that never comes.
 
 `SessionReplay.isBuffering()` is `true` while a tab keeps a window and waits; `isRecording()` turns `true` once it uploads.
 
@@ -117,7 +117,7 @@ Most of the replays worth watching show something going wrong. `mode = on_error`
 The server that cannot take an upload is often the one whose failed request fired the trigger, so the window's upload is treated with more care than an ordinary batch:
 
 - **Retries while the page stays open.** Every upload that fails, in both modes, is retried for about four minutes (after 2, 4, 8, 16 and 32 seconds, then once a minute), or sooner when the browser reports it is back online. Later batches wait in memory, in order.
-- **The window survives a reload** (`on_error.keep_pending`, default `true`). The first time its upload fails, the window is kept in the browser's IndexedDB. The tab's next page load sends it before anything that page records, with its original place in the recording, and the kept copy goes as soon as the server has answered. It is dropped unsent after `idle_timeout`, when a different person is signed in, when the tab stops recording (consent withdrawn, the person declined, the server said stop), and it is never sent by another tab. With `on_error.ask`, nothing is kept before the person agreed, and their anonymous choice is kept with it.
+- **The window survives a reload** (`on_error.keep_pending`, default `true`). The window is kept in the browser's IndexedDB as it goes up, before the server answers: a server that is down often answers only after half a minute, and a reload before that aborts the upload. The tab's next page load sends it before anything that page records, with its original place in the recording, and the kept copy goes as soon as the server has answered. It is dropped unsent after `idle_timeout`, when a different person is signed in, when the tab stops recording (consent withdrawn, the person declined, the server said stop), and it is never sent by another tab. Every page load of your app looks for such leftovers, recorded or not, and withdrawing consent removes every kept window of your origin. With `on_error.ask`, nothing is kept before the person agreed, and their anonymous choice is kept with it.
 - **`keep_pending = false`** keeps nothing recorded at rest in the browser; a reload during the outage then loses the window, as a browser without IndexedDB does.
 
 ## Markers
