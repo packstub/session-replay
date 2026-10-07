@@ -71,6 +71,10 @@ return [
         // Ask the person first, in a small dialog the recorder draws: send the replay or not, and, when someone is
         // signed in, without their name. A "no" drops what was kept and leaves the tab alone until its session ends.
         'ask' => false,
+        // Keep the uploaded window in the browser (IndexedDB) while its upload fails, so a page reload during the
+        // outage does not lose it: the tab's next page load sends it first. Dropped after idle_timeout, when the
+        // person changes or when the tab stops. false keeps nothing recorded at rest in the browser.
+        'keep_pending' => true,
     ],
 
     /*

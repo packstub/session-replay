@@ -268,6 +268,7 @@ class SessionReplayManager
             'bufferMs' => max(5, min(600, (int) config('session-replay.on_error.buffer_seconds', 60))) * 1000,
             'triggers' => array_values(array_intersect(self::TRIGGERS, array_map('strval', (array) config('session-replay.on_error.triggers', ['error', 'request'])))),
             'ask' => $ask,
+            'keepPending' => (bool) config('session-replay.on_error.keep_pending', true),
             // Only a token that names a person can be sent without them; an anonymous one already is.
             'offerAnonymous' => $ask && $token->userId !== null,
             'labels' => $ask ? [

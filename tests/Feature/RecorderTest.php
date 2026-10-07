@@ -235,7 +235,11 @@ it('tells the browser the window and the triggers in mode "on_error"', function 
         ->and($config['onError']['bufferMs'])->toBe(60_000)
         ->and($config['onError']['triggers'])->toBe(['error', 'console', 'custom'])
         ->and($config['onError']['ask'])->toBeFalse()
+        ->and($config['onError']['keepPending'])->toBeTrue()
         ->and($config['onError']['labels'])->toBeNull();
+
+    config()->set('session-replay.on_error.keep_pending', false);
+    expect(recorderConfig((string) SessionReplay::recorder())['onError']['keepPending'])->toBeFalse();
 
     config()->set('session-replay.on_error.buffer_seconds', 5000);
     expect(recorderConfig((string) SessionReplay::recorder())['onError']['bufferMs'])->toBe(600_000);
