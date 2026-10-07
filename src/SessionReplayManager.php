@@ -244,6 +244,8 @@ class SessionReplayManager
             'cookie' => config('session-replay.context.enabled', true) ? config('session-replay.context.cookie', 'session_replay_id') : null,
             'mode' => $this->mode(),
             'onError' => $this->onErrorConfig($token),
+            // The debug error page is titled with the app's name; the question leaves that title out.
+            'appName' => (string) config('app.name', ''),
         ];
 
         $nonce = $options['nonce'] ?? Vite::cspNonce();

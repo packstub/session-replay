@@ -279,6 +279,8 @@ it('tells the browser whether the question replaces Livewire\'s error modal', fu
 
     $replaces = fn (): bool => recorderConfig((string) SessionReplay::recorder())['onError']['replaceLivewireModal'];
 
+    expect(recorderConfig((string) SessionReplay::recorder())['appName'])->toBe(config('app.name'));
+
     // The default replaces it in production only.
     config()->set('app.debug', false);
     expect((require __DIR__.'/../../config/session-replay.php')['on_error']['livewire_error_modal'])->toBe('production')

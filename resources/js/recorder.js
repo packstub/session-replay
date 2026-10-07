@@ -757,14 +757,19 @@ function watchErrors() {
     });
 }
 
-/** The title of an error page: Laravel's production pages carry the short message there ("Server Error", "Not Found"). */
+/**
+ * The title of an error page: Laravel's production pages carry the short message there ("Server Error", "Not Found").
+ * The debug page's title is the app's name, which says nothing about the error.
+ */
 function errorTitle(html) {
     if (typeof html !== 'string' || !html) return null;
 
     try {
         const title = new DOMParser().parseFromString(html.slice(0, 20000), 'text/html').title.trim().replace(/\s+/g, ' ');
 
-        return title ? title.slice(0, 120) : null;
+        if (!title || title === String(config.appName || '').trim()) return null;
+
+        return title.slice(0, 120);
     } catch {
         return null;
     }
