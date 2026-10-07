@@ -4,6 +4,10 @@ All notable changes to `packstub/session-replay` are documented here.
 
 ## Unreleased
 
+### Changed
+
+- **A `wire:navigate` page is recorded as a snapshot, like a page load.** Livewire replaces the whole page body on `wire:navigate`, which rrweb recorded as one change adding every node of the new page. The recorder now pauses on `livewire:navigating` and starts again on `livewire:navigated` (or after five seconds if that never comes), so the new page arrives as a fresh snapshot. In the Filament lab's navigation run a page went from 25 KB to 17 KB on the disk, about a third less main-thread blocking, the player jumps to any page without replaying the ones before it, and the last page before the tab closed is no longer lost when the swap was too large for the closing request. Markers, `SessionReplay.mark()` calls and console messages during the swap are kept, and the console stays patched through it, so a wrapper another script put around `console.error` stays in place. A recording now has a chunk row per page with `wire:navigate` as with page loads. Snapshots of pages reached with `wire:navigate` are not shared through `snapshots.share_routes`: only a page load is, never a page shown after a `wire:navigate`, even when recording started there.
+
 ### Fixed
 
 - **Stylesheets that finish loading after the page was recorded are deduplicated too.** rrweb sends the text of a `<link rel="stylesheet">` that was still loading when it was serialized (a page-specific stylesheet `wire:navigate` appends, or a slow one at page load) later, as an attribute change. That text went up inline on every page view; it is now stored once by hash like every other stylesheet, and the player puts it back. Recordings made before keep playing as they are.
