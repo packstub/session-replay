@@ -61,6 +61,8 @@ SessionReplay::propertiesUsing(fn ($request) => ['release' => config('app.versio
 
 All four are evaluated when the page renders and signed into the token the recorder uploads with, so the ingest endpoint never has to work out identity itself. A token is accepted for seven days (`ingest.token_days`).
 
+The token is signed with `APP_KEY`. When you rotate the key the way Laravel does, with the old key in `APP_PREVIOUS_KEYS` (`app.previous_keys`), tokens signed with the old key are still accepted, so tabs that are open keep recording; new pages get tokens signed with the new key. Without the old key in `APP_PREVIOUS_KEYS`, every open tab's uploads are refused until its next page load.
+
 ### Cached pages
 
 A page served from a full-page cache (a response cache, a CDN, a static export) carries the token it was cached with. Two settings keep its uploads welcome:
