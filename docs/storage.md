@@ -50,10 +50,10 @@ The files are always read through the package's gated routes, never through a pu
 
 | Table | One row per | What it holds |
 | --- | --- | --- |
-| `replay_sessions` | recording | Who (`user_type`, `user_id`), workspace (`tenant_type`, `tenant_id`), `impersonator_id`, `properties`, first URL, user agent, device, viewport, counters (`page_count`, `event_count`, `chunk_count`, `bytes`, `error_count`, `rage_click_count`, `active_ms`), worst vitals (`lcp_ms`, `inp_ms`, `cls`), `pinned`, `truncated`, `started_at`, `last_activity_at`. The id is the UUID the browser generated. |
-| `replay_chunks` | uploaded batch | `seq`, the file's `path`, `bytes`, `event_count`, first and last event time. Unique per recording and `seq`, which makes a retried upload harmless. |
+| `replay_sessions` | recording | Who (`user_type`, `user_id`), workspace (`tenant_type`, `tenant_id`), `impersonator_id`, `properties`, first URL, user agent, device, viewport, counters (`page_count`, `event_count`, `chunk_count`, `bytes`, `error_count`, `rage_click_count`, `active_ms`), worst vitals (`lcp_ms`, `inp_ms`, `cls`), `pinned`, `truncated`, `started_at`, `last_activity_at`. The id is the UUID the browser generated, stored in lower case. Indexed for a workspace's list by `tenant_type`, `tenant_id`, `started_at`. |
+| `replay_chunks` | uploaded batch | `seq`, the file's `path`, `bytes`, `event_count`, first and last event time. Unique per recording and `seq`, which makes a retried upload harmless. A batch's chunk row, markers, counters and snapshot references are written in one transaction, so a batch that failed half way is stored in full when it is retried. |
 | `replay_markers` | marker | `type`, `label`, `payload`, `at_ms`. This table is what lets a list filter without opening a file. |
-| `replay_assets` | stylesheet or shared snapshot | `hash`, `kind` (`stylesheet` or `snapshot`), `path`, stored and raw size, `last_seen_at`. Shared by every recording that references it. |
+| `replay_assets` | stylesheet or shared snapshot | `hash`, `kind` (`stylesheet` or `snapshot`), `path`, stored and raw size, `last_seen_at`. Shared by every recording that references it. A shared snapshot whose content is also sent as a stylesheet becomes a stylesheet, and recordings that point at it as a snapshot still get it. |
 | `replay_session_assets` | shared snapshot a recording points at | `replay_session_id`, `hash`. What the viewer checks before it serves a shared snapshot, and what keeps one from being pruned. |
 
 User and tenant keys are stored as strings, so integer, UUID and ULID keys all fit. Chunks, markers and snapshot references are removed with their recording by foreign key; deleting a `ReplaySession` model also deletes its folder on the disk.
@@ -187,7 +187,7 @@ php artisan session-replay:prune --days=7
 - Deletes recordings whose last activity is older than the window, one by one, with their files.
 - Keeps pinned recordings: `$session->forceFill(['pinned' => true])->save()`.
 - Deletes stylesheets that were last referenced before the window and before the oldest recording that is left (a pinned one included), so a kept recording never loses its styling.
-- Deletes shared snapshots no recording that is left points at, a day after they were last sent.
+- Deletes shared snapshots no recording that is left points at, a day after they were last sent. Sending one again moves that date once it is an hour old, so the batch that points at it always has at least 23 hours to arrive.
 - Refuses a window under one day.
 
 Schedule it daily:

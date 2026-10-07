@@ -192,3 +192,42 @@ it('ships every string in every language', function () {
         }
     }
 });
+
+it('keeps an orWhere in visibleUsing inside the rule, so it never opens what the query narrowed', function () {
+    config()->set('session-replay.guests', true);
+
+    $ada = $this->user();
+    $acme = $this->team('Acme');
+    $globex = $this->team('Globex');
+
+    $this->ingest(['token' => $this->token($ada, $acme)])->assertCreated();
+    $this->ingest(['token' => $this->token(null, $acme)])->assertCreated();
+    $this->ingest(['token' => $this->token($ada, $globex)])->assertCreated();
+    $this->ingest(['token' => $this->token(null, $globex)])->assertCreated();
+
+    // A viewer sees their own recordings or guests'.
+    SessionReplay::visibleUsing(fn ($query, $viewer) => $query->where('user_id', (string) $viewer->id)->orWhereNull('user_id'));
+
+    // A panel narrows to its workspace before the rule.
+    $visible = SessionReplay::visibleTo(ReplaySession::query()->forTenant($acme), $ada)->get();
+
+    expect($visible)->toHaveCount(2)
+        ->and($visible->pluck('tenant_id')->unique()->all())->toBe([(string) $acme->id]);
+});
+
+it('ignores a list where the list expects one value', function () {
+    Gate::define('viewSessionReplay', fn () => true);
+
+    $this->recording($this->user(['email' => 'ada@example.com']));
+
+    $this->actingAs($this->user());
+
+    $this->get(route('session-replay.index').'?user[]=1&from[]=x&errors[]=1')->assertOk()->assertSee('ada@example.com');
+});
+
+it('loads the player script once per tab with wire:navigate', function () {
+    $html = (string) SessionReplay::playerAssets();
+
+    expect($html)->toMatch('/<script src="[^"]+player\.js[^"]*" defer data-navigate-once><\/script>/')
+        ->and($html)->toContain('player.css');
+});

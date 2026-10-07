@@ -88,7 +88,7 @@ Share pages that look the same for everyone who opens them: a pricing page, the 
 | `ingest.max_batch_kb` | `1536` | Largest upload accepted, as sent; a shared snapshot gets the same limit. |
 | `ingest.max_session_mb` | `50` | A recording stops growing here and is marked truncated. |
 | `ingest.max_asset_kb` | `1536` | Largest stylesheet accepted, as sent (compressed). |
-| `ingest.token_days` | `7` | Days the token a page was rendered with is accepted. Keep it longer than your full-page cache (see [Cached pages](recording.md#cached-pages)). |
+| `ingest.token_days` | `7` | Days the token a page was rendered with is accepted. Keep it longer than your full-page cache (see [Cached pages](recording.md#cached-pages)). Tokens signed with a key in `app.previous_keys` are accepted too, so rotating `APP_KEY` keeps open tabs recording. |
 | `ingest.guest_tokens_expire` | `true` | `false`: a token that names nobody (no person, no workspace, no impersonator) never expires. |
 
 ## Storage
@@ -129,7 +129,7 @@ Share pages that look the same for everyone who opens them: a pricing page, the 
 | `SessionReplay::impersonatorUsing(fn ($request) => ...)` | The impersonator's key. |
 | `SessionReplay::propertiesUsing(fn ($request) => [...])` | Anything else to keep on the recording. |
 | `SessionReplay::urlUsing(fn (ReplaySession $session) => ...)` | Where replays are watched, when not the built-in viewer. |
-| `SessionReplay::visibleUsing(fn (Builder $query, $viewer) => ...)` | Narrow the recordings a viewer finds in a list. |
+| `SessionReplay::visibleUsing(fn (Builder $query, $viewer) => ...)` | Narrow the recordings a viewer finds in a list. Runs as a group of its own, so an `orWhere()` only narrows. |
 
 ## Languages
 

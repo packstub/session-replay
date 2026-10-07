@@ -16,7 +16,7 @@ class ViewerController
     {
         $sessions = SessionReplay::visibleTo(ReplaySession::query())
             ->with('user')
-            ->when($request->filled('user'), fn ($query) => $query->where('user_id', (string) $request->query('user')))
+            ->when($this->text($request->query('user')), fn ($query, string $user) => $query->where('user_id', $user))
             ->when($request->boolean('errors'), fn ($query) => $query->withErrors())
             ->when($this->date($request->query('from')), fn ($query, Carbon $from) => $query->where('started_at', '>=', $from->startOfDay()))
             ->when($this->date($request->query('to')), fn ($query, Carbon $to) => $query->where('started_at', '<=', $to->endOfDay()))
@@ -26,7 +26,7 @@ class ViewerController
 
         return view('session-replay::viewer.index', [
             'sessions' => $sessions,
-            'filters' => $request->only(['user', 'errors', 'from', 'to']),
+            'filters' => array_filter($request->only(['user', 'errors', 'from', 'to']), 'is_string'),
             'userLabel' => fn (ReplaySession $session): string => $this->userLabel($session),
         ]);
     }
@@ -55,6 +55,12 @@ class ViewerController
         $label = $session->user?->getAttribute($attribute);
 
         return is_scalar($label) && (string) $label !== '' ? (string) $label : '#'.$session->user_id;
+    }
+
+    /** A filter's value when it is one non-empty string; ?user[]=1 and the like are ignored. */
+    protected function text(mixed $value): ?string
+    {
+        return is_string($value) && trim($value) !== '' ? trim($value) : null;
     }
 
     protected function date(mixed $value): ?Carbon

@@ -103,7 +103,11 @@ class SessionReplayManager
     public function visibleTo(Builder $query, mixed $viewer = null): Builder
     {
         if ($this->visibleUsing) {
-            ($this->visibleUsing)($query, $viewer ?? $this->viewer());
+            $viewer ??= $this->viewer();
+
+            // In a group of its own: an orWhere() in the app's rule must not open what the query already narrowed
+            // (a panel's workspace, the list's filters).
+            $query->where(fn (Builder $query) => ($this->visibleUsing)($query, $viewer));
         }
 
         return $query;
@@ -308,7 +312,10 @@ class SessionReplayManager
         };
     }
 
-    /** The player's stylesheet and script, for a page that embeds <x-session-replay::player>. */
+    /**
+     * The player's stylesheet and script, for a page that embeds <x-session-replay::player>. The script runs once
+     * per tab with wire:navigate (data-navigate-once) and mounts the players of every page Livewire swaps in.
+     */
     public function playerAssets(): HtmlString
     {
         $nonce = Vite::cspNonce();
@@ -316,7 +323,7 @@ class SessionReplayManager
 
         return new HtmlString(
             '<link rel="stylesheet" href="'.e($this->scriptUrl('player.css')).'"'.$nonceAttribute.'>'
-            .'<script src="'.e($this->scriptUrl('player.js')).'" defer'.$nonceAttribute.'></script>'
+            .'<script src="'.e($this->scriptUrl('player.js')).'" defer data-navigate-once'.$nonceAttribute.'></script>'
         );
     }
 

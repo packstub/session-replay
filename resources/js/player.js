@@ -9,6 +9,10 @@ import { referencedAssets, restoreAssets, restoreSnapshots, sharedSnapshots, sor
  * and stylesheets they reference, and mounts rrweb-player with the markers
  * next to it. Mounts itself on every [data-session-replay-player] element; the element's
  * data-manifest is the manifest URL.
+ *
+ * Runs once per tab (the script tag has data-navigate-once): with Livewire's
+ * wire:navigate it stops the players of the page it leaves and mounts those
+ * of the page it arrives on.
  */
 
 const COLORS = {
@@ -192,6 +196,10 @@ function markerList(manifest, startedAt, seek, text) {
     return panel;
 }
 
+// The players on the page, each with what stops it: one left listening keeps its recording in memory after
+// wire:navigate swapped it out.
+const mounted = new Map();
+
 // How long (replay time) a stretch of the mouse trail stays, and how thick it is in recorded pixels.
 const TRAIL_MS = 1500;
 const TRAIL_WIDTH = 5;
@@ -203,6 +211,7 @@ const CLICK_MS = 1600;
  * every click. rrweb calls drawMouseTail() and marks .replayer-mouse active
  * only while playing, never while fast-forwarding to a seek, so neither shows
  * up for moments that were skipped. The colour is --sr-pointer on the player.
+ * Returns what stops it.
  */
 function pointer(player, root) {
     const replayer = player.getReplayer?.();
@@ -257,7 +266,7 @@ function pointer(player, root) {
 
     const mouse = replayer.mouse;
 
-    new MutationObserver((records) => {
+    const observer = new MutationObserver((records) => {
         // rrweb removes and re-adds "active" for every click it plays.
         if (!mouse.classList.contains('active') || !records.some((record) => !hasClass(record.oldValue, 'active'))) return;
 
@@ -267,15 +276,26 @@ function pointer(player, root) {
         click.style.top = mouse.style.top;
         replayer.wrapper.append(click);
         setTimeout(() => click.remove(), CLICK_MS);
-    }).observe(mouse, { attributes: true, attributeFilter: ['class'], attributeOldValue: true });
+    });
+
+    observer.observe(mouse, { attributes: true, attributeFilter: ['class'], attributeOldValue: true });
+
+    return () => {
+        observer.disconnect();
+
+        if (frame !== null) cancelAnimationFrame(frame);
+    };
 }
 
 async function mount(root, options = {}) {
     const manifestUrl = options.manifestUrl || root.dataset.manifest;
 
-    if (!manifestUrl || root.dataset.srMounted) return null;
+    if (!manifestUrl || mounted.has(root)) return null;
 
-    root.dataset.srMounted = '1';
+    // Stopped while it was loading (the page was left): it never builds a player.
+    const state = { stopped: false, stops: [] };
+
+    mounted.set(root, state);
     root.classList.add('sr-player');
 
     const text = labels(root);
@@ -288,12 +308,14 @@ async function mount(root, options = {}) {
 
     try {
         manifest = await json(manifestUrl);
-        events = await load(manifest, (done, total) => (status.textContent = `${text.loading} ${done}/${total}`));
+        events = state.stopped ? [] : await load(manifest, (done, total) => (status.textContent = `${text.loading} ${done}/${total}`));
     } catch (error) {
         status.textContent = error.status === 403 ? text.forbidden : text.failed;
 
         return null;
     }
+
+    if (state.stopped) return null;
 
     if (events.length < 2 || !events.some((event) => event.type === 2)) {
         status.textContent = manifest.live ? text.just_started : text.no_snapshot;
@@ -325,6 +347,12 @@ async function mount(root, options = {}) {
         },
     });
 
+    state.stops.push(() => {
+        player.pause?.();
+        player.getReplayer?.()?.destroy?.();
+        player.$destroy?.();
+    });
+
     // Firefox swaps a new iframe's first document for another a moment after insertion, and rrweb only rebuilds
     // into the sandboxed document it registered at insertion. Opening that document cancels the swap.
     const frame = player.getReplayer?.()?.iframe;
@@ -332,7 +360,9 @@ async function mount(root, options = {}) {
     frame?.contentDocument?.open();
     frame?.contentDocument?.close();
 
-    pointer(player, root);
+    const stopPointer = pointer(player, root);
+
+    if (stopPointer) state.stops.push(stopPointer);
 
     if (root.dataset.markers !== 'false') {
         root.append(markerList(manifest, startedAt, (offset) => player.goto(offset, true), text));
@@ -340,12 +370,18 @@ async function mount(root, options = {}) {
 
     let resizing = null;
 
-    window.addEventListener('resize', () => {
+    const resize = () => {
         clearTimeout(resizing);
         resizing = setTimeout(() => {
             player.$set(size());
             player.triggerResize();
         }, 150);
+    };
+
+    window.addEventListener('resize', resize);
+    state.stops.push(() => {
+        clearTimeout(resizing);
+        window.removeEventListener('resize', resize);
     });
 
     // ?t=83 opens the replay at 1:23.
@@ -358,13 +394,46 @@ async function mount(root, options = {}) {
     return player;
 }
 
+/** Stops a player: paused, its listeners removed, its element emptied so it can be mounted again. */
+function unmount(root) {
+    const state = mounted.get(root);
+
+    if (!state) return;
+
+    mounted.delete(root);
+    state.stopped = true;
+
+    for (const stop of state.stops.splice(0).reverse()) {
+        try {
+            stop();
+        } catch {
+            // A player that is half gone is let go all the same.
+        }
+    }
+
+    root.replaceChildren();
+    root.classList.remove('sr-player');
+}
+
+function unmountAll() {
+    [...mounted.keys()].forEach(unmount);
+}
+
 function mountAll() {
+    // A player whose element left the page another way than wire:navigate.
+    [...mounted.keys()].filter((root) => !root.isConnected).forEach(unmount);
+
     document.querySelectorAll('[data-session-replay-player]').forEach((root) => mount(root));
 }
 
-window.SessionReplayPlayer = { mount, mountAll };
+// Once per tab, even when a page loads this script a second time: every evaluation would add its listeners again.
+if (!window.SessionReplayPlayer) {
+    window.SessionReplayPlayer = { mount, mountAll, unmount };
 
-document.readyState === 'loading' ? document.addEventListener('DOMContentLoaded', mountAll) : mountAll();
+    document.readyState === 'loading' ? document.addEventListener('DOMContentLoaded', mountAll) : mountAll();
 
-// Panels that swap pages without a load (Livewire's wire:navigate) get their players mounted too.
-document.addEventListener('livewire:navigated', mountAll);
+    // Panels that swap pages without a load (Livewire's wire:navigate): the page that goes takes its players with
+    // it, the page that comes gets its own mounted.
+    document.addEventListener('livewire:navigating', unmountAll);
+    document.addEventListener('livewire:navigated', mountAll);
+}
