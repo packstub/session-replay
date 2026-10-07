@@ -128,6 +128,14 @@ it('moves the last-seen date when a stored snapshot is sent again', function () 
     uploadSnapshot($this, $token, $tree)->assertOk();
 
     expect(ReplayAsset::query()->sole()->last_seen_at->isToday())->toBeTrue();
+
+    // At most once a day: a page everyone opens does not write its row on every view.
+    $recent = now()->subHours(2)->startOfSecond();
+    ReplayAsset::query()->update(['last_seen_at' => $recent]);
+
+    uploadSnapshot($this, $token, $tree)->assertOk();
+
+    expect(ReplayAsset::query()->sole()->last_seen_at->equalTo($recent))->toBeTrue();
 });
 
 it('refuses a snapshot that is not what it claims, too large, or inflates past the ceiling', function () {

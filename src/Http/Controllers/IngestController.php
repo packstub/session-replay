@@ -191,8 +191,11 @@ class IngestController
         $asset = ReplayAsset::query()->where('hash', $hash)->first();
 
         if ($asset !== null) {
-            // Sent again: a recording is about to point at it, so the next prune must leave it.
-            $asset->forceFill(['last_seen_at' => now()])->save();
+            // Sent again: a recording is about to point at it, so the next prune must leave it. Moved at most once a
+            // day, like a stylesheet's, so a page everyone opens does not write a row on every view.
+            if ($asset->last_seen_at === null || $asset->last_seen_at->lt(now()->subDay())) {
+                $asset->forceFill(['last_seen_at' => now()])->save();
+            }
         } else {
             $bytes = $this->storage->putSnapshot($hash, $gzipped ? $body : (string) gzencode($raw, 6));
 
