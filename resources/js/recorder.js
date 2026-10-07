@@ -4,7 +4,9 @@ import { onCLS, onINP, onLCP } from 'web-vitals';
 import { dropHiddenValues, redactUrl, redactUrlAttributes, redactUrls } from './lib/privacy.js';
 import { EVENT_FULL_SNAPSHOT, assetPlaceholder, attributeMatcher, referencedAssets, stripAttributes, styleSlots } from './lib/process.js';
 import { ACTIVE_SOURCES, activeTime, checkoutInterval, estimateChars, isTrigger, trimWindow, windowStart } from './lib/buffer.js';
+import { MAX_RETRIES, pendingFate, retryDelay } from './lib/pending.js';
 import { ask } from './ask.js';
+import { deletePending, listPending, savePending } from './pending.js';
 
 /**
  * The recorder. Reads window.__sessionReplay (written by @sessionReplay),
@@ -17,6 +19,12 @@ import { ask } from './ask.js';
  * of a trigger type uploads that window (after asking, with onError.ask) and
  * moves the tab to "recording" for the rest of its session. "declined" means
  * the person said no; the tab is left alone until its session ends.
+ *
+ * An upload that fails is retried for a few minutes while the page stays
+ * open. The window a trigger uploaded is also kept in IndexedDB until it gets
+ * through (onError.keepPending): the server that is down is usually the one
+ * whose failed request fired the trigger, and a reload must not lose the
+ * replay of it. The next page load of the tab sends it first.
  */
 
 const config = window.__sessionReplay;
@@ -29,7 +37,6 @@ const CONSOLE_PLUGIN = 'rrweb/console@1';
 const KEEPALIVE_LIMIT = 60 * 1024;
 const MAX_BUFFERED_EVENTS = 400;
 const MAX_BUFFERED_CHARS = 1_500_000;
-const MAX_RETRIES = 3;
 // What the rolling window may hold, by the same estimate as above; past it the window shrinks to the newest snapshot.
 const MAX_WINDOW_CHARS = 5_000_000;
 
@@ -53,10 +60,13 @@ let lastSnapshotAt = 0;
 let checkoutPending = false;
 let overWindow = false;
 let asking = false;
+// seq of the kept window batches (IndexedDB) of this recording, dropped when the tab stops.
+let kept = new Set();
 
 const onError = config?.mode === 'on_error';
 const windowMs = onError ? config.onError.bufferMs : 0;
 const checkoutMs = onError ? checkoutInterval(windowMs) : 0;
+const keepPending = onError && !!config.onError.keepPending;
 
 const matches = config ? attributeMatcher(config.size.stripAttributes, config.size.keepAttributes) : null;
 const canHash = !!(window.crypto && window.crypto.subtle && window.TextEncoder);
@@ -308,7 +318,15 @@ function share(anonymous) {
     session.phase = 'recording';
     session.anonymous = !!anonymous;
     saveSession();
-    flush();
+
+    if (buffer.length) {
+        const batch = takeBatch();
+
+        // The window itself: kept in the browser when its upload fails, unlike the batches that follow.
+        batch.window = keepPending;
+        queue(batch);
+    }
+
     schedule();
 }
 
@@ -387,7 +405,11 @@ function takeBatch() {
             markers,
             assets: [...assets],
         },
+        anonymous: !!session.anonymous,
         tries: 0,
+        blob: null,
+        window: false,
+        kept: false,
     };
 
     buffer = [];
@@ -408,7 +430,7 @@ function form(batch, blob) {
     data.append('seq', String(batch.seq));
 
     // The person chose to send this recording without their name: the server drops who they are from the token.
-    if (session.anonymous) data.append('anonymous', '1');
+    if (batch.anonymous) data.append('anonymous', '1');
     data.append('meta', JSON.stringify(batch.meta));
     data.append('events', blob, 'events');
 
@@ -436,13 +458,14 @@ async function uploadAssets(hashes) {
 }
 
 async function send(batch) {
-    const blob = await gzip(JSON.stringify(batch.events));
+    const blob = batch.blob || (batch.blob = await gzip(JSON.stringify(batch.events)));
 
     if (blob.size > config.maxBatchBytes && batch.events.length > 1) {
         // Too big for one upload: split and send the halves in order.
         const middle = Math.ceil(batch.events.length / 2);
-        const tail = { ...batch, seq: session.seq++, events: batch.events.slice(middle), meta: { ...batch.meta, markers: [], assets: [], activeMs: 0 } };
+        const tail = { ...batch, seq: session.seq++, events: batch.events.slice(middle), meta: { ...batch.meta, markers: [], assets: [], activeMs: 0 }, blob: null };
 
+        batch.blob = null;
         batch.events = batch.events.slice(0, middle);
         batch.meta.events = batch.events.length;
         batch.meta.to = batch.events[batch.events.length - 1].timestamp;
@@ -461,14 +484,17 @@ async function send(batch) {
     try {
         response = await fetch(config.ingestUrl, { method: 'POST', body: form(batch, blob) });
     } catch {
-        return retry(batch);
+        return failed(batch);
     }
 
     if (response.status === 429 || response.status >= 500) {
         if (response.status === 429) flushInterval = Math.min(flushInterval * 2, 60_000);
 
-        return retry(batch);
+        return failed(batch);
     }
+
+    // The server answered: accepted, refused or asking to stop. Either way the kept copy has done its job.
+    if (batch.kept) settle(batch);
 
     let body = {};
 
@@ -491,20 +517,89 @@ async function send(batch) {
     }
 }
 
+/** The server could not take the batch: the window goes to IndexedDB the first time, then the batch is retried. */
+async function failed(batch) {
+    if (batch.window && !batch.kept && !stopped) {
+        batch.kept = true;
+        kept.add(batch.seq);
+
+        // The stylesheets the window references and the server may not have yet: the next page cannot hash them again.
+        const assetText = {};
+
+        for (const hash of batch.meta.assets) if (pendingAssetText.has(hash)) assetText[hash] = pendingAssetText.get(hash);
+
+        await savePending(session.id, batch, batch.blob, assetText, config.identity);
+    }
+
+    return retry(batch);
+}
+
+/** The kept copy of a batch is no longer needed. */
+function settle(batch) {
+    batch.kept = false;
+    kept.delete(batch.seq);
+    deletePending(session.id, batch.seq);
+}
+
 function retry(batch) {
     if (++batch.tries > MAX_RETRIES || stopped) return;
 
-    return new Promise((resolve) => setTimeout(resolve, 1000 * 2 ** batch.tries)).then(() => send(batch));
+    return wait(retryDelay(batch.tries)).then(() => (stopped ? undefined : send(batch)));
+}
+
+/** Waits `ms`, or less when the browser says it is back online. */
+function wait(ms) {
+    return new Promise((resolve) => {
+        const done = () => {
+            clearTimeout(timer);
+            window.removeEventListener('online', done);
+            resolve();
+        };
+        const timer = setTimeout(done, ms);
+
+        window.addEventListener('online', done);
+    });
+}
+
+function queue(batch) {
+    sending = sending.then(() => send(batch)).catch(() => {});
+
+    return sending;
 }
 
 function flush() {
     if (stopped || !session || session.phase !== 'recording' || buffer.length === 0) return sending;
 
-    const batch = takeBatch();
+    return queue(takeBatch());
+}
 
-    sending = sending.then(() => send(batch)).catch(() => {});
+/**
+ * A page load in a tab whose window did not get through: send what is kept
+ * before anything this page records, so the recording stays in order. What
+ * is too old or belongs to someone else is dropped; another tab's is left
+ * for that tab.
+ */
+async function resumePending() {
+    const own = [];
 
-    return sending;
+    for (const record of await listPending()) {
+        const fate = pendingFate(record, { sessionId: session.id, identity: config.identity, now: Date.now(), idleTimeout: config.idleTimeout });
+
+        if (fate === 'drop') deletePending(record.session, record.seq);
+        if (fate === 'send') own.push(record);
+    }
+
+    own.sort((a, b) => a.seq - b.seq);
+
+    for (const record of own) {
+        if (stopped) return;
+
+        kept.add(record.seq);
+
+        for (const [hash, text] of Object.entries(record.assets || {})) if (!pendingAssetText.has(hash)) pendingAssetText.set(hash, text);
+
+        await send({ seq: record.seq, events: [], meta: record.meta, anonymous: !!record.anonymous, tries: 0, blob: record.blob, window: true, kept: true });
+    }
 }
 
 /** The page is going away: no time for compression or retries, one keepalive request with what is left. */
@@ -685,6 +780,8 @@ function start() {
 
     if (session.phase === 'buffering') return true;
 
+    if (keepPending) sending = sending.then(resumePending).catch(() => {});
+
     schedule();
 
     // The page snapshot goes up early and compressed: left to the unload request it is too large for keepalive
@@ -711,6 +808,10 @@ function stop() {
     bufferedChars = 0;
     markers = [];
     clearCookie();
+
+    // Stopped for good (consent withdrawn, the server said so, the person declined): nothing stays in the browser.
+    for (const seq of kept) deletePending(session.id, seq);
+    kept = new Set();
 }
 
 if (config && !window.SessionReplay) {

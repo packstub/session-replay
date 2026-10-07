@@ -110,6 +110,14 @@ Most of the replays worth watching show something going wrong. `mode = on_error`
 
 `SessionReplay.isBuffering()` is `true` while a tab keeps a window and waits; `isRecording()` turns `true` once it uploads.
 
+### When the upload fails
+
+The server that cannot take an upload is often the one whose failed request fired the trigger, so the window's upload is treated with more care than an ordinary batch:
+
+- **Retries while the page stays open.** Every upload that fails, in both modes, is retried for about four minutes (after 2, 4, 8, 16 and 32 seconds, then once a minute), or sooner when the browser reports it is back online. Later batches wait in memory, in order.
+- **The window survives a reload** (`on_error.keep_pending`, default `true`). The first time its upload fails, the window is kept in the browser's IndexedDB. The tab's next page load sends it before anything that page records, with its original place in the recording, and the kept copy goes as soon as the server has answered. It is dropped unsent after `idle_timeout`, when a different person is signed in, when the tab stops recording (consent withdrawn, the person declined, the server said stop), and it is never sent by another tab. With `on_error.ask`, nothing is kept before the person agreed, and their anonymous choice is kept with it.
+- **`keep_pending = false`** keeps nothing recorded at rest in the browser; a reload during the outage then loses the window, as a browser without IndexedDB does.
+
 ## Markers
 
 Markers are the moments worth jumping to. Each one is stored in `replay_markers` (type, label, payload, time) and drawn on the player's timeline.
