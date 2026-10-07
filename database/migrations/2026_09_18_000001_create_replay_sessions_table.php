@@ -50,6 +50,7 @@ return new class extends Migration
 
             $table->index(['user_type', 'user_id']);
             $table->index(['tenant_type', 'tenant_id']);
+            $table->index(['tenant_type', 'tenant_id', 'started_at']); // a workspace's list, newest first
         });
     }
 
