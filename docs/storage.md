@@ -114,7 +114,7 @@ A full page load stores the whole page, even when the page looks the same for ev
 ],
 ```
 
-On those pages the recorder hashes the snapshot after masking, attribute stripping and stylesheet deduplication, uploads it once per hash and keeps only the hash in the recording. The player puts the page back before it plays. A page that changes gets a new snapshot next to the old one, so older recordings keep the page they showed. Everything that happens after the page loaded (typing, clicks, a table filling in) is recorded as before.
+On those pages the recorder hashes the snapshot after masking, attribute stripping and stylesheet deduplication, uploads it once per hash and keeps only the hash in the recording. The player puts the page back before it plays. A page that changes gets a new snapshot next to the old one, so older recordings keep the page they showed. Everything that happens after the page loaded (typing, clicks, a table filling in) is recorded as before. Only a page load is shared: a page reached with `wire:navigate` is stored inside the recording, because its snapshot is numbered after the pages before it and would never match.
 
 Only pages that are identical for every visit share anything. Measured on the store's public pages and a Filament 5 panel (headless Chrome, two visitors, two loads each, the snapshot after the processing above):
 
@@ -142,7 +142,7 @@ Measured on a Filament 5 panel (a table of 50 rows, a modal form, a create page 
 | An edit modal (four fields) opened, filled in and saved, the table refreshing behind it | about 16 KB each time |
 | A create page opened, a paragraph typed into the rich editor, a file uploaded | about 26 KB, 16 KB of it the page |
 | Another page, as a full page load | 8 to 34 KB, the size of its snapshot |
-| Another page with `wire:navigate` | about one and a half times that: the browser keeps the document and the swap is recorded as one large change |
+| Another page with `wire:navigate` | the same: the recorder pauses while Livewire swaps the page and stores the new page as a snapshot |
 
 A visit is mostly looking, so whole recordings come out far below the busiest rows: the store's own numbers are 38 KB for a 39-second visit across four storefront pages and 24 KB for two pages of a customer panel. The lab's scripted hands never rest (a search or a sort every two seconds stored 430 KB per minute, a modal every five seconds 160 KB per minute); nobody keeps that up, so read the table per action and let `retention.days` and `sample_rate` set the total.
 
@@ -153,14 +153,14 @@ The recording itself lives on the disk; the database only holds the index, and i
 | Table | A row per | About |
 | --- | --- | --- |
 | `replay_sessions` | recording | 0.4 KB |
-| `replay_chunks` | upload (at most one every `flush_interval` while something happens, and one per page load) | 175 bytes |
+| `replay_chunks` | upload (at most one every `flush_interval` while something happens, and one per page load or `wire:navigate` page) | 175 bytes |
 | `replay_markers` | page view, vital, error, failed request, rage click | 155 bytes |
 | `replay_assets` | distinct stylesheet or shared snapshot | 200 bytes |
 | `replay_session_assets` | shared snapshot a recording points at | 100 bytes |
 
 In the lab's navigation run (19 page loads in 46 seconds) that came to 55 chunk rows and 75 marker rows, about 21 KB of rows next to 311 KB on the disk.
 
-A page costs about its snapshot, and reading it costs next to nothing, so a rough plan goes by pages. Someone opening four to six pages a minute stores about 65 to 100 KB per minute on the disk with full page loads (100 to 150 KB with `wire:navigate`) and about 7 KB per minute in the database. That is an estimate scaled from the lab, not a measurement of people: about 5 MB of disk and 0.4 MB of rows per hour of continuous use. With the default 30 days of retention, 100 active hours a month hold about 0.5 GB on the disk and 40 MB in the database. `sample_rate`, `recordWhen()` and `retention.days` are the three dials.
+A page costs about its snapshot, and reading it costs next to nothing, so a rough plan goes by pages. Someone opening four to six pages a minute stores about 65 to 100 KB per minute on the disk, with full page loads or `wire:navigate`, and about 7 KB per minute in the database. That is an estimate scaled from the lab, not a measurement of people: about 5 MB of disk and 0.4 MB of rows per hour of continuous use. With the default 30 days of retention, 100 active hours a month hold about 0.5 GB on the disk and 40 MB in the database. `sample_rate`, `recordWhen()` and `retention.days` are the three dials.
 
 **On the person's side.** The recorder is 32 KB of JavaScript (gzip), loaded with `defer`. With the CPU slowed down four times, the same scripted work with and without the recorder gave the same interaction latency (75th percentile 40 ms and 32 ms with it, 64 ms and 40 ms without it, which is noise) and about one second more main-thread work over 50 seconds of constant clicking. Uploads are compressed off the main thread by the browser (`CompressionStream`).
 

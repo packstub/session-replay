@@ -4,6 +4,7 @@ import { onCLS, onINP, onLCP } from 'web-vitals';
 import { dropHiddenValues, redactUrl, redactUrlAttributes, redactUrls } from './lib/privacy.js';
 import { EVENT_FULL_SNAPSHOT, assetPlaceholder, attributeMatcher, referencedAssets, renameVolatileIds, shareSnapshot, sharedSnapshots, stripAttributes, styleSlots } from './lib/process.js';
 import { ACTIVE_SOURCES, activeTime, checkoutInterval, estimateChars, isTrigger, trimWindow, windowStart } from './lib/buffer.js';
+import { navigationPause } from './lib/navigation.js';
 import { MAX_RETRIES, pendingFate, retryDelay } from './lib/pending.js';
 import { ask, notice } from './ask.js';
 import { deletePending, listPending, savePending } from './pending.js';
@@ -30,6 +31,7 @@ import { deletePending, listPending, savePending } from './pending.js';
 const config = window.__sessionReplay;
 const EVENT_META = 4;
 const EVENT_INCREMENTAL = 3;
+const EVENT_CUSTOM = 5;
 const STORAGE_KEY = 'sr:session';
 const FIRST_FLUSH_MS = 800;
 const CONSENT_KEY = 'sr:consent';
@@ -41,7 +43,12 @@ const MAX_BUFFERED_CHARS = 1_500_000;
 const MAX_WINDOW_CHARS = 5_000_000;
 
 let session = null;
+// Set while this tab records: stops everything. stopRrweb is rrweb's own, null while wire:navigate swaps the page.
 let stopRecording = null;
+let stopRrweb = null;
+// Once the tab used wire:navigate its snapshots are numbered after the first page's, so they never match a shared one.
+let navigatedAway = false;
+const unshared = new WeakSet();
 let stopped = false;
 let buffer = [];
 let bufferedChars = 0;
@@ -169,7 +176,9 @@ function mark(type, label, payload = {}) {
     markers.push({ type, label: text, payload, at: Date.now() });
 
     try {
-        record.addCustomEvent(`sr:${type}`, { label: text, ...payload });
+        // While wire:navigate swaps the page rrweb is stopped; the event goes into the recording all the same.
+        if (stopRrweb) record.addCustomEvent(`sr:${type}`, { label: text, ...payload });
+        else emit({ type: EVENT_CUSTOM, data: { tag: `sr:${type}`, payload: { label: text, ...payload } }, timestamp: Date.now() });
     } catch {
         // Recording ended between the check and the call.
     }
@@ -252,7 +261,7 @@ function checkout() {
         checkoutPending = false;
 
         try {
-            if (stopRecording && !stopped && session?.phase === 'buffering') {
+            if (stopRrweb && !stopped && session?.phase === 'buffering') {
                 record.takeFullSnapshot(true);
                 lastSnapshotAt = Date.now();
             }
@@ -371,6 +380,7 @@ function emit(event) {
     redactUrlAttributes(event, config.privacy.redactQuery, location.href);
 
     if (event.type === EVENT_META && event.data && event.data.href) event.data.href = redacted(event.data.href);
+    if (event.type === EVENT_FULL_SNAPSHOT && navigatedAway) unshared.add(event);
 
     const slots = config.size.dedupeStylesheets && canHash ? styleSlots(event, config.size.dedupeMinBytes) : [];
 
@@ -487,7 +497,7 @@ function uploadedSnapshots() {
  */
 async function shareSnapshots(batch) {
     for (const event of batch.events) {
-        if (event.type !== EVENT_FULL_SNAPSHOT || !event.data || !event.data.node) continue;
+        if (event.type !== EVENT_FULL_SNAPSHOT || !event.data || !event.data.node || unshared.has(event)) continue;
 
         try {
             renameVolatileIds(event.data.node, config.snapshots.volatileIds);
@@ -798,8 +808,9 @@ function watchLivewire() {
 
     window.Livewire ? hook() : document.addEventListener('livewire:init', hook, { once: true });
 
-    // wire:navigate swaps the page without a load; rrweb records the swap, the index gets the page.
-    // Livewire also fires it on the first load, which start() already marked.
+    // wire:navigate swaps the page without a load; the recording restarted with a snapshot of it (see
+    // watchNavigation, registered first), the index gets the page. Livewire also fires it on the first load,
+    // which start() already marked.
     document.addEventListener('livewire:navigated', () => markPage());
 }
 
@@ -838,6 +849,64 @@ function watchVitals() {
     onCLS(report);
 }
 
+function recordOptions() {
+    return {
+        emit,
+        plugins: config.capture.console.length ? [getRecordConsolePlugin({ level: config.capture.console, lengthThreshold: 1000, logger: window.console })] : [],
+        maskAllInputs: config.privacy.maskAllInputs,
+        maskInputOptions: { password: true },
+        maskTextSelector: config.privacy.maskAllText ? '*' : config.privacy.maskTextSelector || undefined,
+        blockSelector: config.privacy.blockSelector || undefined,
+        ignoreSelector: config.privacy.ignoreSelector || undefined,
+        slimDOMOptions: 'all',
+        inlineStylesheet: true,
+        recordCanvas: false,
+        collectFonts: false,
+        sampling: config.size.sampling,
+    };
+}
+
+/**
+ * wire:navigate replaces the whole <body>. Recorded as it happens, that is one
+ * mutation adding every node of the new page, larger than a snapshot of it and
+ * slower to make. So rrweb stops before the swap and starts again after it:
+ * the new page arrives as a full snapshot, like a page load, and the player
+ * can seek from it. The session, the buffer and the markers go on.
+ */
+const navigation = navigationPause({
+    pause() {
+        try {
+            stopRrweb?.();
+        } catch {
+            // Already stopped.
+        }
+
+        stopRrweb = null;
+        navigatedAway = true;
+    },
+    resume() {
+        if (stopped || !stopRecording) return;
+
+        try {
+            stopRrweb = record(recordOptions()) || null;
+        } catch {
+            stopRrweb = null;
+        }
+
+        // Like the first snapshot of a page load: up early, or a tab closed within the flush interval loses it.
+        if (stopRrweb && session?.phase === 'recording') {
+            setTimeout(() => {
+                if (!stopped && buffer.length) flush();
+            }, FIRST_FLUSH_MS);
+        }
+    },
+});
+
+function watchNavigation() {
+    document.addEventListener('livewire:navigating', () => navigation.navigating(!!stopRrweb && !stopped));
+    document.addEventListener('livewire:navigated', () => navigation.navigated());
+}
+
 function start() {
     if (stopRecording || !config) return false;
 
@@ -851,24 +920,16 @@ function start() {
     stopped = false;
     lastSnapshotAt = 0;
 
-    const plugins = config.capture.console.length ? [getRecordConsolePlugin({ level: config.capture.console, lengthThreshold: 1000, logger: window.console })] : [];
+    stopRrweb = record(recordOptions()) || null;
 
-    stopRecording = record({
-        emit,
-        plugins,
-        maskAllInputs: config.privacy.maskAllInputs,
-        maskInputOptions: { password: true },
-        maskTextSelector: config.privacy.maskAllText ? '*' : config.privacy.maskTextSelector || undefined,
-        blockSelector: config.privacy.blockSelector || undefined,
-        ignoreSelector: config.privacy.ignoreSelector || undefined,
-        slimDOMOptions: 'all',
-        inlineStylesheet: true,
-        recordCanvas: false,
-        collectFonts: false,
-        sampling: config.size.sampling,
-    });
+    if (!stopRrweb) return false;
 
-    if (!stopRecording) return false;
+    stopRecording = () => {
+        const stopNow = stopRrweb;
+
+        stopRrweb = null;
+        stopNow?.();
+    };
 
     markPage();
 
@@ -890,6 +951,7 @@ function start() {
 function stop() {
     stopped = true;
     clearTimeout(flushTimer);
+    navigation.stop();
 
     try {
         stopRecording?.();
@@ -909,6 +971,9 @@ function stop() {
 }
 
 if (config && !window.SessionReplay) {
+    // Before watchLivewire: the recording restarts on livewire:navigated before the page is marked.
+    watchNavigation();
+
     // Vitals first: their page-hide callbacks must run before the final flush below.
     if (config.capture.vitals) watchVitals();
     if (config.capture.errors) watchErrors();
