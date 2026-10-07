@@ -46,7 +46,9 @@ class PruneCommand extends Command
             ->when($oldest !== null, fn ($query) => $query->where('last_seen_at', '<', Carbon::parse($oldest)->subDays(2))));
 
         // A shared snapshot goes when no recording that is left points at it. The day of grace covers the moment
-        // between its upload and the batch that points at it.
+        // between its upload and the batch that points at it; sending it again moves the date once it is an hour old,
+        // so that moment is never shorter than 23 hours. One that was also sent as a stylesheet is a stylesheet now
+        // and goes by the stylesheets' rule.
         $snapshots = $this->deleteAssets($storage, ReplayAsset::query()
             ->where('kind', ReplayAsset::SNAPSHOT)
             ->where(fn ($query) => $query->whereNull('last_seen_at')->orWhere('last_seen_at', '<', now()->subDay())));

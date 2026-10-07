@@ -132,8 +132,11 @@ class ContextToken
         return $payload.'.'.self::sign($payload);
     }
 
-    /** Null when the token is malformed, was not signed by this app, or is too old. */
-    public static function decode(?string $token): ?self
+    /**
+     * Null when the token is malformed, was not signed by this app, or is too old. A token signed with one of
+     * app.previous_keys is accepted too, so rotating APP_KEY does not turn away every tab that is open.
+     */
+    public static function decode(mixed $token): ?self
     {
         if (! is_string($token) || substr_count($token, '.') !== 1) {
             return null;
@@ -141,7 +144,7 @@ class ContextToken
 
         [$payload, $signature] = explode('.', $token);
 
-        if (! hash_equals(self::sign($payload), $signature)) {
+        if (! self::signedByThisApp($payload, $signature)) {
             return null;
         }
 
@@ -166,15 +169,31 @@ class ContextToken
         return $token->isExpired() ? null : $token;
     }
 
-    protected static function sign(string $payload): string
+    protected static function sign(string $payload, ?string $key = null): string
     {
-        return self::base64UrlEncode(hash_hmac('sha256', 'session-replay|'.$payload, self::key(), true));
+        return self::base64UrlEncode(hash_hmac('sha256', 'session-replay|'.$payload, $key ?? self::key(), true));
+    }
+
+    protected static function signedByThisApp(string $payload, string $signature): bool
+    {
+        $previous = array_filter((array) config('app.previous_keys', []), fn ($key): bool => is_string($key) && $key !== '');
+
+        foreach ([self::key(), ...array_map(self::decodeKey(...), $previous)] as $key) {
+            if (hash_equals(self::sign($payload, $key), $signature)) {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     protected static function key(): string
     {
-        $key = (string) config('app.key');
+        return self::decodeKey((string) config('app.key'));
+    }
 
+    protected static function decodeKey(string $key): string
+    {
         return str_starts_with($key, 'base64:') ? (string) base64_decode(substr($key, 7)) : $key;
     }
 

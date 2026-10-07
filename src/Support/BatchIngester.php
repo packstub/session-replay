@@ -2,7 +2,8 @@
 
 namespace Packstub\SessionReplay\Support;
 
-use Illuminate\Database\ConnectionInterface;
+use Illuminate\Database\Connection;
+use Illuminate\Database\Query\Expression;
 use Illuminate\Database\UniqueConstraintViolationException;
 use Illuminate\Support\Arr;
 use Illuminate\Support\Carbon;
@@ -25,81 +26,66 @@ class BatchIngester
 {
     public const MAX_MARKERS_PER_BATCH = 200;
 
+    /** The largest value of an integer column on every supported database (Postgres has no unsigned ones). */
+    protected const MAX_INTEGER = 2_147_483_647;
+
+    /** 9999-12-31 in epoch milliseconds. */
+    protected const MAX_MILLISECONDS = 253_402_300_799_999;
+
     public function __construct(protected ReplayStorage $storage) {}
 
     /**
      * @param  array<string, mixed>  $meta
-     * @return array{session: ReplaySession, created: bool, duplicate: bool, missing_assets: array<int, string>}
+     * @return array{session: ReplaySession, created: bool, duplicate: bool, foreign: bool, missing_assets: array<int, string>}
      */
     public function ingest(string $sessionId, int $seq, string $gzip, array $meta, ContextToken $context, ?string $userAgent): array
     {
-        $session = $this->connection()->transaction(function () use ($sessionId, $meta, $context, $userAgent) {
-            /** @var ReplaySession|null $session */
-            $session = ReplaySession::query()->lockForUpdate()->find($sessionId);
+        [$session, $created] = $this->session($sessionId, $meta, $context, $userAgent);
 
-            if ($session !== null) {
-                return $session;
-            }
-
-            $session = new ReplaySession([
-                'user_type' => $context->userType,
-                'user_id' => $context->userId,
-                'tenant_type' => $context->tenantType,
-                'tenant_id' => $context->tenantId,
-                'impersonator_id' => $context->impersonatorId,
-                'properties' => $context->properties ?: null,
-                'entry_url' => Str::limit((string) Arr::get($meta, 'url', ''), 2000, '') ?: null,
-                'user_agent' => $userAgent === null || ! config('session-replay.privacy.store_user_agent', true) ? null : Str::limit($userAgent, 500, ''),
-                'device' => SessionReplay::device($userAgent),
-                'viewport_width' => $this->smallInt(Arr::get($meta, 'viewport.width')),
-                'viewport_height' => $this->smallInt(Arr::get($meta, 'viewport.height')),
-                'started_at' => $this->time(Arr::get($meta, 'from')) ?? now(),
-                'last_activity_at' => $this->time(Arr::get($meta, 'to')) ?? now(),
-            ]);
-            $session->id = $sessionId;
-
-            try {
-                $session->save();
-            } catch (UniqueConstraintViolationException) {
-                // Two first uploads raced; the other one made the row.
-                return ReplaySession::query()->findOrFail($sessionId);
-            }
-
-            return $session;
-        });
-
-        $created = $session->wasRecentlyCreated;
+        // Another first batch of this id made the row a moment ago, after the controller looked: check it the same way.
+        if (! $created && ! ($context->sameUserAs($session->user_type, $session->user_id) && $context->sameImpersonatorAs($session->impersonator_id) && $context->sameTenantAs($session->tenant_type, $session->tenant_id))) {
+            return ['session' => $session, 'created' => false, 'duplicate' => false, 'foreign' => true, 'missing_assets' => []];
+        }
 
         if (ReplayChunk::query()->where('replay_session_id', $sessionId)->where('seq', $seq)->exists()) {
             // A retry of an upload that did arrive: keep the first copy and say so.
-            return ['session' => $session, 'created' => false, 'duplicate' => true, 'missing_assets' => []];
+            return ['session' => $session, 'created' => false, 'duplicate' => true, 'foreign' => false, 'missing_assets' => []];
         }
 
         $bytes = $this->storage->putChunk($sessionId, $seq, $gzip);
-        $from = (int) (Arr::get($meta, 'from') ?: now()->getTimestampMs());
-        $to = (int) (Arr::get($meta, 'to') ?: $from);
-        $events = max(0, (int) Arr::get($meta, 'events', 0));
-
-        ReplayChunk::query()->create([
-            'replay_session_id' => $sessionId,
-            'seq' => $seq,
-            'path' => $this->storage->chunkPath($sessionId, $seq),
-            'bytes' => $bytes,
-            'event_count' => $events,
-            'from_ms' => $from,
-            'to_ms' => max($from, $to),
-        ]);
-
+        $from = $this->milliseconds(Arr::get($meta, 'from')) ?? now()->getTimestampMs();
+        $to = max($from, $this->milliseconds(Arr::get($meta, 'to')) ?? $from);
+        $events = $this->clamp(Arr::get($meta, 'events'), self::MAX_INTEGER);
         $markers = $this->markers($sessionId, (array) Arr::get($meta, 'markers', []));
 
-        if ($markers !== []) {
-            ReplayMarker::query()->insert($markers);
+        // The chunk row, its markers, the counters and the snapshot references land together or not at all, so a
+        // retry after a failure stores the batch again instead of finding a chunk row and answering "duplicate".
+        try {
+            $this->connection()->transaction(function () use ($session, $sessionId, $seq, $meta, $bytes, $from, $to, $events, $markers): void {
+                ReplayChunk::query()->create([
+                    'replay_session_id' => $sessionId,
+                    'seq' => $seq,
+                    'path' => $this->storage->chunkPath($sessionId, $seq),
+                    'bytes' => $bytes,
+                    'event_count' => $events,
+                    'from_ms' => $from,
+                    'to_ms' => $to,
+                ]);
+
+                if ($markers !== []) {
+                    ReplayMarker::query()->insert($markers);
+                }
+
+                $this->updateCounters($session, $meta, $bytes, $events, $markers);
+                $this->referenceSnapshots($sessionId, (array) Arr::get($meta, 'snapshots', []));
+            });
+        } catch (UniqueConstraintViolationException) {
+            // The same batch twice at once (a retry that overtook the first try): the other copy is stored.
+            return ['session' => $session, 'created' => false, 'duplicate' => true, 'foreign' => false, 'missing_assets' => []];
         }
 
-        $this->updateCounters($session, $meta, $bytes, $events, $markers);
-        $this->referenceSnapshots($sessionId, (array) Arr::get($meta, 'snapshots', []));
-
-        if ($created) {
+        // The first batch that is stored, whichever request made the row: dispatched once per recording.
+        if ((int) $session->chunk_count === 1) {
             ReplaySessionStarted::dispatch($session);
         }
 
@@ -107,8 +93,46 @@ class BatchIngester
             'session' => $session,
             'created' => $created,
             'duplicate' => false,
+            'foreign' => false,
             'missing_assets' => $this->missingAssets((array) Arr::get($meta, 'assets', [])),
         ];
+    }
+
+    /**
+     * The recording's row, made by this batch when it is the first. No transaction and no lock around it: two
+     * first batches of a recording may arrive at once, and a lock on a row that is not there yet deadlocks MySQL,
+     * while a failed insert inside a transaction leaves Postgres refusing everything after it. createOrFirst()
+     * inserts, and on the unique violation (behind a savepoint when a transaction is open) loads the other's row.
+     *
+     * @param  array<string, mixed>  $meta
+     * @return array{0: ReplaySession, 1: bool}
+     */
+    protected function session(string $sessionId, array $meta, ContextToken $context, ?string $userAgent): array
+    {
+        /** @var ReplaySession|null $session */
+        $session = ReplaySession::query()->find($sessionId);
+
+        if ($session !== null) {
+            return [$session, false];
+        }
+
+        $session = ReplaySession::query()->createOrFirst(['id' => $sessionId], [
+            'user_type' => $context->userType,
+            'user_id' => $context->userId,
+            'tenant_type' => $context->tenantType,
+            'tenant_id' => $context->tenantId,
+            'impersonator_id' => $context->impersonatorId,
+            'properties' => $context->properties ?: null,
+            'entry_url' => Str::limit((string) Arr::get($meta, 'url', ''), 2000, '') ?: null,
+            'user_agent' => $userAgent === null || ! config('session-replay.privacy.store_user_agent', true) ? null : Str::limit($userAgent, 500, ''),
+            'device' => SessionReplay::device($userAgent),
+            'viewport_width' => $this->smallInt(Arr::get($meta, 'viewport.width')),
+            'viewport_height' => $this->smallInt(Arr::get($meta, 'viewport.height')),
+            'started_at' => $this->time(Arr::get($meta, 'from')) ?? now(),
+            'last_activity_at' => $this->time(Arr::get($meta, 'to')) ?? now(),
+        ]);
+
+        return [$session, $session->wasRecentlyCreated];
     }
 
     /**
@@ -131,7 +155,7 @@ class BatchIngester
                 'type' => $marker['type'],
                 'label' => Str::limit(trim((string) ($marker['label'] ?? '')), 480) ?: $marker['type'],
                 'payload' => $payload !== false && $payload !== null && strlen($payload) <= 8192 ? $payload : null,
-                'at_ms' => (int) ($marker['at'] ?? 0) ?: now()->getTimestampMs(),
+                'at_ms' => $this->milliseconds($marker['at'] ?? null) ?? now()->getTimestampMs(),
                 'created_at' => now(),
             ];
         }
@@ -140,6 +164,9 @@ class BatchIngester
     }
 
     /**
+     * In one statement, each value worked out by the database from the row as it is: two batches of a recording
+     * stored at once both count, and neither moves the last activity or a worst vital back.
+     *
      * @param  array<string, mixed>  $meta
      * @param  array<int, array<string, mixed>>  $markers
      */
@@ -150,27 +177,41 @@ class BatchIngester
         $lastActivity = $this->time(Arr::get($meta, 'to'));
 
         $updates = [
-            'chunk_count' => DB::raw('chunk_count + 1'),
-            'event_count' => DB::raw('event_count + '.$events),
+            'chunk_count' => $this->add('chunk_count', 1),
+            'event_count' => $this->add('event_count', $events),
             'bytes' => DB::raw('bytes + '.$bytes),
-            'page_count' => DB::raw('page_count + '.($types['navigation'] ?? 0)),
-            'error_count' => DB::raw('error_count + '.(($types['error'] ?? 0) + ($types['request'] ?? 0))),
-            'rage_click_count' => DB::raw('rage_click_count + '.($types['rage-click'] ?? 0)),
-            'active_ms' => DB::raw('active_ms + '.max(0, min((int) Arr::get($meta, 'activeMs', 0), 3_600_000))),
+            'page_count' => $this->add('page_count', $types['navigation'] ?? 0),
+            'error_count' => $this->add('error_count', ($types['error'] ?? 0) + ($types['request'] ?? 0)),
+            'rage_click_count' => $this->add('rage_click_count', $types['rage-click'] ?? 0),
+            'active_ms' => DB::raw('active_ms + '.$this->clamp(Arr::get($meta, 'activeMs'), 3_600_000)),
         ];
 
-        if ($lastActivity !== null && ($session->last_activity_at === null || $lastActivity->gt($session->last_activity_at))) {
-            $updates['last_activity_at'] = $lastActivity;
+        if ($lastActivity !== null) {
+            $updates['last_activity_at'] = $this->later('last_activity_at', $this->connection()->escape($session->fromDateTime($lastActivity)));
         }
 
         foreach (['lcp_ms' => 'LCP', 'inp_ms' => 'INP', 'cls' => 'CLS'] as $column => $name) {
-            if (isset($vitals[$name]) && ($session->{$column} === null || $vitals[$name] > $session->{$column})) {
-                $updates[$column] = $vitals[$name];
+            if (isset($vitals[$name])) {
+                $updates[$column] = $this->later($column, $name === 'CLS' ? number_format($vitals[$name], 4, '.', '') : (string) (int) $vitals[$name]);
             }
         }
 
         ReplaySession::query()->whereKey($session->getKey())->update($updates);
         $session->refresh();
+    }
+
+    /** column + n, stopping at the largest value an integer column holds on every database (Postgres' is signed). */
+    protected function add(string $column, int $amount): Expression
+    {
+        $amount = max(0, min($amount, self::MAX_INTEGER));
+
+        return DB::raw(sprintf('CASE WHEN %1$s > %2$d THEN %3$d ELSE %1$s + %4$d END', $column, self::MAX_INTEGER - $amount, self::MAX_INTEGER, $amount));
+    }
+
+    /** The column, or the given SQL literal when the column is empty or below it. */
+    protected function later(string $column, string $literal): Expression
+    {
+        return DB::raw(sprintf('CASE WHEN %1$s IS NULL OR %1$s < %2$s THEN %2$s ELSE %1$s END', $column, $literal));
     }
 
     /**
@@ -191,7 +232,8 @@ class BatchIngester
             $value = $payload['value'] ?? null;
 
             if (in_array($name, ['LCP', 'INP', 'CLS'], true) && is_numeric($value) && $value >= 0) {
-                $value = $name === 'CLS' ? round(min((float) $value, 9999), 4) : (float) min((int) round((float) $value), 4_000_000_000);
+                // Within the columns: decimal(8, 4), and an integer that is signed on Postgres.
+                $value = $name === 'CLS' ? round(min((float) $value, 9999), 4) : (float) min(round((float) $value), self::MAX_INTEGER);
                 $worst[$name] = max($worst[$name] ?? 0, $value);
             }
         }
@@ -255,25 +297,40 @@ class BatchIngester
         ], $stored));
     }
 
-    protected function connection(): ConnectionInterface
+    protected function connection(): Connection
     {
         return DB::connection(config('session-replay.storage.connection'));
     }
 
     protected function time(mixed $milliseconds): ?Carbon
     {
-        if (! is_numeric($milliseconds) || $milliseconds <= 0) {
+        $milliseconds = $this->milliseconds($milliseconds);
+
+        if ($milliseconds === null) {
             return null;
         }
 
-        $time = Carbon::createFromTimestampMs((int) $milliseconds);
+        $time = Carbon::createFromTimestampMs($milliseconds);
 
         // A browser clock that is far off would sort the recording into the wrong decade.
         return $time->between(now()->subDays(8), now()->addMinutes(10)) ? $time : now();
     }
 
+    /** A smallint column, signed on Postgres. */
     protected function smallInt(mixed $value): ?int
     {
-        return is_numeric($value) && $value > 0 ? (int) min((int) $value, 65535) : null;
+        return is_numeric($value) && $value > 0 ? $this->clamp($value, 32767) : null;
+    }
+
+    /** Epoch milliseconds from the browser, or null when it sent none, nothing positive or something past the year 9999. */
+    protected function milliseconds(mixed $value): ?int
+    {
+        return is_numeric($value) && $value >= 1 && $value <= self::MAX_MILLISECONDS ? (int) $value : null;
+    }
+
+    /** A number from the browser between 0 and $max; anything else is 0. */
+    protected function clamp(mixed $value, int $max): int
+    {
+        return is_numeric($value) ? (int) max(0, min((float) $value, $max)) : 0;
     }
 }

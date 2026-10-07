@@ -112,10 +112,44 @@ it('answers the same whether the snapshot was stored before or not', function ()
     $this->post(route('session-replay.ingest.asset'), ['token' => $token, 'hash' => $hash, 'content' => 'x'])->assertUnprocessable();
     $this->ingest(['token' => $token, 'meta' => ['assets' => [$hash]]])->assertCreated()->assertJson(['missing_assets' => [$hash]]);
 
-    // The right content through the stylesheet route changes nothing and says "created", as for a new stylesheet.
+    // The right content through the stylesheet route says "created", as for a new stylesheet.
     $this->post(route('session-replay.ingest.asset'), ['token' => $token, 'hash' => $hash, 'content' => $tree])->assertCreated();
+});
 
-    expect(ReplayAsset::query()->sole()->kind)->toBe(ReplayAsset::SNAPSHOT);
+it('serves a stylesheet whose content was stored first as a shared snapshot', function () {
+    Gate::define('viewSessionReplay', fn () => true);
+
+    $token = $this->token($user = $this->user());
+    $content = snapshotTree();
+    $hash = hash('sha256', $content);
+    $id = (string) Str::uuid();
+
+    uploadSnapshot($this, $token, $content)->assertOk();
+    $this->ingest(['token' => $token, 'session' => $id, 'meta' => ['snapshots' => [$hash], 'assets' => [$hash]]])->assertJson(['missing_assets' => [$hash]]);
+
+    ReplayAsset::query()->update(['last_seen_at' => now()->subDays(3)]);
+
+    // The same bytes as a stylesheet: stored once, and from now on a stylesheet as well.
+    $this->post(route('session-replay.ingest.asset'), ['token' => $token, 'hash' => $hash, 'content' => $content])->assertCreated();
+
+    $asset = ReplayAsset::query()->sole();
+
+    expect($asset->kind)->toBe(ReplayAsset::STYLESHEET)->and($asset->last_seen_at->isToday())->toBeTrue();
+
+    $this->ingest(['token' => $token, 'session' => $id, 'seq' => 1, 'meta' => ['assets' => [$hash]]])->assertJson(['missing_assets' => []]);
+    $this->post(route('session-replay.ingest.asset'), ['token' => $token, 'hash' => $hash, 'content' => 'x'])->assertJson(['duplicate' => true]);
+
+    $this->actingAs($user);
+
+    expect(gzdecode($this->get(route('session-replay.asset', [$id, $hash]))->assertOk()->streamedContent()))->toBe($content)
+        ->and(gzdecode($this->get(route('session-replay.snapshot', [$id, $hash]))->assertOk()->streamedContent()))->toBe($content);
+
+    // Pointed at as a snapshot, it stays through a prune like one.
+    ReplayAsset::query()->update(['last_seen_at' => now()->subDays(60)]);
+
+    $this->artisan('session-replay:prune')->assertSuccessful();
+
+    expect(ReplayAsset::query()->where('hash', $hash)->exists())->toBeTrue();
 });
 
 it('moves the last-seen date when a stored snapshot is sent again', function () {
@@ -129,13 +163,36 @@ it('moves the last-seen date when a stored snapshot is sent again', function () 
 
     expect(ReplayAsset::query()->sole()->last_seen_at->isToday())->toBeTrue();
 
-    // At most once a day: a page everyone opens does not write its row on every view.
-    $recent = now()->subHours(2)->startOfSecond();
+    // Moved again when it is over an hour old, so prune's day of grace never shrinks to minutes.
+    ReplayAsset::query()->update(['last_seen_at' => now()->subHours(23)]);
+
+    uploadSnapshot($this, $token, $tree)->assertOk();
+
+    expect(ReplayAsset::query()->sole()->last_seen_at->gt(now()->subMinute()))->toBeTrue();
+
+    // At most once an hour: a page everyone opens does not write its row on every view.
+    $recent = now()->subMinutes(30)->startOfSecond();
     ReplayAsset::query()->update(['last_seen_at' => $recent]);
 
     uploadSnapshot($this, $token, $tree)->assertOk();
 
     expect(ReplayAsset::query()->sole()->last_seen_at->equalTo($recent))->toBeTrue();
+});
+
+it('keeps a shared snapshot sent again late in its day of grace until the batch that points at it arrives', function () {
+    $token = $this->token($this->user());
+    $tree = snapshotTree();
+
+    uploadSnapshot($this, $token, $tree)->assertOk();
+
+    // Last sent 23 hours ago; a tab sends it again, and its batch is a few minutes behind.
+    ReplayAsset::query()->update(['last_seen_at' => now()->subHours(23)]);
+    uploadSnapshot($this, $token, $tree)->assertOk();
+
+    $this->travel(2)->hours();
+    $this->artisan('session-replay:prune')->assertSuccessful();
+
+    expect(ReplayAsset::query()->count())->toBe(1);
 });
 
 it('refuses a snapshot that is not what it claims, too large, or inflates past the ceiling', function () {
