@@ -1,6 +1,7 @@
 import Player from 'rrweb-player';
 import 'rrweb-player/dist/style.css';
 import './player.css';
+import { momentUrl } from './lib/moment.js';
 import { hasClass, livePoints, trailSegments } from './lib/pointer.js';
 import { referencedAssets, restoreAssets, restoreSnapshots, sharedSnapshots, sortEvents } from './lib/process.js';
 
@@ -43,6 +44,8 @@ const TEXT = {
         vital: 'Vital',
         custom: 'Custom',
     },
+    copy_link: 'Copy link to this moment',
+    link_copied: 'Link copied',
 };
 
 function labels(root) {
@@ -287,6 +290,38 @@ function pointer(player, root) {
     };
 }
 
+/**
+ * "Copy link to this moment": the page's URL with ?t= at the second the
+ * replay is at, which opens the replay there for whoever may watch it.
+ */
+function copyLink(player, text) {
+    const bar = element('div', 'sr-player__actions');
+    const button = element('button', 'sr-chip sr-chip--action', text.copy_link);
+    let reset = null;
+
+    button.type = 'button';
+    button.addEventListener('click', async () => {
+        const url = momentUrl(location.href, player.getReplayer?.()?.getCurrentTime() ?? 0);
+
+        try {
+            await navigator.clipboard.writeText(url);
+        } catch {
+            // No clipboard outside a secure context (plain http): the link to copy by hand.
+            window.prompt(text.copy_link, url);
+
+            return;
+        }
+
+        button.textContent = text.link_copied;
+        clearTimeout(reset);
+        reset = setTimeout(() => (button.textContent = text.copy_link), 2000);
+    });
+
+    bar.append(button);
+
+    return bar;
+}
+
 async function mount(root, options = {}) {
     const manifestUrl = options.manifestUrl || root.dataset.manifest;
 
@@ -363,6 +398,9 @@ async function mount(root, options = {}) {
     const stopPointer = pointer(player, root);
 
     if (stopPointer) state.stops.push(stopPointer);
+
+    // Under the controller, in the replay's column.
+    if (root.dataset.copyLink !== 'false') stage.append(copyLink(player, text));
 
     if (root.dataset.markers !== 'false') {
         root.append(markerList(manifest, startedAt, (offset) => player.goto(offset, true), text));
