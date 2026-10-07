@@ -61,7 +61,11 @@ class BatchIngester
         // The chunk row, its markers, the counters and the snapshot references land together or not at all, so a
         // retry after a failure stores the batch again instead of finding a chunk row and answering "duplicate".
         try {
-            $this->connection()->transaction(function () use ($session, $sessionId, $seq, $meta, $bytes, $from, $to, $events, $markers): void {
+            $first = $this->connection()->transaction(function () use ($session, $sessionId, $seq, $meta, $bytes, $from, $to, $events, $markers): bool {
+                // The row exists by now, so locking it is safe on every database. It also orders two batches of one
+                // recording stored at once: exactly one of them finds no chunk yet.
+                $stored = (int) ReplaySession::query()->whereKey($sessionId)->lockForUpdate()->value('chunk_count');
+
                 ReplayChunk::query()->create([
                     'replay_session_id' => $sessionId,
                     'seq' => $seq,
@@ -78,14 +82,17 @@ class BatchIngester
 
                 $this->updateCounters($session, $meta, $bytes, $events, $markers);
                 $this->referenceSnapshots($sessionId, (array) Arr::get($meta, 'snapshots', []));
+
+                return $stored === 0;
             });
         } catch (UniqueConstraintViolationException) {
             // The same batch twice at once (a retry that overtook the first try): the other copy is stored.
             return ['session' => $session, 'created' => false, 'duplicate' => true, 'foreign' => false, 'missing_assets' => []];
         }
 
-        // The first batch that is stored, whichever request made the row: dispatched once per recording.
-        if ((int) $session->chunk_count === 1) {
+        // The first batch that is stored, whichever request made the row: dispatched once per recording, also when
+        // two first batches commit before either reads the counters again.
+        if ($first) {
             ReplaySessionStarted::dispatch($session);
         }
 
