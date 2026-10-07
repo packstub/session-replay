@@ -4,6 +4,10 @@ All notable changes to `packstub/session-replay` are documented here.
 
 ## Unreleased
 
+### Added
+
+- **Failed requests and page views of apps without Livewire.** An Inertia, Vue, React or axios app had no markers for a failed API call or a client-side page change. The recorder now marks same-origin `fetch` and `XMLHttpRequest` requests answered with a status at or above `capture.requests` (default `500`), or not at all, as `request` markers with method, path, status and duration (never headers or bodies); in mode `on_error` they upload the window like a failed Livewire request. `history.pushState` and the back button add `navigation` markers. `capture.requests = false` turns the requests off.
+
 ### Fixed
 
 - **Pages the app does not record are not recorded when reached with `wire:navigate` either.** `except`, `except_routes`, `recordWhen()` and the Filament plugin's own rules (its Sessions pages, `record()`) only kept the recorder off pages loaded in full: with `wire:navigate` the recorder of an earlier page kept going on them. The recorder now reads its config again on every page Livewire swaps in. A page without one is not recorded: no snapshot, events, markers or console messages, including those during the swap to it and away from it, until a page that is recorded; `SessionReplay.isRecording()` is `false` there. Each page's signed token is used from then on, and a page signed for another person, workspace or impersonator (a tenant switch with `wire:navigate`) starts a new recording, as a page load does; before, the visit was filed in the recording of the page the tab started on. A page's `snapshots.share` setting now applies to the snapshots taken on it.

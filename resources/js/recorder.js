@@ -5,6 +5,7 @@ import { dropHiddenValues, inputMaskOptions, maskTextAttributes, redactPluginUrl
 import { EVENT_FULL_SNAPSHOT, assetPlaceholder, attributeMatcher, referencedAssets, renameVolatileIds, shareSnapshot, sharedSnapshots, stripAttributes, styleSlots } from './lib/process.js';
 import { ACTIVE_SOURCES, activeTime, checkoutInterval, estimateChars, isTrigger, trimWindow, windowStart } from './lib/buffer.js';
 import { lastingPlugin, navigationPause } from './lib/navigation.js';
+import { hasHeader, requestMarker } from './lib/requests.js';
 import { MAX_RETRIES, pendingFate, retryDelay } from './lib/pending.js';
 import { ask, notice } from './ask.js';
 import { deletePending, listPending, pendingStoreExists, savePending } from './pending.js';
@@ -905,6 +906,124 @@ function watchLivewire() {
     document.addEventListener('livewire:navigated', () => markPage());
 }
 
+/**
+ * Requests that do not go through Livewire (Inertia, Vue, React, fetch or
+ * axios): a same-origin one answered at or above capture.requests, or not at
+ * all, becomes a "request" marker, as a failed Livewire request does.
+ * Livewire's own requests are left to watchLivewire(); a request the page cut
+ * off by closing or navigating away is no failure of the app.
+ */
+function watchRequests() {
+    const threshold = config.capture.requests;
+    // ingest, ingest/asset and ingest/snapshot share the prefix.
+    const skip = [config.ingestUrl];
+    let leaving = false;
+    let leavingTimer = null;
+
+    const leave = () => {
+        leaving = true;
+        clearTimeout(leavingTimer);
+        // A beforeunload another script cancelled: the page stays.
+        leavingTimer = setTimeout(() => (leaving = false), 3000);
+    };
+
+    window.addEventListener('beforeunload', leave);
+    window.addEventListener('pagehide', leave);
+
+    const report = (details) => {
+        if (leaving) return;
+
+        const marker = requestMarker({ ...details, threshold, page: location.href, skip });
+
+        if (marker) mark('request', marker.label, { ...marker.payload, url: redacted(marker.payload.url) });
+    };
+
+    const nativeFetch = window.fetch;
+
+    if (typeof nativeFetch === 'function') {
+        window.fetch = function (input, init) {
+            const started = performance.now();
+            const promise = nativeFetch.apply(this, arguments);
+
+            try {
+                const url = typeof input === 'string' || input instanceof URL ? String(input) : input?.url;
+                const method = init?.method || input?.method || 'GET';
+
+                if (!hasHeader(init?.headers, 'X-Livewire') && !hasHeader(input?.headers, 'X-Livewire')) {
+                    promise.then(
+                        (response) => report({ url: response.url || url, method, status: response.status, duration: performance.now() - started }),
+                        (error) => error?.name !== 'AbortError' && report({ url, method, status: 0, duration: performance.now() - started }),
+                    );
+                }
+            } catch {
+                // Never in the way of the app's own request.
+            }
+
+            return promise;
+        };
+    }
+
+    if (typeof XMLHttpRequest === 'undefined') return;
+
+    const requests = new WeakMap();
+    const proto = XMLHttpRequest.prototype;
+    const open = proto.open;
+    const setRequestHeader = proto.setRequestHeader;
+    const send = proto.send;
+
+    proto.open = function (method, url) {
+        requests.set(this, { method, url: String(url), livewire: false, aborted: false });
+
+        return open.apply(this, arguments);
+    };
+    proto.setRequestHeader = function (name) {
+        const request = requests.get(this);
+
+        if (request && String(name).toLowerCase() === 'x-livewire') request.livewire = true;
+
+        return setRequestHeader.apply(this, arguments);
+    };
+    proto.send = function () {
+        const request = requests.get(this);
+
+        if (request && !request.livewire) {
+            const started = performance.now();
+
+            this.addEventListener('abort', () => (request.aborted = true));
+            this.addEventListener('loadend', () => {
+                if (!request.aborted) report({ url: this.responseURL || request.url, method: request.method, status: this.status, duration: performance.now() - started });
+            });
+        }
+
+        return send.apply(this, arguments);
+    };
+}
+
+/**
+ * Client-side page changes of a router (Inertia, Vue Router, React Router):
+ * pushState and the back button add the "navigation" marker a page load adds.
+ * replaceState does not: Livewire's #[Url] properties and table filters use it
+ * on every change. wire:navigate marks its page once the new one is in place.
+ */
+function watchHistory() {
+    const changed = () => {
+        if (navigation.isAwaiting()) return;
+
+        // After the router had a moment to set the new page's title.
+        setTimeout(() => navigation.isAwaiting() || markPage(), 0);
+    };
+    const pushState = history.pushState;
+
+    history.pushState = function () {
+        const result = pushState.apply(this, arguments);
+
+        changed();
+
+        return result;
+    };
+    window.addEventListener('popstate', changed);
+}
+
 function watchRageClicks() {
     let clicks = [];
     let quietUntil = 0;
@@ -1187,6 +1306,8 @@ if (config && !window.SessionReplay) {
     if (config.capture.vitals) watchVitals();
     if (config.capture.errors) watchErrors();
     if (config.capture.livewire) watchLivewire();
+    if (config.capture.requests) watchRequests();
+    watchHistory();
     if (config.capture.rageClicks) watchRageClicks();
 
     document.addEventListener('visibilitychange', () => {
