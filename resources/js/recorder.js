@@ -1,7 +1,7 @@
 import { record } from '@rrweb/record';
 import { getRecordConsolePlugin } from '@rrweb/rrweb-plugin-console-record';
 import { onCLS, onINP, onLCP } from 'web-vitals';
-import { dropHiddenValues, inputMaskOptions, maskTextAttributes, redactPluginUrls, redactUrl, redactUrlAttributes, redactUrls } from './lib/privacy.js';
+import { dropHiddenValues, inputMaskOptions, isUnmasked, maskTextAttributes, redactPluginUrls, redactUrl, redactUrlAttributes, redactUrls, textMasker } from './lib/privacy.js';
 import { EVENT_FULL_SNAPSHOT, assetPlaceholder, attributeMatcher, referencedAssets, renameVolatileIds, shareSnapshot, sharedSnapshots, stripAttributes, styleSlots } from './lib/process.js';
 import { ACTIVE_SOURCES, activeTime, checkoutInterval, estimateChars, isTrigger, trimWindow, windowStart } from './lib/buffer.js';
 import { lastingPlugin, navigationPause } from './lib/navigation.js';
@@ -400,17 +400,22 @@ function textMaskingOn() {
 
 /** Whether the element rrweb serialized as `id` shows masked text (mask_all_text, or inside mask_text_selector). */
 function isTextMasked(id) {
-    if (config.privacy.maskAllText) return true;
-
     try {
         const node = record.mirror.getNode(id);
         const element = node && node.nodeType === 1 ? node : node?.parentElement;
 
-        return !!element?.closest?.(config.privacy.maskTextSelector);
+        return isElementTextMasked(element);
     } catch {
         // An invalid selector: mask rather than guess.
         return true;
     }
+}
+
+/** mask_all_text outside unmask_text_selector, and mask_text_selector everywhere. */
+function isElementTextMasked(element) {
+    if (config.privacy.maskAllText) return !isUnmasked(element, config.privacy.unmaskTextSelector, config.privacy.maskTextSelector);
+
+    return !!element?.closest?.(config.privacy.maskTextSelector);
 }
 
 function emit(event) {
@@ -803,7 +808,7 @@ function describe(element) {
     // Inside a blocked region the replay shows an empty box; its captions stay out of the marker list too.
     if (config.privacy.blockSelector && element.closest(config.privacy.blockSelector)) return element.tagName.toLowerCase();
 
-    const masked = config.privacy.maskAllText || (config.privacy.maskTextSelector && element.closest(config.privacy.maskTextSelector));
+    const masked = (config.privacy.maskAllText || config.privacy.maskTextSelector) && isElementTextMasked(element);
     const tag = element.tagName.toLowerCase();
 
     // What the author called it reads better in a list than utility classes: alt, aria-label, title, and a
@@ -1067,6 +1072,8 @@ function recordOptions() {
         maskAllInputs: false,
         maskInputOptions: inputMaskOptions(config.privacy.maskAllInputs),
         maskTextSelector: config.privacy.maskAllText ? '*' : config.privacy.maskTextSelector || undefined,
+        // mask_all_text with an unmask selector: rrweb hands every text it masks to this, with its element.
+        maskTextFn: config.privacy.maskAllText && config.privacy.unmaskTextSelector ? textMasker(config.privacy.unmaskTextSelector, config.privacy.maskTextSelector) : undefined,
         blockSelector: config.privacy.blockSelector || undefined,
         ignoreSelector: config.privacy.ignoreSelector || undefined,
         slimDOMOptions: 'all',

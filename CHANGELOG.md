@@ -6,6 +6,7 @@ All notable changes to `packstub/session-replay` are documented here.
 
 ### Added
 
+- **`privacy.unmask_text_selector` for `mask_all_text`.** Layout-only mode blanked the app's own menus, headings and button captions too, which made replays hard to follow. Text inside `[data-replay-unmask]` (the default selector) now stays readable in that mode, text attributes included, unless `mask_text_selector` matches it; input values are never affected. Without `mask_all_text` it does nothing.
 - **Failed requests and page views of apps without Livewire.** An Inertia, Vue, React or axios app had no markers for a failed API call or a client-side page change. The recorder now marks same-origin `fetch` and `XMLHttpRequest` requests answered with a status at or above `capture.requests` (default `500`), or not at all, as `request` markers with method, path, status and duration (never headers or bodies); in mode `on_error` they upload the window like a failed Livewire request. `history.pushState` and the back button add `navigation` markers. `capture.requests = false` turns the requests off.
 
 ### Fixed
