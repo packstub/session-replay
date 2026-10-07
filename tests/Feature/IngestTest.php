@@ -2,9 +2,11 @@
 
 use Illuminate\Http\UploadedFile;
 use Illuminate\Support\Facades\Event;
+use Illuminate\Support\Facades\Gate;
 use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Str;
 use Packstub\SessionReplay\Events\ReplaySessionStarted;
+use Packstub\SessionReplay\Facades\SessionReplay;
 use Packstub\SessionReplay\Models\ReplayAsset;
 use Packstub\SessionReplay\Models\ReplayChunk;
 use Packstub\SessionReplay\Models\ReplayMarker;
@@ -395,4 +397,230 @@ it('puts no web middleware on the upload routes, which carry no CSRF token', fun
 
     expect($middleware)->not->toContain('web')
         ->and((require __DIR__.'/../../config/session-replay.php')['ingest']['middleware'])->toBe([]);
+});
+
+/**
+ * Another first batch of the recording made its row while this upload was on its way: every lookup misses the row
+ * until this upload tries to insert its own.
+ */
+function recordingMadeDuringTheRace(string $id, $user): void
+{
+    ReplaySession::query()->insert(['id' => $id, 'user_type' => $user->getMorphClass(), 'user_id' => (string) $user->id, 'started_at' => now(), 'created_at' => now(), 'updated_at' => now()]);
+
+    $hidden = true;
+
+    ReplaySession::addGlobalScope('race', function ($query) use (&$hidden): void {
+        if ($hidden) {
+            $query->whereRaw('1 = 0');
+        }
+    });
+
+    ReplaySession::creating(function () use (&$hidden): void {
+        $hidden = false;
+    });
+
+    // Global scopes outlive the test; the next one boots the model afresh.
+    test()->beforeApplicationDestroyed(fn () => ReplaySession::clearBootedModels());
+}
+
+it('stores the first batch of a recording whose row another upload made a moment ago, and starts it once', function () {
+    Event::fake([ReplaySessionStarted::class]);
+
+    $user = $this->user();
+    $id = (string) Str::uuid();
+
+    recordingMadeDuringTheRace($id, $user);
+
+    $this->ingest(['token' => $this->token($user), 'session' => $id])->assertOk()->assertJson(['duplicate' => false]);
+
+    expect(ReplaySession::query()->findOrFail($id)->chunk_count)->toBe(1);
+
+    $this->ingest(['token' => $this->token($user), 'session' => $id, 'seq' => 1])->assertOk();
+
+    Event::assertDispatchedTimes(ReplaySessionStarted::class, 1);
+});
+
+it('refuses a first batch whose recording someone else made a moment ago', function () {
+    $ada = $this->user();
+    $id = (string) Str::uuid();
+
+    recordingMadeDuringTheRace($id, $ada);
+
+    $this->ingest(['token' => $this->token($this->user()), 'session' => $id])->assertForbidden()->assertJson(['stop' => true]);
+
+    expect(ReplayChunk::query()->count())->toBe(0);
+});
+
+it('stores a batch again after it failed half way, instead of calling the retry a duplicate', function () {
+    Event::fake([ReplaySessionStarted::class]);
+
+    $user = $this->user();
+    $id = (string) Str::uuid();
+    $now = now()->getTimestampMs();
+    $fail = true;
+
+    // Something breaks right after the chunk row is written.
+    ReplayChunk::created(function () use (&$fail): void {
+        if ($fail) {
+            $fail = false;
+
+            throw new RuntimeException('The database went away.');
+        }
+    });
+
+    $upload = fn () => $this->ingest(['token' => $this->token($user), 'session' => $id, 'meta' => ['markers' => [
+        ['type' => 'error', 'label' => 'Boom', 'at' => $now],
+    ]]]);
+
+    $this->withoutExceptionHandling();
+
+    expect(fn () => $upload())->toThrow(RuntimeException::class);
+    expect(ReplayChunk::query()->count())->toBe(0)->and(ReplayMarker::query()->count())->toBe(0);
+
+    $upload()->assertOk()->assertJson(['duplicate' => false]);
+
+    $session = ReplaySession::query()->findOrFail($id);
+
+    expect($session->chunk_count)->toBe(1)
+        ->and($session->error_count)->toBe(1)
+        ->and(ReplayMarker::query()->count())->toBe(1);
+
+    // The row was made by the first try; the recording starts with the batch that was stored.
+    Event::assertDispatchedTimes(ReplaySessionStarted::class, 1);
+});
+
+it('answers duplicate when the same batch is stored by another request at the same moment', function () {
+    $session = $this->recording($user = $this->user());
+
+    // The other copy inserts its chunk row between this upload's check and its insert.
+    ReplayChunk::creating(function (ReplayChunk $chunk): void {
+        if (! ReplayChunk::query()->where('replay_session_id', $chunk->replay_session_id)->where('seq', $chunk->seq)->exists()) {
+            ReplayChunk::query()->insert(['replay_session_id' => $chunk->replay_session_id, 'seq' => $chunk->seq, 'path' => $chunk->path, 'bytes' => 1, 'from_ms' => 1, 'to_ms' => 1]);
+        }
+    });
+
+    $this->ingest(['token' => $this->token($user), 'session' => $session->id, 'seq' => 1])->assertOk()->assertJson(['duplicate' => true]);
+
+    expect($session->refresh()->chunk_count)->toBe(1);
+});
+
+it('never moves the last activity or a worst vital back when an older batch arrives late', function () {
+    $user = $this->user();
+    $id = (string) Str::uuid();
+    $now = now()->getTimestampMs();
+
+    $this->ingest(['token' => $this->token($user), 'session' => $id, 'meta' => ['from' => $now - 2000, 'to' => $now, 'markers' => [
+        ['type' => 'vital', 'label' => 'LCP', 'payload' => ['name' => 'LCP', 'value' => 5200], 'at' => $now],
+        ['type' => 'vital', 'label' => 'CLS', 'payload' => ['name' => 'CLS', 'value' => 0.31], 'at' => $now],
+    ]]])->assertCreated();
+
+    $this->ingest(['token' => $this->token($user), 'session' => $id, 'seq' => 1, 'meta' => ['from' => $now - 300_000, 'to' => $now - 240_000, 'markers' => [
+        ['type' => 'vital', 'label' => 'LCP', 'payload' => ['name' => 'LCP', 'value' => 900], 'at' => $now - 250_000],
+        ['type' => 'vital', 'label' => 'INP', 'payload' => ['name' => 'INP', 'value' => 120], 'at' => $now - 250_000],
+        ['type' => 'vital', 'label' => 'CLS', 'payload' => ['name' => 'CLS', 'value' => 0.02], 'at' => $now - 250_000],
+    ]]])->assertOk();
+
+    $session = ReplaySession::query()->findOrFail($id);
+
+    expect($session->last_activity_at->getTimestamp())->toBe(intdiv($now, 1000))
+        ->and($session->lcp_ms)->toBe(5200)
+        ->and($session->inp_ms)->toBe(120)
+        ->and($session->cls)->toBe(0.31);
+});
+
+it('keeps numbers from the browser inside what the columns hold on every database', function () {
+    $user = $this->user();
+    $id = (string) Str::uuid();
+
+    $this->ingest(['token' => $this->token($user), 'session' => $id, 'meta' => [
+        'viewport' => ['width' => 100_000, 'height' => -5],
+        'from' => -1000,
+        'to' => 1e30,
+        'events' => 1e15,
+        'activeMs' => -50,
+        'markers' => [
+            ['type' => 'vital', 'label' => 'LCP', 'payload' => ['name' => 'LCP', 'value' => 9e12], 'at' => -7],
+            ['type' => 'error', 'label' => 'Boom', 'at' => 'yesterday'],
+        ],
+    ]])->assertCreated();
+
+    $session = ReplaySession::query()->findOrFail($id);
+    $chunk = ReplayChunk::query()->sole();
+
+    expect($session->viewport_width)->toBe(32767)
+        ->and($session->viewport_height)->toBeNull()
+        ->and($session->event_count)->toBe(2_147_483_647)
+        ->and($session->active_ms)->toBe(0)
+        ->and($session->lcp_ms)->toBe(2_147_483_647)
+        ->and($session->started_at->isToday())->toBeTrue()
+        ->and($chunk->event_count)->toBe(2_147_483_647)
+        ->and($chunk->from_ms)->toBeGreaterThan(0)
+        ->and($chunk->to_ms)->toBeGreaterThanOrEqual($chunk->from_ms)
+        ->and(ReplayMarker::query()->pluck('at_ms')->every(fn ($at) => $at > 0))->toBeTrue();
+
+    // The counters stop at the column's limit instead of overflowing it.
+    $this->ingest(['token' => $this->token($user), 'session' => $id, 'seq' => 1, 'meta' => ['events' => 5]])->assertOk();
+
+    expect($session->refresh()->event_count)->toBe(2_147_483_647)->and($session->chunk_count)->toBe(2);
+});
+
+it('files a session id sent in upper case under its lower-case spelling', function () {
+    Gate::define('viewSessionReplay', fn () => true);
+
+    $user = $this->user();
+    $id = (string) Str::uuid();
+
+    $this->ingest(['token' => $this->token($user), 'session' => strtoupper($id)])->assertCreated();
+    $this->ingest(['token' => $this->token($user), 'session' => strtoupper($id), 'seq' => 1])->assertOk();
+    $this->ingest(['token' => $this->token($user), 'session' => $id, 'seq' => 2])->assertOk();
+
+    $session = ReplaySession::query()->sole();
+
+    expect($session->id)->toBe($id)
+        ->and($session->chunk_count)->toBe(3)
+        ->and(ReplayChunk::query()->pluck('path')->every(fn ($path) => str_contains($path, "/sessions/{$id}/")))->toBeTrue();
+
+    $this->actingAs($user);
+
+    $this->get(SessionReplay::urlFor($session))->assertOk();
+    $this->getJson(route('session-replay.manifest', $session))->assertOk()->assertJsonCount(3, 'chunks');
+    $this->get(route('session-replay.chunk', [$session, 2]))->assertOk();
+});
+
+it('answers a field sent as a list with 422 or 401, never a server error', function () {
+    $token = $this->token($this->user());
+    $hash = hash('sha256', 'a{}');
+
+    $this->post(route('session-replay.ingest'), ['token' => $token, 'session' => [(string) Str::uuid()], 'seq' => 0, 'events' => 'x'])->assertUnprocessable();
+    $this->post(route('session-replay.ingest'), ['token' => [$token], 'session' => (string) Str::uuid(), 'seq' => 0, 'events' => 'x'])->assertUnauthorized();
+    $this->post(route('session-replay.ingest'), ['token' => $token, 'session' => (string) Str::uuid(), 'seq' => 0, 'events' => ['x']])->assertUnprocessable();
+    $this->post(route('session-replay.ingest'), ['token' => $token, 'session' => (string) Str::uuid(), 'seq' => 0, 'meta' => ['url' => 'x'], 'events' => json_encode($this->events())])->assertCreated();
+
+    $this->post(route('session-replay.ingest.asset'), ['token' => $token, 'hash' => [$hash], 'content' => 'a{}'])->assertUnprocessable();
+    $this->post(route('session-replay.ingest.asset'), ['token' => $token, 'hash' => $hash, 'content' => ['a{}']])->assertUnprocessable();
+    $this->post(route('session-replay.ingest.snapshot'), ['token' => $token, 'hash' => [$hash], 'content' => 'a{}'])->assertUnprocessable();
+});
+
+it('accepts a token signed with a previous app key, so rotating the key keeps open tabs recording', function () {
+    $user = $this->user();
+    $old = 'base64:'.base64_encode(random_bytes(32));
+
+    config()->set('app.key', $old);
+    $token = $this->token($user);
+
+    config()->set('app.key', 'base64:'.base64_encode(random_bytes(32)));
+
+    $this->ingest(['token' => $token])->assertUnauthorized();
+
+    config()->set('app.previous_keys', [$old]);
+
+    $this->ingest(['token' => $token])->assertCreated();
+
+    // New tokens are signed with the current key only.
+    $fresh = $this->token($user);
+
+    config()->set('app.previous_keys', []);
+
+    $this->ingest(['token' => $fresh])->assertCreated();
+    $this->ingest(['token' => $token])->assertUnauthorized();
 });

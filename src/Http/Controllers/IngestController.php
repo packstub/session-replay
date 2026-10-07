@@ -4,6 +4,7 @@ namespace Packstub\SessionReplay\Http\Controllers;
 
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
+use Illuminate\Http\UploadedFile;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Str;
 use Packstub\SessionReplay\Facades\SessionReplay;
@@ -36,12 +37,16 @@ class IngestController
             return $context;
         }
 
-        $sessionId = (string) $request->input('session');
+        $sessionId = $request->input('session');
         $seq = $request->input('seq');
 
-        if (! Str::isUuid($sessionId) || ! is_numeric($seq) || (int) $seq < 0 || (int) $seq > 100000) {
+        if (! is_string($sessionId) || ! Str::isUuid($sessionId) || ! is_numeric($seq) || (int) $seq < 0 || (int) $seq > 100000) {
             return $this->refuse(422, 'A session id and a sequence number are required.');
         }
+
+        // One spelling: Postgres hands a uuid back in lower case, and the files sit under the id on a disk that may
+        // tell the cases apart.
+        $sessionId = strtolower($sessionId);
 
         $body = $this->upload($request, 'events', (int) config('session-replay.ingest.max_batch_kb', 1536));
 
@@ -86,9 +91,14 @@ class IngestController
             return $this->refuse(422, 'The events could not be read.');
         }
 
-        $meta = json_decode((string) $request->input('meta', '{}'), true);
+        $meta = $request->input('meta', '{}');
+        $meta = is_string($meta) ? json_decode($meta, true) : null;
 
         $result = $this->ingester->ingest($sessionId, (int) $seq, $gzip, is_array($meta) ? $meta : [], $context, $request->userAgent());
+
+        if ($result['foreign']) {
+            return $this->refuse(403, 'This recording belongs to someone else.', stop: true);
+        }
 
         return response()->json([
             'ok' => true,
@@ -106,9 +116,9 @@ class IngestController
             return $context;
         }
 
-        $hash = (string) $request->input('hash');
+        $hash = $request->input('hash');
 
-        if (preg_match('/^[a-f0-9]{64}$/', $hash) !== 1) {
+        if (! is_string($hash) || preg_match('/^[a-f0-9]{64}$/', $hash) !== 1) {
             return $this->refuse(422, 'A SHA-256 hash is required.');
         }
 
@@ -135,8 +145,13 @@ class IngestController
             return $this->refuse(422, 'The content does not match the hash.');
         }
 
-        // Stored already as a shared snapshot: same bytes, and the answer must not tell (see snapshot()).
+        // Stored already as a shared snapshot, the same bytes, checked against the hash when they arrived: from now on
+        // it is a stylesheet too, or the stylesheet would stay missing for good. A recording that points at it as a
+        // snapshot still gets it (the viewer serves a snapshot of either kind), prune keeps it while one does, and the
+        // answer is the one a new stylesheet gets.
         if (ReplayAsset::query()->where('hash', $hash)->exists()) {
+            ReplayAsset::query()->where('hash', $hash)->update(['kind' => ReplayAsset::STYLESHEET, 'last_seen_at' => now()]);
+
             return response()->json(['ok' => true], 201);
         }
 
@@ -168,9 +183,9 @@ class IngestController
             return $context;
         }
 
-        $hash = (string) $request->input('hash');
+        $hash = $request->input('hash');
 
-        if (preg_match('/^[a-f0-9]{64}$/', $hash) !== 1) {
+        if (! is_string($hash) || preg_match('/^[a-f0-9]{64}$/', $hash) !== 1) {
             return $this->refuse(422, 'A SHA-256 hash is required.');
         }
 
@@ -198,9 +213,10 @@ class IngestController
         $asset = ReplayAsset::query()->where('hash', $hash)->first();
 
         if ($asset !== null) {
-            // Sent again: a recording is about to point at it, so the next prune must leave it. Moved at most once a
-            // day, like a stylesheet's, so a page everyone opens does not write a row on every view.
-            if ($asset->last_seen_at === null || $asset->last_seen_at->lt(now()->subDay())) {
+            // Sent again: a recording is about to point at it, so the next prune must leave it. Moved at most once an
+            // hour, so a page everyone opens does not write a row on every view, while the day prune waits for the
+            // batch that points at it is always at least 23 hours.
+            if ($asset->last_seen_at === null || $asset->last_seen_at->lt(now()->subHour())) {
                 $asset->forceFill(['last_seen_at' => now()])->save();
             }
         } else {
@@ -256,7 +272,8 @@ class IngestController
     protected function upload(Request $request, string $field, int $maxKb): string|JsonResponse
     {
         $file = $request->file($field);
-        $body = $file !== null && $file->isValid() ? (string) $file->getContent() : (string) $request->input($field, '');
+        $input = $request->input($field, '');
+        $body = $file instanceof UploadedFile && $file->isValid() ? (string) $file->getContent() : (is_string($input) ? $input : '');
 
         if ($body === '') {
             return $this->refuse(422, "Nothing was uploaded as \"{$field}\".");
