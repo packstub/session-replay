@@ -18,5 +18,7 @@ return [
         'vital' => 'Vital',
         'custom' => 'Eigene',
     ],
+    'copy_link' => 'Link zu diesem Moment kopieren',
+    'link_copied' => 'Link kopiert',
 
 ];
