@@ -6,6 +6,7 @@ All notable changes to `packstub/session-replay` are documented here.
 
 ### Added
 
+- **Server errors on the replay, and a log link that opens at the moment.** A replay showed a failed request only from the browser's side, and the log context's link opened the recording at its start. An exception Laravel reports during a recorded request is now an `error` marker (`source: server`) with the exception's class, status, method and path; the message only with `capture.server_errors = 'message'`, its URLs redacted. Only the request's own person's recording gets it; in mode `on_error`, where the recording is usually stored after the failed request, it waits in the cache for the first batch. A new Context key, `session_replay_moment`, links to the replay with `?at=` and the request's time, and the player opens such a link three seconds before it. `capture.server_errors = false` turns the markers off.
 - **Copy link to this moment.** A button under the player's controller copies the page's URL with `?t=` at the second the replay is at, to paste into a ticket or a chat; it opens only for someone the gate lets in. `<x-session-replay::player :copy-link="false" />` hides it. New strings `player.copy_link` and `player.link_copied` in all five languages.
 
 ### Fixed

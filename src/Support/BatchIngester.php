@@ -90,6 +90,9 @@ class BatchIngester
             return ['session' => $session, 'created' => false, 'duplicate' => true, 'foreign' => false, 'missing_assets' => []];
         }
 
+        // Server errors of this recording's requests from before it was stored (mode on_error).
+        app(ServerErrors::class)->takePending($session);
+
         // The first batch that is stored, whichever request made the row: dispatched once per recording, also when
         // two first batches commit before either reads the counters again.
         if ($first) {

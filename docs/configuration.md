@@ -51,6 +51,7 @@
 | --- | --- | --- |
 | `capture.console` | `['error']` | Console levels recorded; `console.error` also becomes a `console` marker. Other levels you add are kept in the recording's events without a marker. `[]` turns the console off. |
 | `capture.errors` | `true` | Uncaught errors and unhandled rejections as `error` markers. |
+| `capture.server_errors` | `'class'` | Exceptions Laravel reports during a recorded request as `error` markers: class, status, method and path. `'message'` adds the exception's message (URLs redacted); it may carry personal data. `false` turns it off. Needs `context.enabled`. |
 | `capture.livewire` | `true` | Failed Livewire requests as `request` markers, `wire:navigate` page views as `navigation` markers. |
 | `capture.vitals` | `true` | LCP, INP and CLS as `vital` markers. |
 | `capture.rage_clicks` | `true` | Three or more clicks on one spot within 700 ms as `rage-click` markers. |
