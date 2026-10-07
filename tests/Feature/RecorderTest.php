@@ -55,6 +55,13 @@ it('renders the recorder for a signed-in person, with a token that names them', 
         ->and($token->tenantId)->toBeNull();
 });
 
+it('runs the config on every wire:navigate page and the bundle once per document', function () {
+    $html = $this->actingAs($this->user())->get('page')->assertOk()->getContent();
+
+    expect($html)->toMatch('/<script src="[^"]*recorder\.js[^"]*" defer data-navigate-once/')
+        ->and($html)->toMatch('/<script>window\.__sessionReplay=/');
+});
+
 it('renders nothing for guests, excluded paths, a false recordWhen or the master switch', function () {
     $this->get('page')->assertOk()->assertDontSee('__sessionReplay', false);
 
