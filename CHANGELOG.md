@@ -2,6 +2,12 @@
 
 All notable changes to `packstub/session-replay` are documented here.
 
+## Unreleased
+
+### Fixed
+
+- **Stylesheets that finish loading after the page was recorded are deduplicated too.** rrweb sends the text of a `<link rel="stylesheet">` that was still loading when it was serialized (a page-specific stylesheet `wire:navigate` appends, or a slow one at page load) later, as an attribute change. That text went up inline on every page view; it is now stored once by hash like every other stylesheet, and the player puts it back. Recordings made before keep playing as they are.
+
 ## 1.0.0-beta.4 — 2026-10-07
 
 ### Added

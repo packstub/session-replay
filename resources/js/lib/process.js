@@ -100,7 +100,7 @@ export function stripAttributes(event, matches) {
     if (event.type === EVENT_INCREMENTAL && event.data && event.data.source === SOURCE_MUTATION && event.data.attributes) {
         event.data.attributes = event.data.attributes.filter((change) => {
             for (const name of Object.keys(change.attributes || {})) {
-                if (matches(name)) delete change.attributes[name];
+                if (name !== '_cssText' && matches(name)) delete change.attributes[name];
             }
 
             // A change that only touched dropped attributes says nothing any more.
@@ -113,10 +113,21 @@ export function stripAttributes(event, matches) {
 
 /**
  * The places an event holds stylesheet text: [{ holder, key, text }], where
- * holder[key] is the text (or, in the player, the placeholder).
+ * holder[key] is the text (or, in the player, the placeholder). A <link>
+ * whose sheet had not loaded when rrweb serialized it gets its text later,
+ * in a mutation's attribute changes: { attributes: [{ id, attributes: {
+ * _cssText } }] }.
  */
 export function styleSlots(event, minBytes = 0) {
     const slots = [];
+
+    if (event.type === EVENT_INCREMENTAL && event.data && event.data.source === SOURCE_MUTATION && Array.isArray(event.data.attributes)) {
+        for (const change of event.data.attributes) {
+            if (change && change.attributes && typeof change.attributes._cssText === 'string' && change.attributes._cssText.length >= minBytes) {
+                slots.push({ holder: change.attributes, key: '_cssText', text: change.attributes._cssText });
+            }
+        }
+    }
 
     for (const root of roots(event)) {
         walk(root, (node) => {

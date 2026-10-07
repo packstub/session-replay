@@ -121,6 +121,33 @@ test('placeholders round-trip through referencedAssets and restoreAssets', () =>
     assert.equal(event.data.node.childNodes[0].childNodes[1].childNodes[0].textContent, '');
 });
 
+test('a link that loaded after it was serialized: its text in a mutation\'s attribute changes is deduplicated too', () => {
+    const css = 'body{color:red}'.repeat(200);
+    const event = {
+        type: 3,
+        timestamp: 20,
+        data: { source: 0, texts: [], removes: [], adds: [], attributes: [{ id: 9, attributes: { rel: 'stylesheet', href: '/app.css', _cssText: css } }, { id: 10, attributes: { _cssText: 'a{}' } }] },
+    };
+
+    stripAttributes(event, attributeMatcher(['_*', 'wire:*']));
+    assert.equal(event.data.attributes[0].attributes._cssText, css);
+
+    const slots = styleSlots(event, 1024);
+
+    // The small sheet stays inline.
+    assert.equal(slots.length, 1);
+    assert.equal(slots[0].text, css);
+
+    slots[0].holder[slots[0].key] = assetPlaceholder(hash);
+
+    assert.deepEqual(referencedAssets([event]), [hash]);
+
+    restoreAssets([event], new Map([[hash, css]]));
+
+    assert.equal(event.data.attributes[0].attributes._cssText, css);
+    assert.equal(event.data.attributes[1].attributes._cssText, 'a{}');
+});
+
 test('a shared snapshot keeps its hash in the chunk and gets its tree back in the player', () => {
     const event = snapshot();
     event.data.initialOffset = { top: 120, left: 0 };
