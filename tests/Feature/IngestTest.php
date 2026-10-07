@@ -440,6 +440,20 @@ it('stores the first batch of a recording whose row another upload made a moment
     Event::assertDispatchedTimes(ReplaySessionStarted::class, 1);
 });
 
+it('starts a recording once, with whichever batch is stored first', function () {
+    Event::fake([ReplaySessionStarted::class]);
+
+    $user = $this->user();
+    $id = (string) Str::uuid();
+
+    // The second batch overtook the first (a retry, the closing request).
+    $this->ingest(['token' => $this->token($user), 'session' => $id, 'seq' => 1])->assertCreated();
+    Event::assertDispatchedTimes(ReplaySessionStarted::class, 1);
+
+    $this->ingest(['token' => $this->token($user), 'session' => $id, 'seq' => 0])->assertOk();
+    Event::assertDispatchedTimes(ReplaySessionStarted::class, 1);
+});
+
 it('refuses a first batch whose recording someone else made a moment ago', function () {
     $ada = $this->user();
     $id = (string) Str::uuid();
