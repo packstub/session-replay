@@ -251,9 +251,11 @@ class SessionReplayManager
         $nonce = $options['nonce'] ?? Vite::cspNonce();
         $nonceAttribute = $nonce ? ' nonce="'.e($nonce).'"' : '';
 
+        // The config runs again on every page Livewire's wire:navigate swaps in (the recorder reads it there); the
+        // bundle only once per document, Livewire would otherwise run it again on every page for nothing.
         return new HtmlString(
             '<script'.$nonceAttribute.'>window.__sessionReplay='.json_encode($config, JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_APOS | JSON_HEX_QUOT | JSON_UNESCAPED_SLASHES).';</script>'
-            .'<script src="'.e($this->scriptUrl('recorder.js')).'" defer'.$nonceAttribute.'></script>'
+            .'<script src="'.e($this->scriptUrl('recorder.js')).'" defer data-navigate-once'.$nonceAttribute.'></script>'
         );
     }
 

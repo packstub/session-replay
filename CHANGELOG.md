@@ -4,6 +4,10 @@ All notable changes to `packstub/session-replay` are documented here.
 
 ## Unreleased
 
+### Changed
+
+- **The recorder bundle runs once per tab with `wire:navigate`.** Livewire runs every script of the new page's body again on each `wire:navigate`, so the browser evaluated the whole recorder on every page only for it to find itself already running. Its script tag now carries `data-navigate-once`; the config next to it still runs on every page, which is how the recorder checks each one.
+
 ### Fixed
 
 - **Pages the app does not record are not recorded when reached with `wire:navigate` either.** `except`, `except_routes`, `recordWhen()` and the Filament plugin's own rules (its Sessions pages, `record()`) only kept the recorder off pages loaded in full: with `wire:navigate` the recorder of an earlier page kept going on them. The recorder now reads its config again on every page Livewire swaps in. A page without one is not recorded: no snapshot, events, markers or console messages, including those during the swap to it and away from it, until a page that is recorded; `SessionReplay.isRecording()` is `false` there. Each page's signed token is used from then on, and a page signed for another person, workspace or impersonator (a tenant switch with `wire:navigate`) starts a new recording, as a page load does; before, the visit was filed in the recording of the page the tab started on. A page's `snapshots.share` setting now applies to the snapshots taken on it.
