@@ -61,7 +61,7 @@ class SessionReplayServiceProvider extends PackageServiceProvider
         config()->set('session-replay', array_replace_recursive($defaults, $published));
 
         // A list the app set replaces the default list; merged index by index, [] could never turn anything off.
-        foreach (['except', 'capture.console', 'size.strip_attributes', 'size.keep_attributes', 'ingest.middleware', 'viewer.middleware'] as $list) {
+        foreach (['except', 'capture.console', 'size.strip_attributes', 'size.keep_attributes', 'snapshots.share_routes', 'snapshots.share_paths', 'snapshots.volatile_ids', 'ingest.middleware', 'viewer.middleware'] as $list) {
             if (Arr::has($published, $list)) {
                 config()->set('session-replay.'.$list, Arr::get($published, $list));
             }
@@ -116,6 +116,7 @@ class SessionReplayServiceProvider extends PackageServiceProvider
             Route::middleware([...(array) config('session-replay.ingest.middleware', []), ThrottleIngest::class.':session-replay'])->group(function (): void {
                 Route::post('ingest', [IngestController::class, 'store'])->name('ingest');
                 Route::post('ingest/asset', [IngestController::class, 'asset'])->name('ingest.asset');
+                Route::post('ingest/snapshot', [IngestController::class, 'snapshot'])->name('ingest.snapshot');
             });
 
             Route::middleware([...(array) config('session-replay.viewer.middleware', ['web', 'auth']), AuthorizeViewer::class])->group(function () use ($uuid): void {
@@ -123,6 +124,7 @@ class SessionReplayServiceProvider extends PackageServiceProvider
                 Route::get('{session}/manifest', [ReplayDataController::class, 'manifest'])->where('session', $uuid)->name('manifest');
                 Route::get('{session}/chunks/{seq}', [ReplayDataController::class, 'chunk'])->where('session', $uuid)->whereNumber('seq')->name('chunk');
                 Route::get('{session}/assets/{hash}', [ReplayDataController::class, 'asset'])->where('session', $uuid)->where('hash', '[a-f0-9]{64}|__hash__')->name('asset');
+                Route::get('{session}/snapshots/{hash}', [ReplayDataController::class, 'snapshot'])->where('session', $uuid)->where('hash', '[a-f0-9]{64}|__hash__')->name('snapshot');
 
                 if (config('session-replay.viewer.enabled', true)) {
                     Route::get('/', [ViewerController::class, 'index'])->name('index');

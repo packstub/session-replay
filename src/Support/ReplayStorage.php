@@ -5,7 +5,7 @@ namespace Packstub\SessionReplay\Support;
 use Illuminate\Contracts\Filesystem\Filesystem;
 use Illuminate\Support\Facades\Storage;
 
-/** Where the bytes live: gzip files on the configured disk, one folder per recording and one for stylesheets. */
+/** Where the bytes live: gzip files on the configured disk, one folder per recording and one for stylesheets and shared snapshots. */
 class ReplayStorage
 {
     public function disk(): Filesystem
@@ -28,6 +28,12 @@ class ReplayStorage
         return sprintf('%s/assets/%s/%s.css.gz', $this->directory(), substr($hash, 0, 2), $hash);
     }
 
+    /** A shared snapshot: the node tree of a page, as JSON, next to the stylesheets. */
+    public function snapshotPath(string $hash): string
+    {
+        return sprintf('%s/assets/%s/%s.json.gz', $this->directory(), substr($hash, 0, 2), $hash);
+    }
+
     /** @return int bytes written */
     public function putChunk(string $sessionId, int $seq, string $gzip): int
     {
@@ -40,6 +46,14 @@ class ReplayStorage
     public function putAsset(string $hash, string $gzip): int
     {
         $this->disk()->put($this->assetPath($hash), $gzip);
+
+        return strlen($gzip);
+    }
+
+    /** @return int bytes written */
+    public function putSnapshot(string $hash, string $gzip): int
+    {
+        $this->disk()->put($this->snapshotPath($hash), $gzip);
 
         return strlen($gzip);
     }

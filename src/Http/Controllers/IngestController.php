@@ -112,7 +112,8 @@ class IngestController
             return $this->refuse(422, 'A SHA-256 hash is required.');
         }
 
-        if (ReplayAsset::query()->where('hash', $hash)->exists()) {
+        // Only stylesheets answer "duplicate"; a shared snapshot's hash is checked like an unknown one.
+        if (ReplayAsset::query()->where('hash', $hash)->where('kind', ReplayAsset::STYLESHEET)->exists()) {
             return response()->json(['ok' => true, 'duplicate' => true]);
         }
 
@@ -134,6 +135,11 @@ class IngestController
             return $this->refuse(422, 'The content does not match the hash.');
         }
 
+        // Stored already as a shared snapshot: same bytes, and the answer must not tell (see snapshot()).
+        if (ReplayAsset::query()->where('hash', $hash)->exists()) {
+            return response()->json(['ok' => true], 201);
+        }
+
         $gzip = str_starts_with($body, "\x1f\x8b") ? $body : (string) gzencode($raw, 6);
         $bytes = $this->storage->putAsset($hash, $gzip);
 
@@ -145,6 +151,71 @@ class IngestController
         ]);
 
         return response()->json(['ok' => true], 201);
+    }
+
+    /**
+     * POST {path}/ingest/snapshot — multipart: token, hash (SHA-256 of the page's node tree as JSON), content (file; gzip or JSON).
+     *
+     * The answer never says whether the hash was stored before: the content is
+     * checked against the hash and counted against the daily limit either way,
+     * so nobody can ask the server whether someone saw a page they can guess.
+     */
+    public function snapshot(Request $request): JsonResponse
+    {
+        $context = $this->context($request);
+
+        if ($context instanceof JsonResponse) {
+            return $context;
+        }
+
+        $hash = (string) $request->input('hash');
+
+        if (preg_match('/^[a-f0-9]{64}$/', $hash) !== 1) {
+            return $this->refuse(422, 'A SHA-256 hash is required.');
+        }
+
+        // A snapshot used to travel inside a batch, so it gets a batch's limits.
+        $maxKb = (int) config('session-replay.ingest.max_batch_kb', 1536);
+        $body = $this->upload($request, 'content', $maxKb);
+
+        if ($body instanceof JsonResponse) {
+            return $body;
+        }
+
+        if ($this->overDailyLimit($context, strlen($body))) {
+            return $this->refuse(429, 'The daily upload limit was reached.', stop: true);
+        }
+
+        $gzipped = str_starts_with($body, "\x1f\x8b");
+        $ceiling = $maxKb * 1024 * self::INFLATE_FACTOR;
+        $raw = $gzipped ? $this->storage->inflate($body, $ceiling) : (strlen($body) > $ceiling ? null : $body);
+
+        if ($raw === null || ! hash_equals($hash, hash('sha256', $raw))) {
+            return $this->refuse(422, 'The content does not match the hash.');
+        }
+
+        /** @var ReplayAsset|null $asset */
+        $asset = ReplayAsset::query()->where('hash', $hash)->first();
+
+        if ($asset !== null) {
+            // Sent again: a recording is about to point at it, so the next prune must leave it. Moved at most once a
+            // day, like a stylesheet's, so a page everyone opens does not write a row on every view.
+            if ($asset->last_seen_at === null || $asset->last_seen_at->lt(now()->subDay())) {
+                $asset->forceFill(['last_seen_at' => now()])->save();
+            }
+        } else {
+            $bytes = $this->storage->putSnapshot($hash, $gzipped ? $body : (string) gzencode($raw, 6));
+
+            ReplayAsset::query()->firstOrCreate(['hash' => $hash], [
+                'kind' => ReplayAsset::SNAPSHOT,
+                'path' => $this->storage->snapshotPath($hash),
+                'bytes' => $bytes,
+                'raw_bytes' => strlen($raw),
+                'last_seen_at' => now(),
+            ]);
+        }
+
+        return response()->json(['ok' => true]);
     }
 
     protected function context(Request $request): ContextToken|JsonResponse

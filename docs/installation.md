@@ -22,7 +22,7 @@ php artisan session-replay:install
 The install command:
 
 1. publishes `config/session-replay.php`,
-2. offers to run the migrations (four tables: `replay_sessions`, `replay_chunks`, `replay_markers`, `replay_assets`),
+2. offers to run the migrations (five tables: `replay_sessions`, `replay_chunks`, `replay_markers`, `replay_assets`, `replay_session_assets`),
 3. publishes `app/Providers/SessionReplayServiceProvider.php` with the `viewSessionReplay` gate in it and registers it in `bootstrap/providers.php`.
 
 Migrations also run with a plain `php artisan migrate`; set `run_migrations` to `false` to publish and run them yourself (see [Storage](storage.md#multi-tenant-apps)).
@@ -89,11 +89,13 @@ Everything lives under one prefix (`path`, default `session-replay`; `domain` op
 | `session-replay.script` | `GET {path}/scripts/{file}` (`recorder.js`, `player.js`, `player.css`) | none |
 | `session-replay.ingest` | `POST {path}/ingest` | `ingest.middleware`, `throttle:session-replay` |
 | `session-replay.ingest.asset` | `POST {path}/ingest/asset` | same |
+| `session-replay.ingest.snapshot` | `POST {path}/ingest/snapshot` | same |
 | `session-replay.index` | `GET {path}` | `viewer.middleware`, the gate |
 | `session-replay.show` | `GET {path}/{session}` | same |
 | `session-replay.manifest` | `GET {path}/{session}/manifest` | same |
 | `session-replay.chunk` | `GET {path}/{session}/chunks/{seq}` | same |
 | `session-replay.asset` | `GET {path}/{session}/assets/{hash}` | same |
+| `session-replay.snapshot` | `GET {path}/{session}/snapshots/{hash}` | same |
 
 The script URLs carry a version, so browsers cache them for a year and pick up a new release on the next page load.
 

@@ -161,6 +161,119 @@ export function restoreAssets(events, texts) {
     return events;
 }
 
+/*
+ * Shared snapshots. On a page the app opted in (snapshots.share_routes,
+ * snapshots.share_paths), the recorder stores the snapshot's node tree once
+ * per SHA-256 of its JSON and the chunk keeps the full snapshot event without
+ * its tree: { type: 2, data: { srSnapshot: '<sha256>', initialOffset } }. A
+ * full snapshot with data.node is the format every recording had before and
+ * still has on every other page.
+ */
+
+const SNAPSHOT_KEY = 'srSnapshot';
+const HASH_PATTERN = /^[a-f0-9]{64}$/;
+
+// Attributes that hold an element id, or a space-separated list of them.
+const ID_ATTRIBUTES = ['id', 'for', 'form', 'list', 'aria-activedescendant', 'aria-controls', 'aria-describedby', 'aria-details', 'aria-errormessage', 'aria-flowto', 'aria-labelledby', 'aria-owns', 'popovertarget'];
+
+/** The hash a full snapshot event points at instead of carrying its tree, or null. */
+export function snapshotHash(event) {
+    const hash = event && event.type === EVENT_FULL_SNAPSHOT && event.data ? event.data[SNAPSHOT_KEY] : null;
+
+    return typeof hash === 'string' && HASH_PATTERN.test(hash) ? hash : null;
+}
+
+/** Swap the snapshot's tree for its hash. Mutates. */
+export function shareSnapshot(event, hash) {
+    delete event.data.node;
+    event.data[SNAPSHOT_KEY] = hash;
+
+    return event;
+}
+
+/** Hashes of the shared snapshots these events point at. */
+export function sharedSnapshots(events) {
+    const hashes = new Set();
+
+    for (const event of events) {
+        const hash = snapshotHash(event);
+
+        if (hash) hashes.add(hash);
+    }
+
+    return [...hashes];
+}
+
+/** A document with an empty body: what a snapshot that could not be loaded replays as, instead of breaking the player. */
+function emptyDocument() {
+    const element = (tagName, id, childNodes = []) => ({ type: NODE_ELEMENT, tagName, attributes: {}, childNodes, id });
+
+    return { type: 0, childNodes: [element('html', -2, [element('head', -3), element('body', -4)])], id: -1 };
+}
+
+/** Put the trees back from their JSON text (Map hash → text); every event gets its own copy. Mutates. */
+export function restoreSnapshots(events, texts) {
+    for (const event of events) {
+        const hash = snapshotHash(event);
+
+        if (!hash) continue;
+
+        let node = null;
+
+        try {
+            node = texts.has(hash) ? JSON.parse(texts.get(hash)) : null;
+        } catch {
+            node = null;
+        }
+
+        event.data.node = node && typeof node === 'object' ? node : emptyDocument();
+        delete event.data[SNAPSHOT_KEY];
+    }
+
+    return events;
+}
+
+/**
+ * Ids a script makes up on every page load (['fi-dropdown-panel-*']) get the
+ * same made-up suffix on every load: prefix + 'sr' + a counter in tree order,
+ * applied to the id and to every attribute that points at it, so the pair
+ * still matches. Only shared snapshots go through this; nothing selects on a
+ * random id, so the replay looks the same. Mutates.
+ */
+export function renameVolatileIds(node, patterns = []) {
+    const prefixes = patterns.filter((pattern) => typeof pattern === 'string' && pattern.length > 1 && pattern.endsWith('*')).map((pattern) => pattern.slice(0, -1));
+
+    if (!node || prefixes.length === 0) return node;
+
+    const renamed = new Map();
+    const rename = (token) => {
+        const prefix = prefixes.find((candidate) => token.length > candidate.length && token.startsWith(candidate));
+
+        if (!prefix) return token;
+
+        if (!renamed.has(token)) renamed.set(token, `${prefix}sr${renamed.size + 1}`);
+
+        return renamed.get(token);
+    };
+
+    walk(node, (current) => {
+        if (current.type !== NODE_ELEMENT || !current.attributes) return;
+
+        for (const name of ID_ATTRIBUTES) {
+            const value = current.attributes[name];
+
+            if (typeof value !== 'string' || value === '') continue;
+
+            const tokens = value.trim().split(/\s+/);
+            const next = tokens.map(rename);
+
+            if (next.some((token, index) => token !== tokens[index])) current.attributes[name] = next.join(' ');
+        }
+    });
+
+    return node;
+}
+
 /** Oldest first, which is what the replayer expects after chunks arrive out of order. */
 export function sortEvents(events) {
     return events.sort((a, b) => a.timestamp - b.timestamp);

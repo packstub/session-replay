@@ -173,6 +173,28 @@ return [
         ],
     ],
 
+    /*
+    |--------------------------------------------------------------------------
+    | Shared snapshots
+    |--------------------------------------------------------------------------
+    |
+    | Pages that look the same for everyone who opens them (a pricing page,
+    | the docs, a sign-in form) can have their snapshot stored once per
+    | SHA-256 of its content, like a stylesheet, instead of once per page
+    | view. Opt in per route name or path (Str::is patterns); a page that
+    | shows anything personal never matches another page view anyway, and
+    | only belongs here if the same person reloads it a lot.
+    |
+    */
+
+    'snapshots' => [
+        'share_routes' => [],
+        'share_paths' => [],
+        // Ids a script makes up on every page load (prefix*): renamed in order in a shared snapshot, so two loads of
+        // the same page still match. Filament's dropdown panels get one each.
+        'volatile_ids' => ['fi-dropdown-panel-*'],
+    ],
+
     // Milliseconds between uploads while the page is open.
     'flush_interval' => 5000,
 
@@ -192,7 +214,7 @@ return [
     'domain' => null,
 
     'ingest' => [
-        // Extra middleware for the two upload routes. None is needed, and "web" would ask for a CSRF token
+        // Extra middleware for the upload routes. None is needed, and "web" would ask for a CSRF token
         // the recorder does not send: identity comes from the token the page was rendered with.
         'middleware' => [],
         // Requests per minute per person (for guests: per rendered page); null turns the limiter off.

@@ -18,11 +18,13 @@ session-replay/
 │       ├── 000000.json.gz   one file per uploaded batch, in upload order
 │       └── 000001.json.gz
 └── assets/
-    └── c8/
-        └── c87f92ce….css.gz  a stylesheet, named by the SHA-256 of its content
+    ├── c8/
+    │   └── c87f92ce….css.gz  a stylesheet, named by the SHA-256 of its content
+    └── 4f/
+        └── 4fa6c27f….json.gz a shared page snapshot, the same way (opt-in, see below)
 ```
 
-Everything on the disk is gzip. A batch the browser compressed is stored as sent; one that arrived as plain JSON (an older browser, the final batch of a closing page) is compressed by the server, so the disk has one shape. Chunks and stylesheets are served with `Content-Encoding: gzip`, so the viewer's browser inflates them and PHP only streams.
+Everything on the disk is gzip. A batch the browser compressed is stored as sent; one that arrived as plain JSON (an older browser, the final batch of a closing page) is compressed by the server, so the disk has one shape. Chunks, stylesheets and shared snapshots are served with `Content-Encoding: gzip`, so the viewer's browser inflates them and PHP only streams.
 
 Use a private disk. On S3 or R2:
 
@@ -51,9 +53,10 @@ The files are always read through the package's gated routes, never through a pu
 | `replay_sessions` | recording | Who (`user_type`, `user_id`), workspace (`tenant_type`, `tenant_id`), `impersonator_id`, `properties`, first URL, user agent, device, viewport, counters (`page_count`, `event_count`, `chunk_count`, `bytes`, `error_count`, `rage_click_count`, `active_ms`), worst vitals (`lcp_ms`, `inp_ms`, `cls`), `pinned`, `truncated`, `started_at`, `last_activity_at`. The id is the UUID the browser generated. |
 | `replay_chunks` | uploaded batch | `seq`, the file's `path`, `bytes`, `event_count`, first and last event time. Unique per recording and `seq`, which makes a retried upload harmless. |
 | `replay_markers` | marker | `type`, `label`, `payload`, `at_ms`. This table is what lets a list filter without opening a file. |
-| `replay_assets` | stylesheet | `hash`, `path`, stored and raw size, `last_seen_at`. Shared by every recording that references it. |
+| `replay_assets` | stylesheet or shared snapshot | `hash`, `kind` (`stylesheet` or `snapshot`), `path`, stored and raw size, `last_seen_at`. Shared by every recording that references it. |
+| `replay_session_assets` | shared snapshot a recording points at | `replay_session_id`, `hash`. What the viewer checks before it serves a shared snapshot, and what keeps one from being pruned. |
 
-User and tenant keys are stored as strings, so integer, UUID and ULID keys all fit. Chunks and markers are removed with their recording by foreign key; deleting a `ReplaySession` model also deletes its folder on the disk.
+User and tenant keys are stored as strings, so integer, UUID and ULID keys all fit. Chunks, markers and snapshot references are removed with their recording by foreign key; deleting a `ReplaySession` model also deletes its folder on the disk.
 
 ## Multi-tenant apps
 
@@ -70,7 +73,7 @@ SessionReplay::userUsing(fn ($request) => auth('customer')->user());
 
 The closures run when the page renders, where the tenant is known (a subdomain, a path segment, a panel). Their results are signed into the token the recorder uploads with, so the ingest route needs no tenancy middleware.
 
-In a **database-per-tenant** app, keep the four tables on the central connection, so operators see every workspace in one place and no tenant database grows with recordings:
+In a **database-per-tenant** app, keep the tables on the central connection, so operators see every workspace in one place and no tenant database grows with recordings:
 
 ```dotenv
 SESSION_REPLAY_DB_CONNECTION=central
@@ -98,7 +101,32 @@ A full snapshot of a server-rendered page is mostly stylesheet. Four things keep
 - **Comments, scripts and head metadata are left out** of snapshots.
 - **Mouse, scroll, media and input events are sampled** (`size.sampling`).
 
-Stylesheet deduplication needs `crypto.subtle`, which browsers provide on HTTPS and on `localhost`. Without it stylesheets stay inside the snapshots and everything else works the same.
+Stylesheet deduplication and shared snapshots need `crypto.subtle`, which browsers provide on HTTPS and on `localhost`. Without it stylesheets stay inside the snapshots and everything else works the same.
+
+### Shared snapshots
+
+A full page load stores the whole page, even when the page looks the same for everyone who opens it. For pages like that you can store the snapshot once, the way stylesheets are:
+
+```php
+'snapshots' => [
+    'share_routes' => ['pricing', 'docs.*', 'login'],
+    'share_paths' => ['legal/*'],
+],
+```
+
+On those pages the recorder hashes the snapshot after masking, attribute stripping and stylesheet deduplication, uploads it once per hash and keeps only the hash in the recording. The player puts the page back before it plays. A page that changes gets a new snapshot next to the old one, so older recordings keep the page they showed. Everything that happens after the page loaded (typing, clicks, a table filling in) is recorded as before.
+
+Only pages that are identical for every visit share anything. Measured on the store's public pages and a Filament 5 panel (headless Chrome, two visitors, two loads each, the snapshot after the processing above):
+
+| Page | Snapshot (gzip) | Identical across loads | Identical across people |
+| --- | --- | --- | --- |
+| Storefront home, plugin list, a plugin page, docs index, guides, privacy | 4 to 11 KB | yes | yes |
+| A Filament sign-in page (the store's and a panel's) | 5 KB | yes | yes |
+| Panel pages: a create form, a table, a kanban board | 11 to 30 KB | yes, with `volatile_ids` | no: the user menu shows the person's name and avatar |
+
+What already keeps two loads apart is taken out before hashing: the CSRF token's meta tag (left out with the other head metadata), hidden inputs' values (CSRF `_token` included), `wire:id` and `wire:snapshot`, and rrweb's node ids, which are numbered in page order and come out the same for the same page. What is left to break a match is what differs on the page itself: a name, a flash message, a timestamp, a table of somebody's data, and ids a script makes up on every load (Filament's dropdown panels, renamed by `snapshots.volatile_ids`). Share a page only when it shows nothing about the person looking at it; a panel page shared anyway only saves space when the same person reloads it.
+
+The upload says nothing about what is stored: the server checks the content against the hash and counts it against the daily limit whether it had the snapshot or not, and answers the same either way. The viewer serves a shared snapshot only for a recording that points at it, behind the gate. A browser sends each snapshot once an hour at most, and the final request of a closing page always carries its snapshot inline.
 
 ### What to expect
 
@@ -127,7 +155,8 @@ The recording itself lives on the disk; the database only holds the index, and i
 | `replay_sessions` | recording | 0.4 KB |
 | `replay_chunks` | upload (at most one every `flush_interval` while something happens, and one per page load) | 175 bytes |
 | `replay_markers` | page view, vital, error, failed request, rage click | 155 bytes |
-| `replay_assets` | distinct stylesheet, shared by every recording | 200 bytes |
+| `replay_assets` | distinct stylesheet or shared snapshot | 200 bytes |
+| `replay_session_assets` | shared snapshot a recording points at | 100 bytes |
 
 In the lab's navigation run (19 page loads in 46 seconds) that came to 55 chunk rows and 75 marker rows, about 21 KB of rows next to 311 KB on the disk.
 
@@ -141,7 +170,7 @@ The lab behind these numbers ships with the Filament package (`workbench/lab/mea
 
 | Key | Default | What happens at the limit |
 | --- | --- | --- |
-| `ingest.max_batch_kb` | 1536 | The browser splits a batch that compresses to more; the server answers 413 to a larger upload. A gzip batch that inflates to more than 40 times this is refused (422). |
+| `ingest.max_batch_kb` | 1536 | The browser splits a batch that compresses to more; the server answers 413 to a larger upload. A gzip batch that inflates to more than 40 times this is refused (422). A shared snapshot has the same limits; one that is refused stays inside its batch. |
 | `ingest.max_session_mb` | 50 | The recording is marked `truncated` and the recorder is told to stop. |
 | `ingest.max_asset_kb` | 1536 | The limit on a stylesheet as sent (compressed); it may inflate to eight times this. A larger one is refused and stays missing in the replay. |
 | `ingest.throttle` | 240 | Uploads per minute, per signed-in person, or per rendered page for guests (a value in the signed token). Never per IP address. The recorder backs off on a 429. `null` turns it off. |
@@ -158,6 +187,7 @@ php artisan session-replay:prune --days=7
 - Deletes recordings whose last activity is older than the window, one by one, with their files.
 - Keeps pinned recordings: `$session->forceFill(['pinned' => true])->save()`.
 - Deletes stylesheets that were last referenced before the window and before the oldest recording that is left (a pinned one included), so a kept recording never loses its styling.
+- Deletes shared snapshots no recording that is left points at, a day after they were last sent.
 - Refuses a window under one day.
 
 Schedule it daily:

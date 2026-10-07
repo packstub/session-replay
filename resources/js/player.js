@@ -2,12 +2,12 @@ import Player from 'rrweb-player';
 import 'rrweb-player/dist/style.css';
 import './player.css';
 import { hasClass, livePoints, trailSegments } from './lib/pointer.js';
-import { referencedAssets, restoreAssets, sortEvents } from './lib/process.js';
+import { referencedAssets, restoreAssets, restoreSnapshots, sharedSnapshots, sortEvents } from './lib/process.js';
 
 /**
- * The player: loads a recording's manifest, its chunks and the stylesheets
- * they reference, and mounts rrweb-player with the markers next to it.
- * Mounts itself on every [data-session-replay-player] element; the element's
+ * The player: loads a recording's manifest, its chunks, the shared snapshots
+ * and stylesheets they reference, and mounts rrweb-player with the markers
+ * next to it. Mounts itself on every [data-session-replay-player] element; the element's
  * data-manifest is the manifest URL.
  */
 
@@ -105,6 +105,21 @@ async function load(manifest, progress) {
     });
 
     const events = sortEvents(chunks.flat().filter((event) => event && typeof event.timestamp === 'number'));
+    const snapshots = new Map();
+
+    // Shared snapshots first: the stylesheets they reference are only known once their trees are back.
+    await inBatches(manifest.snapshotUrl ? sharedSnapshots(events) : [], 4, async (hash) => {
+        try {
+            const response = await fetch(manifest.snapshotUrl.replace('__hash__', hash), { credentials: 'same-origin' });
+
+            if (response.ok) snapshots.set(hash, await response.text());
+        } catch {
+            // Without its tree the page replays empty rather than not at all.
+        }
+    });
+
+    restoreSnapshots(events, snapshots);
+
     const texts = new Map();
 
     await inBatches(referencedAssets(events), 4, async (hash) => {
