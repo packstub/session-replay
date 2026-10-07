@@ -103,7 +103,7 @@ Most of the replays worth watching show something going wrong. `mode = on_error`
 
 - **Nothing leaves the browser until a trigger fires.** The recorder keeps the last `buffer_seconds` in memory and takes a fresh page snapshot every half window (at most every 30 seconds), so what it keeps always starts from something playable. No recording row exists until then.
 - **A trigger uploads the window and recording carries on.** The first marker of a type in `on_error.triggers` uploads the kept window and the tab records as usual for the rest of its session, page loads included, so the replay shows what happened before and after. The recording starts where the window starts, and the page it starts on keeps its `navigation` marker.
-- **Triggers** are marker types: `error` (uncaught errors and unhandled rejections) and `request` (failed Livewire requests) by default, and `console` (`console.error`), `rage-click` and `custom` (`SessionReplay.mark()`) when you add them. A type must also be captured (`capture.errors`, `capture.livewire`, `capture.console`, `capture.rage_clicks`). With `custom` in the list, your own code decides: `SessionReplay.mark('Payment declined')` uploads the window.
+- **Triggers** are marker types: `error` (uncaught errors and unhandled rejections) and `request` (failed Livewire requests, and other same-origin requests that failed) by default, and `console` (`console.error`), `rage-click` and `custom` (`SessionReplay.mark()`) when you add them. A type must also be captured (`capture.errors`, `capture.livewire`, `capture.requests`, `capture.console`, `capture.rage_clicks`). With `custom` in the list, your own code decides: `SessionReplay.mark('Payment declined')` uploads the window.
 - **The window covers `wire:navigate` page swaps**, which keep the page alive. A full page load starts the memory over: the window holds the pages a tab went through without a reload, not the ones before it.
 - **`sample_rate`** still applies, to the tabs that keep a window. **`consent = opt-in`**: nothing is kept in memory before consent either.
 - **Memory stays bounded.** A page that changes a lot shrinks the window to its newest snapshot rather than grow without limit.
@@ -126,10 +126,10 @@ Markers are the moments worth jumping to. Each one is stored in `replay_markers`
 
 | Type | When | Setting |
 | --- | --- | --- |
-| `navigation` | Every page load; every `wire:navigate` page swap while `capture.livewire` is on. Label: path and query. | page loads: always |
+| `navigation` | Every page load; every `wire:navigate` page swap while `capture.livewire` is on; every client-side page change of a router (`history.pushState` and the back button: Inertia, Vue Router, React Router; not `replaceState`, which Livewire's `#[Url]` uses on every change). Label: path and query. | page loads and router changes: always |
 | `error` | An uncaught error or an unhandled promise rejection. Payload: source, line, column, stack. | `capture.errors` |
 | `console` | `console.error(...)`. Other levels you add to `capture.console` are kept in the recording's events, without a marker. | `capture.console` (levels; `[]` turns the console off) |
-| `request` | A Livewire request that failed. Payload: status, URL. | `capture.livewire` |
+| `request` | A Livewire request that failed. Payload: status, URL. Also any other same-origin request (`fetch`, `XMLHttpRequest`: Inertia, axios) answered with a status at or above `capture.requests` (500), or not at all. Label: method, path and status, as in `POST /api/orders failed (500)`. Payload: method, status, URL, duration in ms. Never headers or bodies; other origins, aborted requests and requests cut off by leaving the page are left out. | `capture.livewire`, `capture.requests` |
 | `vital` | LCP, INP and CLS, with value and rating. | `capture.vitals` |
 | `rage-click` | Three or more clicks on the same spot within 700 ms. Label: the control that was clicked (the button around the icon, not the icon), named by its `alt`, `aria-label` or `title`, or by a button's own caption, as in `button "Save changes"`; tag, id and classes when it has no name or sits in a masked area. The text of links, cells and anything else is never used. | `capture.rage_clicks` |
 | `custom` | Your own, from the browser. | always |
