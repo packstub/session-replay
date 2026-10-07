@@ -3,6 +3,7 @@
 namespace Packstub\SessionReplay;
 
 use Illuminate\Cache\RateLimiting\Limit;
+use Illuminate\Contracts\Debug\ExceptionHandler;
 use Illuminate\Contracts\Http\Kernel;
 use Illuminate\Http\Request;
 use Illuminate\Support\Arr;
@@ -20,9 +21,11 @@ use Packstub\SessionReplay\Http\Middleware\AuthorizeViewer;
 use Packstub\SessionReplay\Http\Middleware\ThrottleIngest;
 use Packstub\SessionReplay\Support\ContextToken;
 use Packstub\SessionReplay\Support\ReplayStorage;
+use Packstub\SessionReplay\Support\ServerErrors;
 use Spatie\LaravelPackageTools\Commands\InstallCommand;
 use Spatie\LaravelPackageTools\Package;
 use Spatie\LaravelPackageTools\PackageServiceProvider;
+use Throwable;
 
 class SessionReplayServiceProvider extends PackageServiceProvider
 {
@@ -69,6 +72,8 @@ class SessionReplayServiceProvider extends PackageServiceProvider
 
         $this->app->singleton(SessionReplayManager::class);
         $this->app->singleton(ReplayStorage::class);
+        // Per request: which recording a request belongs to must not leak into the next one (Octane, queue workers).
+        $this->app->scoped(ServerErrors::class);
     }
 
     public function packageBooted(): void
@@ -93,6 +98,16 @@ class SessionReplayServiceProvider extends PackageServiceProvider
             $key = ContextToken::decode($request->input('token'))?->throttleKey() ?? 'invalid';
 
             return Limit::perMinute((int) $perMinute)->by('session-replay|'.$key);
+        });
+
+        // Exceptions Laravel reports during a recorded request go on its timeline. Returning nothing keeps the app's
+        // own reporting going.
+        $this->callAfterResolving(ExceptionHandler::class, function (mixed $handler): void {
+            if (method_exists($handler, 'reportable')) {
+                $handler->reportable(function (Throwable $exception): void {
+                    $this->app->make(ServerErrors::class)->report($exception);
+                });
+            }
         });
 
         $this->app->booted(fn () => $this->registerRoutes());
