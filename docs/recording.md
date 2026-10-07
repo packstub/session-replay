@@ -105,7 +105,7 @@ Most of the replays worth watching show something going wrong. `mode = on_error`
 - **The window covers `wire:navigate` page swaps**, which keep the page alive. A full page load starts the memory over: the window holds the pages a tab went through without a reload, not the ones before it.
 - **`sample_rate`** still applies, to the tabs that keep a window. **`consent = opt-in`**: nothing is kept in memory before consent either.
 - **Memory stays bounded.** A page that changes a lot shrinks the window to its newest snapshot rather than grow without limit.
-- **`on_error.ask`** asks the person before anything is sent; see [Privacy](privacy.md#asking-before-a-replay-is-sent).
+- **`on_error.ask`** asks the person before anything is sent, and `on_error.livewire_error_modal` decides whether the question replaces Livewire's own error modal in production; see [Privacy](privacy.md#asking-before-a-replay-is-sent).
 - **Log context.** The recording's cookie is set while the window is kept, so the log line of the server error behind a failed request already points at the recording the browser is about to upload. Log lines of requests where nothing went wrong point at a recording that never comes.
 
 `SessionReplay.isBuffering()` is `true` while a tab keeps a window and waits; `isRecording()` turns `true` once it uploads.

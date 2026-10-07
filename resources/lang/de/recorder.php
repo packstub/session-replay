@@ -9,6 +9,10 @@ return [
         'anonymous' => 'Anonym senden, nicht mit meinem Konto verknüpft',
         'share' => 'Aufzeichnung senden',
         'decline' => 'Nicht senden',
+        // Under the title when a failed request put the question up, next to the status code and the error page's title.
+        'failed' => 'Die letzte Aktion konnte nicht abgeschlossen werden. Sie können es erneut versuchen oder die Seite neu laden, falls es weiterhin passiert.',
+        // A short notice after the replay was sent.
+        'sent' => 'Danke, die Aufzeichnung wurde gesendet.',
     ],
 
 ];

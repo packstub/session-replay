@@ -5,7 +5,7 @@ import { dropHiddenValues, redactUrl, redactUrlAttributes, redactUrls } from './
 import { EVENT_FULL_SNAPSHOT, assetPlaceholder, attributeMatcher, referencedAssets, renameVolatileIds, shareSnapshot, sharedSnapshots, stripAttributes, styleSlots } from './lib/process.js';
 import { ACTIVE_SOURCES, activeTime, checkoutInterval, estimateChars, isTrigger, trimWindow, windowStart } from './lib/buffer.js';
 import { MAX_RETRIES, pendingFate, retryDelay } from './lib/pending.js';
-import { ask } from './ask.js';
+import { ask, notice } from './ask.js';
 import { deletePending, listPending, savePending } from './pending.js';
 
 /**
@@ -60,6 +60,8 @@ let lastSnapshotAt = 0;
 let checkoutPending = false;
 let overWindow = false;
 let asking = false;
+/** What a failed request tells the question ({ status, message }), set around the mark() that may put it up. */
+let askError = null;
 // seq of the kept window batches (IndexedDB) of this recording, dropped when the tab stops.
 let kept = new Set();
 
@@ -172,7 +174,7 @@ function mark(type, label, payload = {}) {
         // Recording ended between the check and the call.
     }
 
-    if (isTrigger(type, config.onError?.triggers)) trigger();
+    return isTrigger(type, config.onError?.triggers) ? trigger() : false;
 }
 
 async function sha256(text) {
@@ -278,21 +280,24 @@ function trimBuffer(cutoff) {
     saveSession();
 }
 
-/** A trigger fired while buffering: upload the window and keep recording, after asking when onError.ask is on. */
+/**
+ * A trigger fired while buffering: upload the window and keep recording, after asking when onError.ask is on.
+ * True when the question went up.
+ */
 function trigger() {
-    if (!session || session.phase !== 'buffering' || asking || stopped) return;
+    if (!session || session.phase !== 'buffering' || asking || stopped) return false;
 
     trimBuffer(Date.now() - windowMs);
 
     if (!config.onError.ask) {
         share(false);
 
-        return;
+        return false;
     }
 
     asking = true;
 
-    ask(config.onError.labels, { offerAnonymous: !!config.onError.offerAnonymous })
+    ask(config.onError.labels, { offerAnonymous: !!config.onError.offerAnonymous, error: askError })
         .then((answer) => {
             asking = false;
 
@@ -300,6 +305,7 @@ function trigger() {
 
             if (answer.share) {
                 share(answer.anonymous);
+                notice(config.onError.labels.sent);
 
                 return;
             }
@@ -312,6 +318,8 @@ function trigger() {
         .catch(() => {
             asking = false;
         });
+
+    return true;
 }
 
 function share(anonymous) {
@@ -749,11 +757,34 @@ function watchErrors() {
     });
 }
 
+/** The title of an error page: Laravel's production pages carry the short message there ("Server Error", "Not Found"). */
+function errorTitle(html) {
+    if (typeof html !== 'string' || !html) return null;
+
+    try {
+        const title = new DOMParser().parseFromString(html.slice(0, 20000), 'text/html').title.trim().replace(/\s+/g, ' ');
+
+        return title ? title.slice(0, 120) : null;
+    } catch {
+        return null;
+    }
+}
+
 function watchLivewire() {
     const hook = () => {
         try {
             window.Livewire.hook('request', ({ url, fail }) => {
-                fail(({ status }) => mark('request', `Livewire request failed (${status})`, { status, url: String(url || '').slice(0, 500) }));
+                fail(({ status, content, preventDefault }) => {
+                    askError = { status: Number(status) || null, message: errorTitle(content) };
+
+                    const asked = mark('request', `Livewire request failed (${status})`, { status, url: String(url || '').slice(0, 500) });
+
+                    askError = null;
+
+                    // The question in place of Livewire's modal with the error page (on_error.livewire_error_modal).
+                    // An expired page (419) keeps Livewire's offer to reload: the question would have nothing to send to.
+                    if (asked && config.onError?.replaceLivewireModal && status !== 419) preventDefault?.();
+                });
             });
         } catch {
             // A Livewire without the request hook: nothing to watch.

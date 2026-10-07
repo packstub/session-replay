@@ -2,6 +2,16 @@
 
 All notable changes to `packstub/session-replay` are documented here.
 
+## Unreleased
+
+### Added
+
+- **`on_error.livewire_error_modal`.** When a failed Livewire request puts the `on_error.ask` question up, the question can take the place of Livewire's modal with the error page: `production` (the default) does so while `app.debug` is off, where that page says no more than "500 | Server Error", and keeps the debug error page behind the question in development; `replace` always, `keep` never. When a failed request put the question up, the dialog shows the status code and the error page's title under its own title and says the last action could not be completed (`recorder.ask.failed`), so nothing is lost with the modal; after "Send" a short notice thanks the person (`recorder.ask.sent`). Both strings in all five languages. An expired page (419) keeps Livewire's offer to reload. Nothing changes without `on_error.ask`.
+
+### Fixed
+
+- **The `on_error.ask` dialog is a native `<dialog>` in the browser's top layer.** It opens with `showModal()` one tick after the trigger, so it is centred in the viewport whatever the page does and sits above anything with a z-index, Livewire's own error modal included: a failed Livewire request used to open Livewire's error page over the question, which only showed once that page was closed. The rest of the page is inert while it is open; Escape and a `close()` from outside count as "Don't send".
+
 ## 1.0.0-beta.3 — 2026-10-07
 
 ### Added

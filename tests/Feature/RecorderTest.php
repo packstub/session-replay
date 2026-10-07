@@ -263,11 +263,39 @@ it('hands the browser the question in the app\'s language, with the anonymous ch
     expect($signedIn['ask'])->toBeTrue()
         ->and($signedIn['offerAnonymous'])->toBeTrue()
         ->and($signedIn['labels']['share'])->toBe('Aufzeichnung senden')
-        ->and(array_keys($signedIn['labels']))->toBe(['title', 'body', 'anonymous', 'share', 'decline']);
+        ->and(array_keys($signedIn['labels']))->toBe(['title', 'body', 'anonymous', 'share', 'decline', 'failed', 'sent']);
 
     config()->set('session-replay.privacy.anonymous', true);
     expect(recorderConfig((string) SessionReplay::recorder())['onError']['offerAnonymous'])->toBeFalse();
 
     config()->set('session-replay.privacy.anonymous', false);
     expect(recorderConfig((string) SessionReplay::recorder(['user' => null]))['onError']['offerAnonymous'])->toBeFalse();
+});
+
+it('tells the browser whether the question replaces Livewire\'s error modal', function () {
+    config()->set('session-replay.mode', 'on_error');
+    config()->set('session-replay.on_error.ask', true);
+    $this->actingAs($this->user());
+
+    $replaces = fn (): bool => recorderConfig((string) SessionReplay::recorder())['onError']['replaceLivewireModal'];
+
+    // The default replaces it in production only.
+    config()->set('app.debug', false);
+    expect((require __DIR__.'/../../config/session-replay.php')['on_error']['livewire_error_modal'])->toBe('production')
+        ->and($replaces())->toBeTrue();
+
+    config()->set('app.debug', true);
+    expect($replaces())->toBeFalse();
+
+    config()->set('session-replay.on_error.livewire_error_modal', 'replace');
+    expect($replaces())->toBeTrue();
+
+    config()->set('session-replay.on_error.livewire_error_modal', 'keep');
+    config()->set('app.debug', false);
+    expect($replaces())->toBeFalse();
+
+    // Without the question there is nothing to put in the modal's place.
+    config()->set('session-replay.on_error.livewire_error_modal', 'replace');
+    config()->set('session-replay.on_error.ask', false);
+    expect($replaces())->toBeFalse();
 });

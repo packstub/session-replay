@@ -281,6 +281,7 @@ class SessionReplayManager
             'triggers' => array_values(array_intersect(self::TRIGGERS, array_map('strval', (array) config('session-replay.on_error.triggers', ['error', 'request'])))),
             'ask' => $ask,
             'keepPending' => (bool) config('session-replay.on_error.keep_pending', true),
+            'replaceLivewireModal' => $ask && $this->replacesLivewireModal(),
             // Only a token that names a person can be sent without them; an anonymous one already is.
             'offerAnonymous' => $ask && $token->userId !== null,
             'labels' => $ask ? [
@@ -289,8 +290,20 @@ class SessionReplayManager
                 'anonymous' => __('session-replay::recorder.ask.anonymous'),
                 'share' => __('session-replay::recorder.ask.share'),
                 'decline' => __('session-replay::recorder.ask.decline'),
+                'failed' => __('session-replay::recorder.ask.failed'),
+                'sent' => __('session-replay::recorder.ask.sent'),
             ] : null,
         ];
+    }
+
+    /** Whether the question takes the place of Livewire's error modal (on_error.livewire_error_modal). */
+    protected function replacesLivewireModal(): bool
+    {
+        return match ((string) config('session-replay.on_error.livewire_error_modal', 'production')) {
+            'replace' => true,
+            'keep' => false,
+            default => ! config('app.debug'),
+        };
     }
 
     /** The player's stylesheet and script, for a page that embeds <x-session-replay::player>. */
