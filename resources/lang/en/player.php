@@ -18,5 +18,7 @@ return [
         'vital' => 'Vital',
         'custom' => 'Custom',
     ],
+    'copy_link' => 'Copy link to this moment',
+    'link_copied' => 'Link copied',
 
 ];

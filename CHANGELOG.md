@@ -4,6 +4,10 @@ All notable changes to `packstub/session-replay` are documented here.
 
 ## Unreleased
 
+### Added
+
+- **Copy link to this moment.** A button under the player's controller copies the page's URL with `?t=` at the second the replay is at, to paste into a ticket or a chat; it opens only for someone the gate lets in. `<x-session-replay::player :copy-link="false" />` hides it. New strings `player.copy_link` and `player.link_copied` in all five languages.
+
 ### Fixed
 
 - **Pages the app does not record are not recorded when reached with `wire:navigate` either.** `except`, `except_routes`, `recordWhen()` and the Filament plugin's own rules (its Sessions pages, `record()`) only kept the recorder off pages loaded in full: with `wire:navigate` the recorder of an earlier page kept going on them. The recorder now reads its config again on every page Livewire swaps in. A page without one is not recorded: no snapshot, events, markers or console messages, including those during the swap to it and away from it, until a page that is recorded; `SessionReplay.isRecording()` is `false` there. Each page's signed token is used from then on, and a page signed for another person, workspace or impersonator (a tenant switch with `wire:navigate`) starts a new recording, as a page load does; before, the visit was filed in the recording of the page the tab started on. A page's `snapshots.share` setting now applies to the snapshots taken on it.

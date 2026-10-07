@@ -125,6 +125,8 @@ The controller plays at 1x, 2x, 4x and 8x, skips inactivity and goes full screen
 https://app.test/session-replay/0b1c…?t=83
 ```
 
+**Copy link to this moment**, under the controller, copies that link for the second the replay is at, to paste into a ticket or a chat. It is the page's own URL, so it opens only for someone the gate lets in. On a site served over plain `http://` the browser offers no clipboard and the link is shown to copy by hand.
+
 ## Your own page
 
 Embed the player anywhere; the data routes check the gate for that recording on every request.
@@ -137,6 +139,7 @@ Embed the player anywhere; the data routes check the gate for that recording on 
 | --- | --- | --- |
 | `session` | required | A `ReplaySession` or its id |
 | `markers` | `true` | Show the marker list next to the player |
+| `copy-link` | `true` | Show "Copy link to this moment" under the controller |
 | `assets` | `true` | Include the player's stylesheet and script (once per page) |
 
 Other attributes (`class`, `id`) pass through to the element. To load the player's files yourself, for example in `<head>`:

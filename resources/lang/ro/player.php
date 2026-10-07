@@ -18,5 +18,7 @@ return [
         'vital' => 'Vital',
         'custom' => 'Personalizat',
     ],
+    'copy_link' => 'Copiază linkul către acest moment',
+    'link_copied' => 'Link copiat',
 
 ];
