@@ -1,7 +1,7 @@
 import Player from 'rrweb-player';
 import 'rrweb-player/dist/style.css';
 import './player.css';
-import { momentUrl } from './lib/moment.js';
+import { momentUrl, startOffset } from './lib/moment.js';
 import { hasClass, livePoints, trailSegments } from './lib/pointer.js';
 import { referencedAssets, restoreAssets, restoreSnapshots, sharedSnapshots, sortEvents } from './lib/process.js';
 
@@ -422,10 +422,10 @@ async function mount(root, options = {}) {
         window.removeEventListener('resize', resize);
     });
 
-    // ?t=83 opens the replay at 1:23.
-    const at = Number(new URLSearchParams(location.search).get('t'));
+    // ?t=83 opens the replay at 1:23; ?at=<epoch ms> (a log line's link) a moment before that time.
+    const offset = startOffset(location.search, startedAt);
 
-    if (at > 0) player.goto(at * 1000, false);
+    if (offset > 0) player.goto(offset, false);
 
     root.dispatchEvent(new CustomEvent('session-replay:ready', { detail: { player, manifest }, bubbles: true }));
 

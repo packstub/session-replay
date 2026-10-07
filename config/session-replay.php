@@ -143,6 +143,9 @@ return [
         'errors' => true,
         // Failed Livewire requests as "request" markers (when Livewire is on the page).
         'livewire' => true,
+        // Exceptions Laravel reports during a recorded request as "error" markers (source "server"): the class, status,
+        // method and path. 'message' adds the exception's message (it may carry personal data); false turns it off.
+        'server_errors' => 'class',
         // LCP, INP and CLS as "vital" markers.
         'vitals' => true,
         // Three or more clicks on the same spot within 700 ms.

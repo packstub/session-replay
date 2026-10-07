@@ -129,7 +129,7 @@ Markers are the moments worth jumping to. Each one is stored in `replay_markers`
 | Type | When | Setting |
 | --- | --- | --- |
 | `navigation` | Every page load; every `wire:navigate` page swap while `capture.livewire` is on. Label: path and query. | page loads: always |
-| `error` | An uncaught error or an unhandled promise rejection. Payload: source, line, column, stack. | `capture.errors` |
+| `error` | An uncaught error or an unhandled promise rejection. Payload: source, line, column, stack. Also an exception Laravel reported during one of the recording's requests, labelled `Server error: QueryException`, with payload `source: server`, the exception's class, status, method and path (see [Error tracking](error-tracking.md#server-errors-on-the-replay)). | `capture.errors`, `capture.server_errors` |
 | `console` | `console.error(...)`. Other levels you add to `capture.console` are kept in the recording's events, without a marker. | `capture.console` (levels; `[]` turns the console off) |
 | `request` | A Livewire request that failed. Payload: status, URL. | `capture.livewire` |
 | `vital` | LCP, INP and CLS, with value and rating. | `capture.vitals` |
