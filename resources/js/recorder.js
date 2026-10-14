@@ -5,7 +5,7 @@ import { dropHiddenValues, inputMaskOptions, maskTextAttributes, redactPluginUrl
 import { EVENT_FULL_SNAPSHOT, assetPlaceholder, attributeMatcher, referencedAssets, renameVolatileIds, shareSnapshot, sharedSnapshots, stripAttributes, styleSlots } from './lib/process.js';
 import { ACTIVE_SOURCES, activeTime, checkoutInterval, estimateChars, isTrigger, trimWindow, windowStart } from './lib/buffer.js';
 import { lastingPlugin, navigationPause } from './lib/navigation.js';
-import { hasHeader, requestMarker } from './lib/requests.js';
+import { hasHeader, observe, requestMarker } from './lib/requests.js';
 import { MAX_RETRIES, pendingFate, retryDelay } from './lib/pending.js';
 import { ask, notice } from './ask.js';
 import { deletePending, listPending, pendingStoreExists, savePending } from './pending.js';
@@ -827,9 +827,10 @@ let lastPage = null;
 
 /** One "navigation" marker per page, however many signals announce it. */
 function markPage() {
-    if (lastPage === location.href) return;
+    // Without the hash: a jump to an anchor (popstate) is no page view.
+    if (lastPage === location.pathname + location.search) return;
 
-    lastPage = location.href;
+    lastPage = location.pathname + location.search;
 
     const page = new URL(redacted(location.href));
 
@@ -953,8 +954,11 @@ function watchRequests() {
                 const method = init?.method || input?.method || 'GET';
 
                 if (!hasHeader(init?.headers, 'X-Livewire') && !hasHeader(input?.headers, 'X-Livewire')) {
-                    promise.then(
-                        (response) => report({ url: response.url || url, method, status: response.status, duration: performance.now() - started }),
+                    // Settles like the app's own promise: a failure the app does not catch still reaches
+                    // unhandledrejection (the error marker, the app's error tracker).
+                    return observe(
+                        promise,
+                        (response) => report({ url: response.url || url, method, status: response.status, type: response.type, duration: performance.now() - started }),
                         (error) => error?.name !== 'AbortError' && report({ url, method, status: 0, duration: performance.now() - started }),
                     );
                 }
@@ -969,13 +973,14 @@ function watchRequests() {
     if (typeof XMLHttpRequest === 'undefined') return;
 
     const requests = new WeakMap();
+    const listening = new WeakSet();
     const proto = XMLHttpRequest.prototype;
     const open = proto.open;
     const setRequestHeader = proto.setRequestHeader;
     const send = proto.send;
 
     proto.open = function (method, url) {
-        requests.set(this, { method, url: String(url), livewire: false, aborted: false });
+        requests.set(this, { method, url: String(url), livewire: false, aborted: false, started: 0 });
 
         return open.apply(this, arguments);
     };
@@ -989,12 +994,23 @@ function watchRequests() {
     proto.send = function () {
         const request = requests.get(this);
 
-        if (request && !request.livewire) {
-            const started = performance.now();
+        if (request) request.started = performance.now();
 
-            this.addEventListener('abort', () => (request.aborted = true));
+        // Listeners once per object: an XMLHttpRequest opened again (a retry helper) reads its current request.
+        if (request && !listening.has(this)) {
+            listening.add(this);
+
+            this.addEventListener('abort', () => {
+                const current = requests.get(this);
+
+                if (current) current.aborted = true;
+            });
             this.addEventListener('loadend', () => {
-                if (!request.aborted) report({ url: this.responseURL || request.url, method: request.method, status: this.status, duration: performance.now() - started });
+                const current = requests.get(this);
+
+                if (!current || current.livewire || current.aborted) return;
+
+                report({ url: this.responseURL || current.url, method: current.method, status: this.status, duration: performance.now() - current.started });
             });
         }
 

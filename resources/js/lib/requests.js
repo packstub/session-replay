@@ -10,7 +10,10 @@
  */
 
 /** The marker for a finished request, or null when it is not one: { label, payload }. */
-export function requestMarker({ url, method = 'GET', status = 0, duration = 0, threshold = 500, page, skip = [] }) {
+export function requestMarker({ url, method = 'GET', status = 0, duration = 0, threshold = 500, page, skip = [], type = null }) {
+    // A fetch with redirect: 'manual' or mode: 'no-cors' resolves with a status of 0 that is no failure.
+    if (type === 'opaque' || type === 'opaqueredirect') return null;
+
     let parsed;
     let origin;
 
@@ -47,4 +50,35 @@ export function hasHeader(headers, name) {
     } catch {
         return false;
     }
+}
+
+/**
+ * A promise that settles like `promise`, after `onResolve` or `onReject` saw
+ * how. Attaching a handler to the app's own promise would mark it handled, and
+ * a failure the app never catches would no longer reach unhandledrejection
+ * (and the error marker, or the app's error tracker). The app gets this one
+ * instead: its own handlers, or the lack of them, keep their effect. Neither
+ * callback can get in the way.
+ */
+export function observe(promise, onResolve, onReject) {
+    return promise.then(
+        (value) => {
+            try {
+                onResolve(value);
+            } catch {
+                // Nothing of ours in the way of the app's request.
+            }
+
+            return value;
+        },
+        (error) => {
+            try {
+                onReject(error);
+            } catch {
+                // As above.
+            }
+
+            throw error;
+        },
+    );
 }
