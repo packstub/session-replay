@@ -841,8 +841,11 @@ function watchErrors() {
         // Resource load failures bubble here without a message; they are not script errors.
         if (!event.message) return;
 
-        lastError = { at: Date.now(), label: event.message };
-        mark('error', redactUrls(event.message, config.privacy.redactQuery), {
+        const label = redactUrls(event.message, config.privacy.redactQuery);
+
+        // Redacted, as the console marker's label is: consoleMarker() compares the two.
+        lastError = { at: Date.now(), label };
+        mark('error', label, {
             source: redacted(event.filename),
             line: event.lineno,
             column: event.colno,
@@ -851,10 +854,10 @@ function watchErrors() {
     });
 
     window.addEventListener('unhandledrejection', (event) => {
-        const label = String(event.reason?.message || event.reason || 'Unhandled promise rejection');
+        const label = redactUrls(String(event.reason?.message || event.reason || 'Unhandled promise rejection'), config.privacy.redactQuery);
 
         lastError = { at: Date.now(), label };
-        mark('error', redactUrls(label, config.privacy.redactQuery), { stack: redactUrls(String(event.reason?.stack || ''), config.privacy.redactQuery).slice(0, 2000) });
+        mark('error', label, { stack: redactUrls(String(event.reason?.stack || ''), config.privacy.redactQuery).slice(0, 2000) });
     });
 }
 
@@ -1065,7 +1068,8 @@ function start() {
     saveSession();
     sweepPending({ all: !keepPending }).catch(() => {});
 
-    if (!session.sampled) clearCookie();
+    // An unsampled tab sets no cookie (saveSession) but clears none either: the cookie is one per origin, and another
+    // tab may be recording.
 
     if (!session.sampled || session.phase === 'declined') return false;
 
