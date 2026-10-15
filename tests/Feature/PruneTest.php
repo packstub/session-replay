@@ -6,6 +6,7 @@ use Packstub\SessionReplay\Models\ReplayAsset;
 use Packstub\SessionReplay\Models\ReplayChunk;
 use Packstub\SessionReplay\Models\ReplayMarker;
 use Packstub\SessionReplay\Models\ReplaySession;
+use Packstub\SessionReplay\Models\ReplaySessionAsset;
 use Packstub\SessionReplay\Support\ReplayStorage;
 
 function storedAsset(string $css, $lastSeen): ReplayAsset
@@ -71,6 +72,22 @@ it('keeps a stylesheet an old pinned recording still points at', function () {
     $this->artisan('session-replay:prune')->assertSuccessful();
 
     expect(ReplayAsset::query()->whereKey($asset->id)->exists())->toBeTrue();
+});
+
+it('keeps only the stylesheets a pinned recording points at once the references are stored', function () {
+    $pinned = $this->recording(attributes: ['started_at' => now()->subDays(90), 'last_activity_at' => now()->subDays(90), 'pinned' => true]);
+
+    $theirs = storedAsset('d{}', now()->subDays(90));
+    $other = storedAsset('e{}', now()->subDays(89));
+
+    ReplaySessionAsset::query()->insert(['replay_session_id' => $pinned->id, 'hash' => $theirs->hash, 'created_at' => now()]);
+
+    $this->artisan('session-replay:prune')->assertSuccessful();
+
+    expect(ReplayAsset::query()->pluck('hash')->all())->toBe([$theirs->hash]);
+
+    Storage::disk('replays')->assertExists($theirs->path);
+    Storage::disk('replays')->assertMissing($other->path);
 });
 
 it('removes the files when a recording is deleted by hand', function () {

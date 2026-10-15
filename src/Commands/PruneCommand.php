@@ -36,14 +36,21 @@ class PruneCommand extends Command
             }
         });
 
-        // A batch that references a stylesheet moves its last-seen date (at most once a day), so a stylesheet last seen
-        // well before the oldest recording that is left, a pinned one included, is referenced by nothing.
-        $oldest = ReplaySession::query()->min('started_at');
+        // A stylesheet goes when it was last referenced before the window and no recording that is left points at it
+        // (deleteAssets). Recordings from before the references were stored point at nothing, and a batch moved a
+        // stylesheet's last-seen date at most once a day: a pinned one of those keeps every stylesheet last seen since
+        // it started, as before; the others are inside the window, where the date alone keeps theirs.
+        $oldestUnreferenced = ReplaySession::query()
+            ->where('pinned', true)
+            ->whereNotExists(fn ($references) => $references
+                ->from((new ReplaySessionAsset)->getTable())
+                ->whereColumn('replay_session_assets.replay_session_id', 'replay_sessions.id'))
+            ->min('started_at');
 
         $assets = $this->deleteAssets($storage, ReplayAsset::query()
             ->where('kind', ReplayAsset::STYLESHEET)
             ->where('last_seen_at', '<', now()->subDays($days))
-            ->when($oldest !== null, fn ($query) => $query->where('last_seen_at', '<', Carbon::parse($oldest)->subDays(2))));
+            ->when($oldestUnreferenced !== null, fn ($query) => $query->where('last_seen_at', '<', Carbon::parse($oldestUnreferenced)->subDays(2))));
 
         // A shared snapshot goes when no recording that is left points at it. The day of grace covers the moment
         // between its upload and the batch that points at it; sending it again moves the date once it is an hour old,

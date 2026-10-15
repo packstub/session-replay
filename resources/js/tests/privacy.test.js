@@ -153,6 +153,60 @@ test('text attributes of masked elements are masked, in snapshots, added nodes a
     assert.equal(change.data.attributes[1].attributes['aria-label'], 'Menu');
 });
 
+test('a submit caption a script changed, a meta content and a download name are masked like text', () => {
+    const snapshot = {
+        type: 2,
+        data: {
+            node: {
+                type: 0,
+                id: 1,
+                childNodes: [
+                    { type: 2, id: 2, tagName: 'meta', attributes: { name: 'description', content: 'Jane Doe, account manager' }, childNodes: [] },
+                    { type: 2, id: 3, tagName: 'meta', attributes: { charset: 'utf-8' }, childNodes: [] },
+                    { type: 2, id: 4, tagName: 'a', attributes: { href: '/files/1', download: 'passport-jane.pdf' }, childNodes: [] },
+                    { type: 2, id: 5, tagName: 'option', attributes: { value: '7', label: 'Jane Doe' }, childNodes: [] },
+                ],
+            },
+        },
+    };
+
+    maskTextAttributes(snapshot, () => true);
+
+    const [description, charset, link, option] = snapshot.data.node.childNodes;
+
+    assert.equal(description.attributes.content, '**** **** ******* *******');
+    assert.equal(description.attributes.name, 'description');
+    assert.deepEqual(charset.attributes, { charset: 'utf-8' });
+    assert.equal(link.attributes.download, '*****************');
+    assert.equal(link.attributes.href, '/files/1');
+    assert.equal(option.attributes.label, '**** ***');
+    assert.equal(option.attributes.value, '7');
+
+    // A changed attribute names only the element: the recorder says what it is.
+    const elements = { 7: { tagName: 'input', type: 'submit' }, 8: { tagName: 'input', type: 'text' }, 9: { tagName: 'meta', type: '' } };
+    const change = {
+        type: 3,
+        data: {
+            source: 0,
+            adds: [],
+            attributes: [
+                { id: 7, attributes: { value: 'Remove Jane' } },
+                { id: 8, attributes: { value: 'typed' } },
+                { id: 9, attributes: { content: 'Jane Doe' } },
+                { id: 10, attributes: { value: 'Remove Jane' } },
+            ],
+        },
+    };
+
+    maskTextAttributes(change, () => true, (id) => elements[id] ?? null);
+
+    assert.equal(change.data.attributes[0].attributes.value, '****** ****');
+    // A text input's value is the input masking's job, and an element the mirror does not know keeps its value.
+    assert.equal(change.data.attributes[1].attributes.value, 'typed');
+    assert.equal(change.data.attributes[2].attributes.content, '**** ***');
+    assert.equal(change.data.attributes[3].attributes.value, 'Remove Jane');
+});
+
 test('a text input keeps its value attribute for the input masking to handle', () => {
     const snapshot = { type: 2, data: { node: { type: 2, id: 1, tagName: 'input', attributes: { type: 'text', value: '***' }, childNodes: [] } } };
 

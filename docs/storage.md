@@ -54,7 +54,7 @@ The files are always read through the package's gated routes, never through a pu
 | `replay_chunks` | uploaded batch | `seq`, the file's `path`, `bytes`, `event_count`, first and last event time. Unique per recording and `seq`, which makes a retried upload harmless. A batch's chunk row, markers, counters and snapshot references are written in one transaction, so a batch that failed half way is stored in full when it is retried. |
 | `replay_markers` | marker | `type`, `label`, `payload`, `at_ms`. This table is what lets a list filter without opening a file. |
 | `replay_assets` | stylesheet or shared snapshot | `hash`, `kind` (`stylesheet` or `snapshot`), `path`, stored and raw size, `last_seen_at`. Shared by every recording that references it. A shared snapshot whose content is also sent as a stylesheet becomes a stylesheet, and recordings that point at it as a snapshot still get it. |
-| `replay_session_assets` | shared snapshot a recording points at | `replay_session_id`, `hash`. What the viewer checks before it serves a shared snapshot, and what keeps one from being pruned. |
+| `replay_session_assets` | stylesheet or shared snapshot a recording points at | `replay_session_id`, `hash`. What the viewer checks before it serves a shared snapshot, and what keeps a stylesheet or a snapshot from being pruned while a recording that is left needs it. |
 
 User and tenant keys are stored as strings, so integer, UUID and ULID keys all fit. Chunks, markers and snapshot references are removed with their recording by foreign key; deleting a `ReplaySession` model also deletes its folder on the disk.
 
@@ -186,7 +186,7 @@ php artisan session-replay:prune --days=7
 
 - Deletes recordings whose last activity is older than the window, one by one, with their files.
 - Keeps pinned recordings: `$session->forceFill(['pinned' => true])->save()`.
-- Deletes stylesheets that were last referenced before the window and before the oldest recording that is left (a pinned one included), so a kept recording never loses its styling.
+- Deletes stylesheets that were last referenced before the window and that no recording that is left points at, so a pinned recording keeps its styling for as long as it stays, without keeping every other stylesheet of its day. Recordings made before 1.0.0-beta.6 point at nothing: while a pinned one of those is left, stylesheets last seen since it started stay too.
 - Deletes shared snapshots no recording that is left points at, a day after they were last sent. Sending one again moves that date once it is an hour old, so the batch that points at it always has at least 23 hours to arrive.
 - Refuses a window under one day.
 

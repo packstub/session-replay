@@ -160,10 +160,11 @@ export function inputMaskOptions(maskAllInputs) {
 /**
  * Text the page shows through attributes rather than text nodes: rrweb masks
  * text nodes only, so with privacy.mask_all_text or inside a masked element
- * an avatar's alt, a tooltip, a placeholder or a button's caption stayed
- * readable.
+ * an avatar's alt, a tooltip, a placeholder, a button's caption, a download's
+ * file name or an option's label stayed readable. So did a <meta content>
+ * (the description of a profile page), which is text about the page.
  */
-export const TEXT_ATTRIBUTES = ['alt', 'title', 'aria-label', 'aria-description', 'aria-valuetext', 'placeholder'];
+export const TEXT_ATTRIBUTES = ['alt', 'title', 'aria-label', 'aria-description', 'aria-valuetext', 'placeholder', 'download', 'label'];
 const CAPTION_INPUT_TYPES = new Set(['submit', 'button', 'reset']);
 
 function maskText(value) {
@@ -172,29 +173,39 @@ function maskText(value) {
 
 /**
  * Mask the text attributes of every element that isMasked(id) says is masked,
- * in a snapshot, in the nodes a mutation adds and in changed attributes.
+ * in a snapshot, in the nodes a mutation adds and in changed attributes. A
+ * changed attribute names only the element's id, so `elementOf(id)` says
+ * what it is ({ tagName, type }, from rrweb's mirror): the caption of a
+ * submit button a script changed, or a <meta content>, is masked too.
  * Mutates.
  */
-export function maskTextAttributes(event, isMasked) {
-    const maskIn = (attributes, id, tagName) => {
+export function maskTextAttributes(event, isMasked, elementOf = null) {
+    const maskIn = (attributes, id, tagName, type) => {
         if (!attributes) return;
 
         const names = TEXT_ATTRIBUTES.filter((name) => typeof attributes[name] === 'string');
         // The caption of <input type="submit" value="Remove Jane Doe">.
-        const caption = tagName === 'input' && typeof attributes.value === 'string' && CAPTION_INPUT_TYPES.has(String(attributes.type || '').toLowerCase());
+        const caption = tagName === 'input' && typeof attributes.value === 'string' && CAPTION_INPUT_TYPES.has(String(type || '').toLowerCase());
+        // <meta name="description" content="Jane Doe's profile">: text about the page, never shown, never needed.
+        const meta = tagName === 'meta' && typeof attributes.content === 'string';
 
         // Asked only for elements that carry such text: the lookup walks up the page.
-        if ((names.length === 0 && !caption) || !isMasked(id)) return;
+        if ((names.length === 0 && !caption && !meta) || !isMasked(id)) return;
 
         for (const name of names) attributes[name] = maskText(attributes[name]);
 
         if (caption) attributes.value = maskText(attributes.value);
+        if (meta) attributes.content = maskText(attributes.content);
     };
 
-    for (const root of rootsOf(event)) walk(root, (node) => node.type === NODE_ELEMENT && maskIn(node.attributes, node.id, node.tagName));
+    for (const root of rootsOf(event)) walk(root, (node) => node.type === NODE_ELEMENT && maskIn(node.attributes, node.id, node.tagName, node.attributes?.type));
 
     if (event.type === EVENT_INCREMENTAL && event.data && event.data.source === SOURCE_MUTATION) {
-        for (const change of event.data.attributes || []) maskIn(change.attributes, change.id, null);
+        for (const change of event.data.attributes || []) {
+            const element = typeof elementOf === 'function' ? elementOf(change.id) : null;
+
+            maskIn(change.attributes, change.id, element?.tagName ?? null, element?.type ?? change.attributes?.type);
+        }
     }
 
     return event;

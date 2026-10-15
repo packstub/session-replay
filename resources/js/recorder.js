@@ -458,6 +458,17 @@ function isTextMasked(id) {
     }
 }
 
+/** What rrweb serialized as `id` is, for a changed attribute that names only the id: its tag and, for an input, its type. */
+function elementOf(id) {
+    try {
+        const node = record.mirror.getNode(id);
+
+        return node && node.nodeType === 1 ? { tagName: node.tagName.toLowerCase(), type: node.getAttribute('type') || '' } : null;
+    } catch {
+        return null;
+    }
+}
+
 /** mask_all_text outside unmask_text_selector, and mask_text_selector everywhere. */
 function isElementTextMasked(element) {
     if (config.privacy.maskAllText) return !isUnmasked(element, config.privacy.unmaskTextSelector, config.privacy.maskTextSelector);
@@ -474,7 +485,7 @@ function emit(event) {
     dropHiddenValues(event);
     redactUrlAttributes(event, config.privacy.redactQuery, location.href);
     redactPluginUrls(event, config.privacy.redactQuery);
-    if (textMaskingOn()) maskTextAttributes(event, isTextMasked);
+    if (textMaskingOn()) maskTextAttributes(event, isTextMasked, elementOf);
 
     if (event.type === EVENT_META && event.data && event.data.href) event.data.href = redacted(event.data.href);
     // Once the tab used wire:navigate its snapshots are numbered after the first page's, so they never match a shared

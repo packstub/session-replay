@@ -11,6 +11,7 @@ use Packstub\SessionReplay\Models\ReplayAsset;
 use Packstub\SessionReplay\Models\ReplayChunk;
 use Packstub\SessionReplay\Models\ReplayMarker;
 use Packstub\SessionReplay\Models\ReplaySession;
+use Packstub\SessionReplay\Models\ReplaySessionAsset;
 use Packstub\SessionReplay\Support\ContextToken;
 
 it('stores the first batch as a recording with who, where and the file on disk', function () {
@@ -250,8 +251,12 @@ it('asks for stylesheets it does not have and stores them under the hash of thei
     expect($asset->hash)->toBe($hash)->and($asset->raw_bytes)->toBe(strlen($css));
     expect(gzdecode(Storage::disk('replays')->get($asset->path)))->toBe($css);
 
-    // The next recording that references it has nothing to upload.
-    $this->ingest(['token' => $token, 'meta' => ['assets' => [$hash]]])->assertCreated()->assertJson(['missing_assets' => []]);
+    // The next recording that references it has nothing to upload, and is remembered as pointing at it.
+    $session = (string) Str::uuid();
+
+    $this->ingest(['token' => $token, 'session' => $session, 'meta' => ['assets' => [$hash]]])->assertCreated()->assertJson(['missing_assets' => []]);
+
+    expect(ReplaySessionAsset::query()->where('hash', $hash)->pluck('replay_session_id')->all())->toBe([$session]);
     $this->post(route('session-replay.ingest.asset'), ['token' => $token, 'hash' => $hash, 'content' => 'x'])->assertOk()->assertJson(['duplicate' => true]);
 });
 
