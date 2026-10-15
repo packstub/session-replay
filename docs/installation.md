@@ -14,6 +14,8 @@ The package has no front-end build step. The recorder and the player ship prebui
 
 ## Install
 
+Recordings and their index go to your default database connection. If they belong somewhere else (a central connection in a multi-tenant app), set `SESSION_REPLAY_DB_CONNECTION` first, because the install command offers to run the migrations; see [Storage](storage.md#multi-tenant-apps).
+
 ```bash
 composer require "packstub/session-replay:^1.0@beta"
 php artisan session-replay:install
@@ -38,6 +40,8 @@ Put the directive before `</body>` in every layout you want recorded:
 ```
 
 It renders nothing when the request is not recorded: recording turned off, a guest while `guests` is `false`, an excluded path, or a `recordWhen()` callback that said no. See [Recording](recording.md).
+
+**Inertia, Vue or React:** put it in the root template that every page renders through (`resources/views/app.blade.php` with Inertia), before `</body>`. The recorder stays loaded while the router changes pages.
 
 ## Decide who may watch
 
@@ -79,6 +83,33 @@ It deletes recordings older than `retention.days` (30 by default), except pinned
 ## Try it
 
 Sign in, open a recorded page, click around for a few seconds, then open `/session-replay`. The recorder uploads every five seconds and when the tab is hidden.
+
+## Before production
+
+- **A disk every server sees.** The default `local` disk is fine on one server. With several servers, Laravel Cloud, Vapor or containers that are replaced on deploy, set `SESSION_REPLAY_DISK` to a private shared disk (S3, R2); see [Storage](storage.md#the-disk).
+- **The gate.** Outside `local` the viewer answers 403 until `viewSessionReplay` lets someone in.
+- **The clean-up** is scheduled (above).
+- **Your privacy policy** says what is recorded; [Privacy](privacy.md#wording-for-your-privacy-policy) has wording to start from.
+
+## When nothing shows up
+
+Work through these in order:
+
+1. **Is the recorder on the page?** View the page source and look for `window.__sessionReplay`. If it is missing, the request was not recorded: a guest while `guests` is `false`, a path in `except`, a route in `except_routes`, `recordWhen()` saying no, or `SESSION_REPLAY_ENABLED=false`. The directive must also be in the layout that page uses.
+2. **Does the browser upload?** In the network tab, look for `POST /session-replay/ingest` a second or so after the page loads.
+   - **No request:** check the following.
+     - `consent` is `opt-in` and nobody called `SessionReplay.consent(true)`.
+     - The browser sends Global Privacy Control while `respect_gpc` is on.
+     - `sample_rate` is below 1.
+     - The tab is in mode `on_error` and nothing went wrong yet. `SessionReplay.isRecording()` and `isBuffering()` in the console tell you which.
+   - **A request the browser blocked** (`ERR_BLOCKED_BY_CLIENT`): a content blocker. Change `path` to something neutral.
+   - **401:** the page's token expired or `APP_KEY` changed. Reload.
+   - **419:** something added `web` to `ingest.middleware`. The endpoint needs no session or CSRF token; leave the list empty.
+   - **422 "Nothing was uploaded":** the batch was over PHP's `upload_max_filesize` or `post_max_size`, so PHP dropped it. **413:** it was over `ingest.max_batch_kb`. See [PHP upload limit](#php-upload-limit).
+   - **429:** the per-minute throttle or the person's daily allowance; the recorder backs off. See [Storage](storage.md#limits).
+3. **Does the viewer let you in?** A 403 on `/session-replay` outside `local` means the gate said no. A redirect to `/login` means `viewer.middleware` wants a login your app does not have on that guard; see [Watching replays](watching.md#the-built-in-viewer).
+
+On a site served over plain `http://` (other than `localhost`), browsers withhold `crypto.subtle`. Recording still works, with each stylesheet stored inside the snapshot instead of once per content.
 
 ## The routes
 
