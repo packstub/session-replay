@@ -1,6 +1,7 @@
 <?php
 
 use Illuminate\Support\Arr;
+use Illuminate\Support\Facades\Blade;
 use Illuminate\Support\Facades\Gate;
 use Packstub\SessionReplay\Facades\SessionReplay;
 use Packstub\SessionReplay\Models\ReplaySession;
@@ -230,4 +231,11 @@ it('loads the player script once per tab with wire:navigate', function () {
 
     expect($html)->toMatch('/<script src="[^"]+player\.js[^"]*" defer data-navigate-once><\/script>/')
         ->and($html)->toContain('player.css');
+});
+
+it('offers the link to the moment in the player unless the page turns it off', function () {
+    $session = $this->recording($this->user());
+
+    expect(Blade::render('<x-session-replay::player :session="$session" :assets="false" />', ['session' => $session]))->toContain('data-copy-link="true"')
+        ->and(Blade::render('<x-session-replay::player :session="$session" :assets="false" :copy-link="false" />', ['session' => $session]))->toContain('data-copy-link="false"');
 });

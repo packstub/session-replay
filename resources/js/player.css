@@ -73,6 +73,22 @@
     opacity: 0.55;
 }
 
+.sr-player__actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: 0.375rem;
+    padding: 0.5rem 0.625rem;
+    border-top: 1px solid var(--sr-border);
+}
+
+.sr-chip--action {
+    opacity: 1;
+}
+
+.sr-chip--action:hover {
+    background: var(--sr-hover);
+}
+
 .sr-chip[aria-pressed='true'] {
     opacity: 1;
     border-color: var(--sr-chip);
