@@ -58,6 +58,14 @@ Three attributes cover what the defaults cannot know about:
 
 Every text node is replaced with asterisks, and so is text the page shows through attributes: `alt`, `title`, `aria-label`, `placeholder` and the caption of an `<input type="submit">`. Page titles are left out of the `navigation` markers. The replay still shows where people click and what breaks, without a readable word. The same attributes are masked inside `privacy.mask_text_selector` (`data-replay-mask`), and a button whose caption holds masked text is named by its tag in rage-click markers.
 
+To keep your own interface readable in this mode (menus, headings, column headers, button captions), mark it with `data-replay-unmask`:
+
+```blade
+<nav data-replay-unmask>…</nav>
+```
+
+Text inside stays as it is, except where `mask_text_selector` matches (`data-replay-mask` and rich editors stay masked inside it too); input values are never affected. The selector is `privacy.unmask_text_selector`. Without `mask_all_text` it does nothing.
+
 ## Consent
 
 | `consent` | Behaviour |

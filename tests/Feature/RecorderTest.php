@@ -122,6 +122,7 @@ it('passes the app\'s privacy, consent and size settings to the browser', functi
 
     expect($config['consent'])->toBe('opt-in')
         ->and($config['privacy']['maskAllText'])->toBeTrue()
+        ->and($config['privacy']['unmaskTextSelector'])->toBe('[data-replay-unmask]')
         ->and($config['capture']['console'])->toBe([])
         ->and($config['cookie'])->toBeNull()
         ->and($config['sampleRate'])->toBe(0.25);

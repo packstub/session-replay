@@ -39,6 +39,7 @@
 | `privacy.mask_all_inputs` | `true` | Mask every input's value. Password inputs are masked regardless. |
 | `privacy.mask_all_text` | `false` | Mask every text node: layout-only recordings. |
 | `privacy.mask_text_selector` | `[data-replay-mask], [data-replay-mask] *, [contenteditable], [contenteditable] *` | Elements whose text is replaced with asterisks. Rich editors are in the default, so what people type there is masked like an input. |
+| `privacy.unmask_text_selector` | `[data-replay-unmask]` | With `mask_all_text`: text inside matching elements stays readable, unless `mask_text_selector` matches it. Input values are never affected. |
 | `privacy.block_selector` | `[data-replay-block]` | Elements recorded as an empty box of the same size. |
 | `privacy.ignore_selector` | `[data-replay-ignore]` | Elements whose input events are not recorded. |
 | `privacy.anonymous` | `false` | Record signed-in people without storing who they are (no person, no impersonator; the workspace stays). Uploads are still limited per person. See [Privacy](privacy.md#recordings-that-name-nobody). |

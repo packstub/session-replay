@@ -217,3 +217,23 @@ export function redactPluginUrls(event, names) {
 
     return event;
 }
+
+/**
+ * With privacy.mask_all_text, whether an element's text stays readable: it is
+ * inside privacy.unmask_text_selector and not inside mask_text_selector,
+ * which always wins. A selector the browser rejects counts as "masked".
+ */
+export function isUnmasked(element, unmaskSelector, maskSelector) {
+    if (!element || !unmaskSelector || typeof element.closest !== 'function') return false;
+
+    try {
+        return !!element.closest(unmaskSelector) && !(maskSelector && element.closest(maskSelector));
+    } catch {
+        return false;
+    }
+}
+
+/** rrweb's maskTextFn for mask_all_text with an unmask selector: the text as it is inside it, asterisks elsewhere. */
+export function textMasker(unmaskSelector, maskSelector) {
+    return (text, element) => (isUnmasked(element, unmaskSelector, maskSelector) ? text : String(text ?? '').replace(/\S/g, '*'));
+}
