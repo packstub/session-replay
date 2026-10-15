@@ -226,6 +226,7 @@ class SessionReplayManager
                 'console' => array_values((array) config('session-replay.capture.console', [])),
                 'errors' => (bool) config('session-replay.capture.errors', true),
                 'livewire' => (bool) config('session-replay.capture.livewire', true),
+                'requests' => $this->requestThreshold(),
                 'vitals' => (bool) config('session-replay.capture.vitals', true),
                 'rageClicks' => (bool) config('session-replay.capture.rage_clicks', true),
             ],
@@ -255,6 +256,18 @@ class SessionReplayManager
             '<script'.$nonceAttribute.'>window.__sessionReplay='.json_encode($config, JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_APOS | JSON_HEX_QUOT | JSON_UNESCAPED_SLASHES).';</script>'
             .'<script src="'.e($this->scriptUrl('recorder.js')).'" defer'.$nonceAttribute.'></script>'
         );
+    }
+
+    /** The status from which a request is a failure (capture.requests), or false when requests are not watched. */
+    protected function requestThreshold(): int|false
+    {
+        $threshold = config('session-replay.capture.requests', 500);
+
+        if ($threshold === false || $threshold === null) {
+            return false;
+        }
+
+        return $threshold === true ? 500 : max(400, min(599, (int) $threshold));
     }
 
     /** "session" (every recorded tab uploads from its first page) or "on_error" (only when something goes wrong). */

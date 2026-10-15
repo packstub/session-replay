@@ -143,6 +143,9 @@ return [
         'errors' => true,
         // Failed Livewire requests as "request" markers (when Livewire is on the page).
         'livewire' => true,
+        // Other requests (fetch, XMLHttpRequest: Inertia, axios) as "request" markers: same-origin ones answered
+        // with this status or higher, or not at all. Never headers or bodies. false turns it off.
+        'requests' => 500,
         // LCP, INP and CLS as "vital" markers.
         'vitals' => true,
         // Three or more clicks on the same spot within 700 ms.

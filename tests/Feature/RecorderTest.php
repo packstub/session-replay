@@ -127,6 +127,23 @@ it('passes the app\'s privacy, consent and size settings to the browser', functi
         ->and($config['sampleRate'])->toBe(0.25);
 });
 
+it('passes the status from which a request is a failure, or false', function () {
+    $this->actingAs($this->user());
+
+    $threshold = function (mixed $value): mixed {
+        config()->set('session-replay.capture.requests', $value);
+
+        return recorderConfig((string) SessionReplay::recorder())['capture']['requests'];
+    };
+
+    expect($threshold(500))->toBe(500)
+        ->and($threshold(true))->toBe(500)
+        ->and($threshold(404))->toBe(404)
+        ->and($threshold(200))->toBe(400)
+        ->and($threshold(false))->toBeFalse()
+        ->and($threshold(null))->toBeFalse();
+});
+
 it('leaves pages with a password-reset or verification link in their URL out by default', function () {
     $this->actingAs($this->user());
 

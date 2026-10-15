@@ -53,6 +53,7 @@
 | `capture.errors` | `true` | Uncaught errors and unhandled rejections as `error` markers. |
 | `capture.livewire` | `true` | Failed Livewire requests as `request` markers, `wire:navigate` page views as `navigation` markers. |
 | `capture.vitals` | `true` | LCP, INP and CLS as `vital` markers. |
+| `capture.requests` | `500` | Other same-origin requests (`fetch`, `XMLHttpRequest`) answered with this status or higher (400 to 599), or not at all, as `request` markers: method, path, status and duration, never headers or bodies. `false` turns it off. |
 | `capture.rage_clicks` | `true` | Three or more clicks on one spot within 700 ms as `rage-click` markers. |
 
 ## Size
