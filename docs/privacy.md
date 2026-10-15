@@ -11,10 +11,10 @@ A recording shows what a person saw. The defaults are chosen so that a forgotten
 ## What is not recorded
 
 - **No IP address.** Not stored, not used for rate limiting.
-- **Input values.** Every input, textarea and select is masked with asterisks (`privacy.mask_all_inputs`, default `true`). Password inputs are masked even when that setting is off.
+- **Input values.** Every input, textarea and select is masked with asterisks, whatever its type (`privacy.mask_all_inputs`, default `true`); checkboxes and radio buttons keep their checked state. Password inputs, hidden inputs and the file name of a file input are masked even when that setting is off.
 - **Rich editors.** Text in a `contenteditable` element (Tiptap, Trix, CodeMirror) is masked like an input, through the default `privacy.mask_text_selector`.
-- **Hidden inputs.** The value of every `<input type="hidden">` (a CSRF token, an id, a signature) is dropped before upload.
-- **Secrets in URLs.** The query parameters in `privacy.redact_query` (`token`, `signature`, `code`, `state`, `email` and others) keep their name and lose their value in every URL the recorder sends: the first page, page views, error sources, stack traces and the links, images and form actions in the page itself.
+- **Hidden inputs.** The value of every `<input type="hidden">` (a CSRF token, an id, a signature) is dropped before upload, and one a script writes later (Livewire, Alpine) is masked.
+- **Secrets in URLs.** The query parameters in `privacy.redact_query` (`token`, `signature`, `code`, `state`, `email` and others) keep their name and lose their value in every URL the recorder sends: the first page, page views, error messages and sources, stack traces, console messages, and the links, images (`srcset` included), videos and form actions in the page itself.
 - **Password-reset and verification pages.** The default `except` list leaves out the pages whose URL carries such a link (`*password-reset*`, `*reset-password*`, `email/verify*` and the like), and `except_routes` the same pages by route name (`password.*`, `verification.*`, Filament's `filament.*.auth.password-reset.*`), whatever their URL.
 - **Scripts.** Script contents are left out of the snapshot and the player never executes anything; it rebuilds the DOM in a sandboxed iframe.
 - **Livewire component state.** `wire:snapshot` and `wire:effects` are dropped before upload, along with Alpine expressions (`size.strip_attributes`).
@@ -56,7 +56,7 @@ Three attributes cover what the defaults cannot know about:
 'privacy' => ['mask_all_text' => true],
 ```
 
-Every text node is replaced with asterisks. The replay still shows where people click and what breaks, without a readable word.
+Every text node is replaced with asterisks, and so is text the page shows through attributes: `alt`, `title`, `aria-label`, `placeholder` and the caption of an `<input type="submit">`. Page titles are left out of the `navigation` markers. The replay still shows where people click and what breaks, without a readable word. The same attributes are masked inside `privacy.mask_text_selector` (`data-replay-mask`), and a button whose caption holds masked text is named by its tag in rage-click markers.
 
 ## Consent
 

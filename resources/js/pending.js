@@ -52,6 +52,21 @@ function open() {
     return opening;
 }
 
+/**
+ * Whether the database exists, without creating it: a sweep must not leave
+ * one behind in an app that never kept anything. Null where the browser
+ * cannot tell (no indexedDB.databases()).
+ */
+export async function pendingStoreExists() {
+    try {
+        if (typeof window.indexedDB?.databases !== 'function') return null;
+
+        return (await window.indexedDB.databases()).some((database) => database.name === DB_NAME);
+    } catch {
+        return null;
+    }
+}
+
 /** Runs `work` on the store and resolves with the request's result, or null when anything goes wrong. */
 async function run(mode, work) {
     const db = await open();
