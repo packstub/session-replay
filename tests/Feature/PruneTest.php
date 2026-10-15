@@ -1,5 +1,6 @@
 <?php
 
+use Illuminate\Support\Facades\Schema;
 use Illuminate\Support\Facades\Storage;
 use Packstub\SessionReplay\Models\ReplayAsset;
 use Packstub\SessionReplay\Models\ReplayChunk;
@@ -79,4 +80,22 @@ it('removes the files when a recording is deleted by hand', function () {
     $session->delete();
 
     Storage::disk('replays')->assertMissing($path);
+});
+
+it('indexes a workspace\'s recordings by start, and adds the index to an install from before it only once', function () {
+    $migration = require __DIR__.'/../../database/migrations/2026_10_07_000001_add_tenant_started_at_index_to_replay_sessions_table.php';
+    $columns = ['tenant_type', 'tenant_id', 'started_at'];
+
+    expect(Schema::hasIndex('replay_sessions', $columns))->toBeTrue();
+
+    // Already there on a fresh install: nothing happens.
+    $migration->up();
+
+    Schema::table('replay_sessions', fn ($table) => $table->dropIndex($columns));
+
+    expect(Schema::hasIndex('replay_sessions', $columns))->toBeFalse();
+
+    $migration->up();
+
+    expect(Schema::hasIndex('replay_sessions', $columns))->toBeTrue();
 });

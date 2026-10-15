@@ -62,6 +62,8 @@ SessionReplay::visibleUsing(function (Builder $query, $viewer): void {
 
 The built-in list applies it, `packstub/filament-session-replay` applies it to its resource, relation manager and widget, and your own page can with `SessionReplay::visibleTo(ReplaySession::query())`. Without it the list shows every recording to whoever may open the list; opening one always asks the gate.
 
+The rule runs as one group of its own (`where(fn ($query) => ...)`), so an `orWhere()` in it only ever narrows: `$query->where('user_id', (string) $viewer->getKey())->orWhereNull('user_id')` shows a viewer their own recordings and guests', and still only in the workspace a panel is scoped to and within the list's filters.
+
 **In a multi-tenant app, define `visibleUsing()` whenever someone who is not an operator may open the list.** A gate that lets every workspace admin open the list (`$session === null`) and checks the workspace only for a single recording keeps each replay safe, but the built-in list at `/session-replay` would still show every workspace's rows. When the recordings are watched in a Filament panel, turn the built-in pages off with `viewer.enabled = false`; the panel scopes its own lists.
 
 Check the rule yourself with `SessionReplay::check()`:
@@ -148,7 +150,7 @@ Other attributes (`class`, `id`) pass through to the element. To load the player
 </body>
 ```
 
-In the browser, `window.SessionReplayPlayer.mount(element, { manifestUrl, autoPlay })` mounts a player on an element (it reads `data-manifest` when `manifestUrl` is left out), `mountAll()` mounts every `[data-session-replay-player]` element, and the element dispatches `session-replay:ready` once the player is up:
+In the browser, `window.SessionReplayPlayer.mount(element, { manifestUrl, autoPlay })` mounts a player on an element (it reads `data-manifest` when `manifestUrl` is left out), `mountAll()` mounts every `[data-session-replay-player]` element, `unmount(element)` stops one and empties its element, and the element dispatches `session-replay:ready` once the player is up:
 
 ```js
 document.addEventListener('session-replay:ready', (event) => {
@@ -157,6 +159,8 @@ document.addEventListener('session-replay:ready', (event) => {
     player.goto(30_000, true); // rrweb-player's API
 });
 ```
+
+With Livewire's `wire:navigate` the player's script runs once per tab (its tag has `data-navigate-once`). On `livewire:navigating` every player on the page is paused and destroyed with its listeners, so a replay watched earlier does not stay in memory; on `livewire:navigated` the players of the new page are mounted.
 
 ### Mouse trail and clicks
 
