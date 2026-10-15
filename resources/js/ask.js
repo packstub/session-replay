@@ -17,13 +17,11 @@
  * With `toast` the same question sits in a card at the bottom corner of the
  * viewport instead (a manual popover, in the top layer where the browser has
  * one): the page stays usable, nothing takes the focus, Escape is left to the
- * page, and a question left unanswered for TOAST_MS counts as "no".
+ * page, and a question left unanswered for `timeoutMs` counts as "no" (0
+ * waits for ever).
  *
  * Resolves to { share, anonymous }.
  */
-
-/** How long the toast waits for an answer. */
-export const TOAST_MS = 60_000;
 
 // Closes the question that is up, if any: a "no" whose answer the caller no longer needs.
 let dismissOpen = null;
@@ -100,7 +98,7 @@ function element(tag, attributes = {}, text = null) {
     return node;
 }
 
-export function ask(labels, { offerAnonymous = false, error = null, toast = false } = {}) {
+export function ask(labels, { offerAnonymous = false, error = null, toast = false, timeoutMs = 60_000 } = {}) {
     return new Promise((resolve) => {
         const host = element('div', { 'data-session-replay-ask': '' });
         const root = host.attachShadow({ mode: 'closed' });
@@ -176,8 +174,8 @@ export function ask(labels, { offerAnonymous = false, error = null, toast = fals
                 // No popover API: the fixed position alone.
             }
 
-            // Left unanswered: a "no", so the window stops being held and the person is not asked again.
-            timer = setTimeout(() => close({ share: false, anonymous: false }), TOAST_MS);
+            // Left unanswered: a "no", so the window stops being held.
+            if (timeoutMs > 0) timer = setTimeout(() => close({ share: false, anonymous: false }), timeoutMs);
 
             return;
         }

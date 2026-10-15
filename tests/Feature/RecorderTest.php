@@ -325,7 +325,36 @@ it('asks in a toast instead of the dialog with on_error.ask = toast', function (
     expect(recorderConfig((string) SessionReplay::recorder())['onError']['ask'])->toBe('dialog');
 
     config()->set('session-replay.on_error.ask', false);
-    expect(recorderConfig((string) SessionReplay::recorder())['onError'])->toMatchArray(['ask' => false, 'labels' => null, 'offerAnonymous' => false]);
+    expect(recorderConfig((string) SessionReplay::recorder())['onError'])->toMatchArray(['ask' => false, 'labels' => null, 'offerAnonymous' => false, 'askAgain' => false, 'askTimeoutMs' => 0]);
+});
+
+it('tells the browser whether to ask again after a no, and how long the toast waits', function () {
+    config()->set('session-replay.mode', 'on_error');
+    config()->set('session-replay.on_error.ask', 'toast');
+    $this->actingAs($this->user());
+
+    $onError = fn (): array => recorderConfig((string) SessionReplay::recorder())['onError'];
+
+    expect($onError())->toMatchArray(['askAgain' => false, 'askTimeoutMs' => 60_000]);
+
+    config()->set('session-replay.on_error.ask_again', true);
+    config()->set('session-replay.on_error.ask_timeout', 120);
+    expect($onError())->toMatchArray(['askAgain' => true, 'askTimeoutMs' => 120_000]);
+
+    // Clamped to 5 s and 10 min; 0 (or less) keeps the toast up until it is answered.
+    config()->set('session-replay.on_error.ask_timeout', 1);
+    expect($onError()['askTimeoutMs'])->toBe(5_000);
+    config()->set('session-replay.on_error.ask_timeout', 3600);
+    expect($onError()['askTimeoutMs'])->toBe(600_000);
+    config()->set('session-replay.on_error.ask_timeout', 0);
+    expect($onError()['askTimeoutMs'])->toBe(0);
+
+    // The dialog never times out; without a question neither setting applies.
+    config()->set('session-replay.on_error.ask_timeout', 60);
+    config()->set('session-replay.on_error.ask', 'dialog');
+    expect($onError())->toMatchArray(['askAgain' => true, 'askTimeoutMs' => 0]);
+    config()->set('session-replay.on_error.ask', false);
+    expect($onError())->toMatchArray(['askAgain' => false, 'askTimeoutMs' => 0]);
 });
 
 it('tells the browser whether the question replaces Livewire\'s error modal', function () {

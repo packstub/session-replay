@@ -352,6 +352,9 @@ function trimBuffer(cutoff) {
 function trigger() {
     if (!session || session.phase !== 'buffering' || asking || stopped) return false;
 
+    // A "no" with onError.askAgain: the next question waits a window, so a burst of errors asks once.
+    if (session.declinedAt && Date.now() - session.declinedAt < windowMs) return false;
+
     trimBuffer(Date.now() - windowMs);
 
     if (!config.onError.ask) {
@@ -365,7 +368,7 @@ function trigger() {
     // The answer is about this recording: a wire:navigate to another workspace meanwhile starts a new one.
     const asked = session;
 
-    ask(config.onError.labels, { offerAnonymous: !!config.onError.offerAnonymous, error: askError, toast: config.onError.ask === 'toast' })
+    ask(config.onError.labels, { offerAnonymous: !!config.onError.offerAnonymous, error: askError, toast: config.onError.ask === 'toast', timeoutMs: config.onError.askTimeoutMs ?? 60_000 })
         .then((answer) => {
             asking = false;
 
@@ -374,6 +377,15 @@ function trigger() {
             if (answer.share) {
                 share(answer.anonymous);
                 notice(config.onError.labels.sent);
+
+                return;
+            }
+
+            // Declined with askAgain: this window is dropped, the tab keeps one and asks again on a later trigger.
+            if (config.onError.askAgain) {
+                session.declinedAt = Date.now();
+                trimBuffer(Infinity);
+                saveSession();
 
                 return;
             }

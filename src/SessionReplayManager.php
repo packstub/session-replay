@@ -303,6 +303,8 @@ class SessionReplayManager
             'maxWindowChars' => max(1, min(50, (int) config('session-replay.on_error.max_buffer_mb', 5))) * 1_000_000,
             'triggers' => array_values(array_intersect(self::TRIGGERS, array_map('strval', (array) config('session-replay.on_error.triggers', ['error', 'request'])))),
             'ask' => $ask,
+            'askAgain' => $ask && (bool) config('session-replay.on_error.ask_again', false),
+            'askTimeoutMs' => $ask === 'toast' ? $this->askTimeoutMs() : 0,
             'keepPending' => (bool) config('session-replay.on_error.keep_pending', true),
             'replaceLivewireModal' => $ask && $this->replacesLivewireModal(),
             // Only a token that names a person can be sent without them; an anonymous one already is.
@@ -329,6 +331,14 @@ class SessionReplayManager
             (bool) $ask => 'dialog',
             default => false,
         };
+    }
+
+    /** How long the toast waits for an answer (on_error.ask_timeout, 5 to 600 s; 0 for ever), in milliseconds. */
+    protected function askTimeoutMs(): int
+    {
+        $seconds = (int) config('session-replay.on_error.ask_timeout', 60);
+
+        return $seconds <= 0 ? 0 : max(5, min(600, $seconds)) * 1000;
     }
 
     /** Whether the question takes the place of Livewire's error modal (on_error.livewire_error_modal). */

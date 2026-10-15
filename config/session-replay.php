@@ -73,9 +73,15 @@ return [
         'triggers' => ['error', 'request'],
         // Ask the person first: send the replay or not, and, when someone is signed in, without their name. true
         // (or 'dialog') asks in a small modal dialog the recorder draws; 'toast' asks in a card at the bottom corner
-        // that leaves the page usable, and counts as "no" when it is left unanswered for a minute. A "no" drops what
-        // was kept and leaves the tab alone until its session ends.
+        // that leaves the page usable, and counts as "no" when it is left unanswered (ask_timeout). A "no" drops
+        // what was kept.
         'ask' => false,
+        // After a "no" (or a toast left unanswered): false leaves the tab alone until its session ends; true asks again
+        // on the next trigger, at most once per window (buffer_seconds), and keeps the window going meanwhile.
+        'ask_again' => false,
+        // Seconds the toast waits for an answer before it counts as "no" (5 to 600); 0 keeps it up until answered.
+        // The dialog never times out.
+        'ask_timeout' => 60,
         // Livewire opens its own modal with the error page when a request fails. When that request puts the question
         // up (ask), "keep" shows the question over Livewire's modal, "replace" shows the question instead of it,
         // and "production" replaces it only while app.debug is off: the production error page says no more than
