@@ -7,7 +7,7 @@ import { ACTIVE_SOURCES, activeTime, checkoutInterval, estimateChars, isTrigger,
 import { lastingPlugin, navigationPause } from './lib/navigation.js';
 import { hasHeader, observe, requestMarker } from './lib/requests.js';
 import { MAX_RETRIES, pendingFate, retryDelay } from './lib/pending.js';
-import { ask, notice } from './ask.js';
+import { ask, dismiss, notice } from './ask.js';
 import { deletePending, listPending, pendingStoreExists, savePending } from './pending.js';
 
 /**
@@ -46,8 +46,6 @@ const CONSOLE_PLUGIN = 'rrweb/console@1';
 const KEEPALIVE_LIMIT = 60 * 1024;
 const MAX_BUFFERED_EVENTS = 400;
 const MAX_BUFFERED_CHARS = 1_500_000;
-// What the rolling window may hold, by the same estimate as above; past it the window shrinks to the newest snapshot.
-const MAX_WINDOW_CHARS = 5_000_000;
 
 let session = null;
 // Set while this tab records: stops everything. stopRrweb is rrweb's own, null while wire:navigate swaps the page.
@@ -90,6 +88,9 @@ const onError = config?.mode === 'on_error';
 const windowMs = onError ? config.onError.bufferMs : 0;
 const checkoutMs = onError ? checkoutInterval(windowMs) : 0;
 const keepPending = onError && !!config.onError.keepPending;
+// What the rolling window may hold (on_error.max_buffer_mb), by the same estimate as the batches above; past it the
+// window shrinks to its newest snapshot.
+const maxWindowChars = onError ? config.onError.maxWindowChars || 5_000_000 : 0;
 
 const matches = config ? attributeMatcher(config.size.stripAttributes, config.size.keepAttributes) : null;
 const canHash = !!(window.crypto && window.crypto.subtle && window.TextEncoder);
@@ -182,7 +183,7 @@ function hasConsent() {
     return config.consent !== 'opt-in' || read('localStorage', CONSENT_KEY) === '1';
 }
 
-/** Add a marker to the index and, as a custom event, to the recording itself. */
+/** Add a marker to the index and, as a custom event, to the recording itself; a trigger type uploads the window. */
 function mark(type, label, payload = {}, heldAt = null) {
     if (!stopRecording || stopped) return false;
 
@@ -191,6 +192,13 @@ function mark(type, label, payload = {}, heldAt = null) {
     // During a wire:navigate swap: kept until the new page is known, dropped when the app does not record it.
     if (navigation.defer(() => mark(type, label, payload, at))) return false;
 
+    note(type, label, payload, at, heldAt === null);
+
+    return isTrigger(type, config.onError?.triggers) ? trigger() : false;
+}
+
+/** The marker itself, at `at`; `live` while rrweb records (a held marker keeps its own time). */
+function note(type, label, payload, at, live) {
     const text = String(label ?? '').slice(0, 480) || type;
 
     markers.push({ type, label: text, payload, at });
@@ -198,13 +206,40 @@ function mark(type, label, payload = {}, heldAt = null) {
     try {
         // While wire:navigate swaps the page rrweb is stopped, and a held marker keeps its time; either goes into
         // the recording all the same.
-        if (stopRrweb && heldAt === null) record.addCustomEvent(`sr:${type}`, { label: text, ...payload });
+        if (stopRrweb && live) record.addCustomEvent(`sr:${type}`, { label: text, ...payload });
         else emit({ type: EVENT_CUSTOM, data: { tag: `sr:${type}`, payload: { label: text, ...payload } }, timestamp: at });
     } catch {
         // Recording ended between the check and the call.
     }
+}
 
-    return isTrigger(type, config.onError?.triggers) ? trigger() : false;
+/**
+ * The person asks for the replay to be sent (a "report a problem" button):
+ * a custom marker at this moment and, in mode "on_error", the kept window
+ * goes up without the question, as the first batch of the recording. A tab
+ * that declined or stopped sends nothing. Resolves once the upload went
+ * through or was given up on, to whether anything was sent.
+ */
+function report(label, payload = {}) {
+    if (!stopRecording || stopped || !session) return Promise.resolve(false);
+
+    const at = Date.now();
+
+    // During a wire:navigate swap the marker waits for the new page, as every marker does; the upload does not.
+    if (!navigation.defer(() => mark('custom', label, payload, at))) note('custom', label, payload, at, true);
+
+    if (session.phase === 'buffering') {
+        // The question that may be up is answered by the button; its own answer, if one still comes, is ignored.
+        if (asking) dismiss();
+
+        asking = false;
+        trimBuffer(at - windowMs);
+        share(false);
+    }
+
+    if (session.phase !== 'recording') return Promise.resolve(false);
+
+    return flush().then(() => true);
 }
 
 async function sha256(text) {
@@ -266,7 +301,7 @@ function holdWindow(event) {
         return;
     }
 
-    if (bufferedChars >= MAX_WINDOW_CHARS) overWindow = true;
+    if (bufferedChars >= maxWindowChars) overWindow = true;
 
     // Incremental events only: the meta event of a snapshot still being hashed must not ask for another one.
     if (event.type === EVENT_INCREMENTAL && (overWindow || (lastSnapshotAt && event.timestamp - lastSnapshotAt > checkoutMs && !asking))) checkout();
@@ -330,7 +365,7 @@ function trigger() {
     // The answer is about this recording: a wire:navigate to another workspace meanwhile starts a new one.
     const asked = session;
 
-    ask(config.onError.labels, { offerAnonymous: !!config.onError.offerAnonymous, error: askError })
+    ask(config.onError.labels, { offerAnonymous: !!config.onError.offerAnonymous, error: askError, toast: config.onError.ask === 'toast' })
         .then((answer) => {
             asking = false;
 
@@ -1348,6 +1383,11 @@ if (config && !window.SessionReplay) {
         flush,
         /** Record a moment of your own: SessionReplay.mark('Checkout started', { cart: 3 }). */
         mark: (label, payload = {}) => mark('custom', label, payload),
+        /**
+         * Send the replay now, from a "report a problem" button: SessionReplay.send('Wrong total on the invoice').
+         * In mode "on_error" the kept window goes up without the question; recording carries on either way.
+         */
+        send: (label = 'Problem reported', payload = {}) => report(label, payload),
         /** consent(true) remembers the answer and starts; consent(false) forgets it and stops. */
         consent(given) {
             write('localStorage', CONSENT_KEY, given ? '1' : '0');

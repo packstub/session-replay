@@ -25,6 +25,7 @@
     <button id="error" onclick="setTimeout(() => { throw new Error('Workbench exploded') })">Throw an error</button>
     <button id="log" onclick="console.error('Something logged', { code: 7 })">console.error</button>
     <button id="mark" onclick="SessionReplay.mark('Checkout started', { cart: 3 })">Custom marker</button>
+    <button id="report" onclick="SessionReplay.send('Reported from the workbench').then((sent) => console.log('sent', sent))">Report a problem</button>
     <button id="add" onclick="document.getElementById('list').insertAdjacentHTML('beforeend', '<li wire:key=x>Item ' + Date.now() + '</li>')">Add a row</button>
     <ul id="list"></ul>
 

@@ -296,10 +296,11 @@ class SessionReplayManager
             return null;
         }
 
-        $ask = (bool) config('session-replay.on_error.ask', false);
+        $ask = $this->askStyle();
 
         return [
             'bufferMs' => max(5, min(600, (int) config('session-replay.on_error.buffer_seconds', 60))) * 1000,
+            'maxWindowChars' => max(1, min(50, (int) config('session-replay.on_error.max_buffer_mb', 5))) * 1_000_000,
             'triggers' => array_values(array_intersect(self::TRIGGERS, array_map('strval', (array) config('session-replay.on_error.triggers', ['error', 'request'])))),
             'ask' => $ask,
             'keepPending' => (bool) config('session-replay.on_error.keep_pending', true),
@@ -316,6 +317,18 @@ class SessionReplayManager
                 'sent' => __('session-replay::recorder.ask.sent'),
             ] : null,
         ];
+    }
+
+    /** How on_error.ask puts the question: in a modal "dialog", in a "toast" at the bottom corner, or not at all (false). */
+    protected function askStyle(): string|false
+    {
+        $ask = config('session-replay.on_error.ask', false);
+
+        return match (true) {
+            $ask === 'toast' => 'toast',
+            (bool) $ask => 'dialog',
+            default => false,
+        };
     }
 
     /** Whether the question takes the place of Livewire's error modal (on_error.livewire_error_modal). */

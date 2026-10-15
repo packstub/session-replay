@@ -14,8 +14,24 @@
  * action did not go through: in production it stands in for Livewire's error
  * modal. notice() is the short thank-you after the replay was sent.
  *
+ * With `toast` the same question sits in a card at the bottom corner of the
+ * viewport instead (a manual popover, in the top layer where the browser has
+ * one): the page stays usable, nothing takes the focus, Escape is left to the
+ * page, and a question left unanswered for TOAST_MS counts as "no".
+ *
  * Resolves to { share, anonymous }.
  */
+
+/** How long the toast waits for an answer. */
+export const TOAST_MS = 60_000;
+
+// Closes the question that is up, if any: a "no" whose answer the caller no longer needs.
+let dismissOpen = null;
+
+/** Take the open question down (the person sent the replay another way, SessionReplay.send()). */
+export function dismiss() {
+    dismissOpen?.();
+}
 
 const STYLE = `
 :host { all: initial; }
@@ -27,6 +43,16 @@ dialog {
     color-scheme: light dark;
 }
 dialog::backdrop { background: rgba(15, 23, 42, 0.45); }
+.toast {
+    box-sizing: border-box; position: fixed; inset: auto 16px 16px auto; margin: 0; width: calc(100% - 32px); max-width: 24rem;
+    max-height: calc(100% - 32px); overflow: auto; padding: 16px; border: 0; border-radius: 12px; background: #fff; color: #0f172a;
+    box-shadow: 0 20px 50px rgba(15, 23, 42, 0.25); z-index: 2147483647;
+    font: 14px/1.5 system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+    color-scheme: light dark;
+}
+.toast h2 { font-size: 15px; }
+.toast p { margin-bottom: 12px; }
+.toast label { margin-bottom: 12px; }
 /* A browser without showModal(): the same place, over the page, without the top layer. */
 dialog[open]:not(:modal) { position: fixed; inset: 0; z-index: 2147483647; }
 h2 { margin: 0 0 8px; font-size: 17px; font-weight: 600; line-height: 1.35; }
@@ -57,6 +83,7 @@ button:focus-visible, input:focus-visible { outline: 2px solid #2563eb; outline-
     .error { color: #94a3b8; }
     .code { background: #1e293b; color: #cbd5e1; }
     .notice { background: #f1f5f9; color: #0f172a; }
+    .toast { background: #0f172a; color: #e2e8f0; box-shadow: 0 20px 50px rgba(0, 0, 0, 0.5); }
     button { background: #1e293b; color: #e2e8f0; border-color: #334155; }
     button.share { background: #3b82f6; border-color: #3b82f6; color: #fff; }
     button:focus-visible, input:focus-visible { outline-color: #93c5fd; }
@@ -73,14 +100,16 @@ function element(tag, attributes = {}, text = null) {
     return node;
 }
 
-export function ask(labels, { offerAnonymous = false, error = null } = {}) {
+export function ask(labels, { offerAnonymous = false, error = null, toast = false } = {}) {
     return new Promise((resolve) => {
         const host = element('div', { 'data-session-replay-ask': '' });
         const root = host.attachShadow({ mode: 'closed' });
         const previous = document.activeElement;
 
         const style = element('style', {}, STYLE);
-        const dialog = element('dialog', { 'aria-labelledby': 'sr-ask-title', 'aria-describedby': 'sr-ask-body', tabindex: '-1' });
+        const dialog = toast
+            ? element('div', { class: 'toast', role: 'dialog', 'aria-live': 'polite', popover: 'manual', 'aria-labelledby': 'sr-ask-title', 'aria-describedby': 'sr-ask-body' })
+            : element('dialog', { 'aria-labelledby': 'sr-ask-title', 'aria-describedby': 'sr-ask-body', tabindex: '-1' });
         const anonymous = element('input', { type: 'checkbox', id: 'sr-ask-anonymous' });
         const decline = element('button', { type: 'button', class: 'decline' }, labels.decline);
         const share = element('button', { type: 'button', class: 'share' }, labels.share);
@@ -111,15 +140,22 @@ export function ask(labels, { offerAnonymous = false, error = null } = {}) {
         root.append(style, dialog);
 
         let answered = false;
+        let timer = null;
+        const dismissThis = () => close({ share: false, anonymous: false });
+
+        dismissOpen = dismissThis;
 
         const close = (answer) => {
             if (answered) return;
 
             answered = true;
+            clearTimeout(timer);
+            if (dismissOpen === dismissThis) dismissOpen = null;
             host.remove();
 
             try {
-                previous?.focus?.({ preventScroll: true });
+                // The toast never took the focus; a button in it may have.
+                if (!toast || root.activeElement) previous?.focus?.({ preventScroll: true });
             } catch {
                 // The element that had focus is gone.
             }
@@ -129,6 +165,22 @@ export function ask(labels, { offerAnonymous = false, error = null } = {}) {
 
         decline.addEventListener('click', () => close({ share: false, anonymous: false }));
         share.addEventListener('click', () => close({ share: true, anonymous: offerAnonymous && anonymous.checked }));
+
+        if (toast) {
+            // Under <html>, next to <body>: a wire:navigate page swap replaces the body and the question stays.
+            document.documentElement.append(host);
+
+            try {
+                dialog.showPopover();
+            } catch {
+                // No popover API: the fixed position alone.
+            }
+
+            // Left unanswered: a "no", so the window stops being held and the person is not asked again.
+            timer = setTimeout(() => close({ share: false, anonymous: false }), TOAST_MS);
+
+            return;
+        }
 
         // Escape is a "no": the browser's cancel of a modal dialog, and the key itself, so the page's own
         // shortcuts (a modal of its own closing on Escape) stay out of it.

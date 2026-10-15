@@ -20,8 +20,9 @@
 | --- | --- | --- |
 | `mode` | `env('SESSION_REPLAY_MODE', 'session')` | `session`: a recorded tab uploads from its first page. `on_error`: the browser keeps the last moments in memory and uploads only when something goes wrong. See [Recording only when something goes wrong](recording.md#recording-only-when-something-goes-wrong). |
 | `on_error.buffer_seconds` | `60` | Seconds kept before the trigger, 5 to 600. The window starts at a full page snapshot, so a replay may start up to half a window (at most 30 s) earlier. |
+| `on_error.max_buffer_mb` | `5` | The most the window may take in memory, in MB of events as the recorder estimates them, 1 to 50. A page that changes a lot reaches it before `buffer_seconds`; the window then shrinks to its newest page snapshot. |
 | `on_error.triggers` | `['error', 'request']` | Marker types that upload the window: `error`, `request`, `console`, `rage-click`, `custom`. A type also has to be captured (`capture.*`). |
-| `on_error.ask` | `false` | Ask the person before anything is sent, in a small dialog the recorder draws. See [Privacy](privacy.md#asking-before-a-replay-is-sent). |
+| `on_error.ask` | `false` | Ask the person before anything is sent: `true` (or `dialog`) in a small modal dialog the recorder draws, `toast` in a card at the bottom corner that leaves the page usable. See [Privacy](privacy.md#asking-before-a-replay-is-sent). |
 | `on_error.livewire_error_modal` | `production` | What happens to Livewire's error modal when a failed request puts the question up: `keep` shows the question over it, `replace` shows the question instead of it, `production` replaces it only while `app.debug` is off. See [Privacy](privacy.md#asking-before-a-replay-is-sent). |
 | `on_error.keep_pending` | `true` | Keep the uploaded window in the browser (IndexedDB) while its upload fails, so a reload during the outage does not lose it. See [When the upload fails](recording.md#when-the-upload-fails). |
 

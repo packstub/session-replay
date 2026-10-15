@@ -65,11 +65,16 @@ return [
         // Seconds kept before the trigger (5 to 600). The window starts at a full page snapshot, taken every half
         // window (at most every 30 s), so a replay starts up to that much earlier.
         'buffer_seconds' => 60,
+        // Most the window may take in memory, in MB of events as the recorder estimates them (1 to 50). A page that
+        // changes a lot reaches it before buffer_seconds; the window then shrinks to its newest page snapshot.
+        'max_buffer_mb' => 5,
         // Marker types that upload the window: error, request (a failed Livewire request), console, rage-click,
         // custom (SessionReplay.mark()). A type must be captured too (capture.*) to fire.
         'triggers' => ['error', 'request'],
-        // Ask the person first, in a small dialog the recorder draws: send the replay or not, and, when someone is
-        // signed in, without their name. A "no" drops what was kept and leaves the tab alone until its session ends.
+        // Ask the person first: send the replay or not, and, when someone is signed in, without their name. true
+        // (or 'dialog') asks in a small modal dialog the recorder draws; 'toast' asks in a card at the bottom corner
+        // that leaves the page usable, and counts as "no" when it is left unanswered for a minute. A "no" drops what
+        // was kept and leaves the tab alone until its session ends.
         'ask' => false,
         // Livewire opens its own modal with the error page when a request fails. When that request puts the question
         // up (ask), "keep" shows the question over Livewire's modal, "replace" shows the question instead of it,
