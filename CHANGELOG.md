@@ -33,6 +33,7 @@ All notable changes to `packstub/session-replay` are documented here.
 
 ### Changed
 
+- **The recorder bundle runs once per tab with `wire:navigate`.** Livewire runs every script of the new page's body again on each `wire:navigate`, so the browser evaluated the whole recorder on every page only for it to find itself already running. Its script tag now carries `data-navigate-once`; the config next to it still runs on every page, which is how the recorder checks each one.
 - **An index on `replay_sessions` (`tenant_type`, `tenant_id`, `started_at`)** for a workspace's list, newest first. Run `php artisan migrate` (or publish the migrations again with `run_migrations` off): `add_tenant_started_at_index_to_replay_sessions_table` adds it to an existing install, and does nothing where `create_replay_sessions_table` already made it.
 
 ## 1.0.0-beta.5 — 2026-10-07
