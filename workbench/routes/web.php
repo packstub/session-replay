@@ -12,5 +12,7 @@ Route::middleware('web')->group(function () {
     });
 
     Route::get('second', fn () => view('workbench', ['second' => true]));
+    // A server error on the replay: the "Server error" button fetches it (a failed request and an error marker).
+    Route::get('boom', fn () => throw new RuntimeException('The workbench could not save https://workbench.test/orders?token=abc'));
     Route::get('login', fn () => redirect('/'))->name('login');
 });
