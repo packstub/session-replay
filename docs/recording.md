@@ -108,11 +108,12 @@ Most of the replays worth watching show something going wrong. `mode = on_error`
 - **Triggers** are marker types: `error` (uncaught errors and unhandled rejections) and `request` (failed Livewire requests, and other same-origin requests that failed) by default, and `console` (`console.error`), `rage-click` and `custom` (`SessionReplay.mark()`) when you add them. A type must also be captured (`capture.errors`, `capture.livewire`, `capture.requests`, `capture.console`, `capture.rage_clicks`). With `custom` in the list, your own code decides: `SessionReplay.mark('Payment declined')` uploads the window.
 - **The window covers `wire:navigate` page swaps**, which keep the page alive. A full page load starts the memory over: the window holds the pages a tab went through without a reload, not the ones before it.
 - **`sample_rate`** still applies, to the tabs that keep a window. **`consent = opt-in`**: nothing is kept in memory before consent either.
-- **Memory stays bounded.** A page that changes a lot shrinks the window to its newest snapshot rather than grow without limit.
+- **Memory stays bounded.** The window may take `on_error.max_buffer_mb` (5 MB of events, as the recorder estimates them); a page that changes a lot reaches it before `buffer_seconds` and shrinks the window to its newest snapshot rather than grow without limit.
+- **A "report a problem" button.** `SessionReplay.send('Wrong total on the invoice')` uploads the kept window right away, without the question, with a `custom` marker at that moment; the tab records from then on. See [The browser API](#the-browser-api).
 - **`on_error.ask`** asks the person before anything is sent, and `on_error.livewire_error_modal` decides whether the question replaces Livewire's own error modal in production; see [Privacy](privacy.md#asking-before-a-replay-is-sent).
 - **Log context.** The recording's cookie is set while the window is kept (never in a tab that is not sampled), so the log line of the server error behind a failed request already points at the recording the browser is about to upload. Log lines of requests where nothing went wrong point at a recording that never comes.
 
-`SessionReplay.isBuffering()` is `true` while a tab keeps a window and waits; `isRecording()` turns `true` once it uploads.
+`SessionReplay.isBuffering()` is `true` while a tab keeps a window and waits; `isRecording()` turns `true` once it uploads. `SessionReplay.send()` uploads it on the person's own request, a trigger or not.
 
 ### When the upload fails
 
@@ -154,6 +155,7 @@ SessionReplay.mark('Checkout started', { cart: 3 });
 | `stop()` | Stops recording, drops what was not uploaded yet and clears the log-context cookie. |
 | `flush()` | Uploads what is buffered now. Returns a promise. |
 | `mark(label, payload = {})` | Adds a `custom` marker. |
+| `send(label = 'Problem reported', payload = {})` | The person asks for the replay to be sent: a "report a problem" button, a feedback form. Adds a `custom` marker with the label and uploads what the browser holds now. In mode `on_error` the kept window goes up without the `on_error.ask` question, and the tab records from then on; a tab that declined the question, or is not recording, sends nothing. Returns a promise that resolves once the upload went through or was given up on, to `true` when something was sent. |
 | `consent(given)` | `true` remembers the answer and starts; `false` remembers it and stops. See [Privacy](privacy.md#consent). |
 | `isRecording()` | `true` while events are being recorded and uploaded. |
 | `isBuffering()` | `true` while mode `on_error` keeps the last moments in memory and waits for a trigger. |

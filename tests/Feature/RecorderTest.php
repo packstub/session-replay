@@ -258,6 +258,7 @@ it('tells the browser the window and the triggers in mode "on_error"', function 
 
     expect($config['mode'])->toBe('on_error')
         ->and($config['onError']['bufferMs'])->toBe(60_000)
+        ->and($config['onError']['maxWindowChars'])->toBe(5_000_000)
         ->and($config['onError']['triggers'])->toBe(['error', 'console', 'custom'])
         ->and($config['onError']['ask'])->toBeFalse()
         ->and($config['onError']['keepPending'])->toBeTrue()
@@ -272,6 +273,15 @@ it('tells the browser the window and the triggers in mode "on_error"', function 
     config()->set('session-replay.on_error.buffer_seconds', 1);
     expect(recorderConfig((string) SessionReplay::recorder())['onError']['bufferMs'])->toBe(5_000);
 
+    config()->set('session-replay.on_error.max_buffer_mb', 20);
+    expect(recorderConfig((string) SessionReplay::recorder())['onError']['maxWindowChars'])->toBe(20_000_000);
+
+    config()->set('session-replay.on_error.max_buffer_mb', 0);
+    expect(recorderConfig((string) SessionReplay::recorder())['onError']['maxWindowChars'])->toBe(1_000_000);
+
+    config()->set('session-replay.on_error.max_buffer_mb', 500);
+    expect(recorderConfig((string) SessionReplay::recorder())['onError']['maxWindowChars'])->toBe(50_000_000);
+
     config()->set('session-replay.mode', 'something else');
     expect(recorderConfig((string) SessionReplay::recorder())['mode'])->toBe('session');
 });
@@ -285,7 +295,7 @@ it('hands the browser the question in the app\'s language, with the anonymous ch
 
     $signedIn = recorderConfig($this->actingAs($this->user())->get('page')->getContent())['onError'];
 
-    expect($signedIn['ask'])->toBeTrue()
+    expect($signedIn['ask'])->toBe('dialog')
         ->and($signedIn['offerAnonymous'])->toBeTrue()
         ->and($signedIn['labels']['share'])->toBe('Aufzeichnung senden')
         ->and(array_keys($signedIn['labels']))->toBe(['title', 'body', 'anonymous', 'share', 'decline', 'failed', 'sent']);
@@ -295,6 +305,56 @@ it('hands the browser the question in the app\'s language, with the anonymous ch
 
     config()->set('session-replay.privacy.anonymous', false);
     expect(recorderConfig((string) SessionReplay::recorder(['user' => null]))['onError']['offerAnonymous'])->toBeFalse();
+});
+
+it('asks in a toast instead of the dialog with on_error.ask = toast', function () {
+    config()->set('session-replay.mode', 'on_error');
+    config()->set('session-replay.on_error.ask', 'toast');
+    $this->actingAs($this->user());
+
+    $toast = recorderConfig((string) SessionReplay::recorder())['onError'];
+
+    expect($toast['ask'])->toBe('toast')
+        ->and($toast['offerAnonymous'])->toBeTrue()
+        ->and($toast['labels']['title'])->toBe(__('session-replay::recorder.ask.title'));
+
+    config()->set('session-replay.on_error.ask', 'dialog');
+    expect(recorderConfig((string) SessionReplay::recorder())['onError']['ask'])->toBe('dialog');
+
+    config()->set('session-replay.on_error.ask', 'something else');
+    expect(recorderConfig((string) SessionReplay::recorder())['onError']['ask'])->toBe('dialog');
+
+    config()->set('session-replay.on_error.ask', false);
+    expect(recorderConfig((string) SessionReplay::recorder())['onError'])->toMatchArray(['ask' => false, 'labels' => null, 'offerAnonymous' => false, 'askAgain' => false, 'askTimeoutMs' => 0]);
+});
+
+it('tells the browser whether to ask again after a no, and how long the toast waits', function () {
+    config()->set('session-replay.mode', 'on_error');
+    config()->set('session-replay.on_error.ask', 'toast');
+    $this->actingAs($this->user());
+
+    $onError = fn (): array => recorderConfig((string) SessionReplay::recorder())['onError'];
+
+    expect($onError())->toMatchArray(['askAgain' => false, 'askTimeoutMs' => 60_000]);
+
+    config()->set('session-replay.on_error.ask_again', true);
+    config()->set('session-replay.on_error.ask_timeout', 120);
+    expect($onError())->toMatchArray(['askAgain' => true, 'askTimeoutMs' => 120_000]);
+
+    // Clamped to 5 s and 10 min; 0 (or less) keeps the toast up until it is answered.
+    config()->set('session-replay.on_error.ask_timeout', 1);
+    expect($onError()['askTimeoutMs'])->toBe(5_000);
+    config()->set('session-replay.on_error.ask_timeout', 3600);
+    expect($onError()['askTimeoutMs'])->toBe(600_000);
+    config()->set('session-replay.on_error.ask_timeout', 0);
+    expect($onError()['askTimeoutMs'])->toBe(0);
+
+    // The dialog never times out; without a question neither setting applies.
+    config()->set('session-replay.on_error.ask_timeout', 60);
+    config()->set('session-replay.on_error.ask', 'dialog');
+    expect($onError())->toMatchArray(['askAgain' => true, 'askTimeoutMs' => 0]);
+    config()->set('session-replay.on_error.ask', false);
+    expect($onError())->toMatchArray(['askAgain' => false, 'askTimeoutMs' => 0]);
 });
 
 it('tells the browser whether the question replaces Livewire\'s error modal', function () {
