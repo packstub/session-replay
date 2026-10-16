@@ -57,11 +57,14 @@ class BatchIngester
         $to = max($from, $this->milliseconds(Arr::get($meta, 'to')) ?? $from);
         $events = $this->clamp(Arr::get($meta, 'events'), self::MAX_INTEGER);
         $markers = $this->markers($sessionId, (array) Arr::get($meta, 'markers', []));
+        $stylesheets = $this->hashes((array) Arr::get($meta, 'assets', []), 100);
+        // Only stylesheets count as known: whether a shared snapshot exists is never told to a browser.
+        $knownStylesheets = $stylesheets === [] ? [] : ReplayAsset::query()->whereIn('hash', $stylesheets)->where('kind', ReplayAsset::STYLESHEET)->pluck('hash')->all();
 
         // The chunk row, its markers, the counters and the snapshot references land together or not at all, so a
         // retry after a failure stores the batch again instead of finding a chunk row and answering "duplicate".
         try {
-            $first = $this->connection()->transaction(function () use ($session, $sessionId, $seq, $meta, $bytes, $from, $to, $events, $markers): bool {
+            $first = $this->connection()->transaction(function () use ($session, $sessionId, $seq, $meta, $bytes, $from, $to, $events, $markers, $stylesheets): bool {
                 // The row exists by now, so locking it is safe on every database. It also orders two batches of one
                 // recording stored at once: exactly one of them finds no chunk yet.
                 $stored = (int) ReplaySession::query()->whereKey($sessionId)->lockForUpdate()->value('chunk_count');
@@ -82,6 +85,10 @@ class BatchIngester
 
                 $this->updateCounters($session, $meta, $bytes, $events, $markers);
                 $this->referenceSnapshots($sessionId, (array) Arr::get($meta, 'snapshots', []));
+                // Every stylesheet the batch points at, stored or still to come: the browser uploads a missing one
+                // right after this answer, without naming the recording, and the first recording of a new CSS build
+                // would otherwise point at nothing and lose it to prune while pinned.
+                $this->reference($sessionId, $stylesheets);
 
                 return $stored === 0;
             });
@@ -104,7 +111,7 @@ class BatchIngester
             'created' => $created,
             'duplicate' => false,
             'foreign' => false,
-            'missing_assets' => $this->missingAssets((array) Arr::get($meta, 'assets', [])),
+            'missing_assets' => $this->missingAssets($stylesheets, $knownStylesheets),
         ];
     }
 
@@ -252,27 +259,31 @@ class BatchIngester
     }
 
     /**
-     * Of the stylesheet hashes this batch references, the ones not stored yet;
-     * the ones that are get their last-seen date moved, which is what keeps
-     * them from being pruned.
+     * The first `limit` well-formed SHA-256 hashes of a list the browser sent, each once.
      *
      * @param  array<int, mixed>  $hashes
      * @return array<int, string>
      */
-    protected function missingAssets(array $hashes): array
+    protected function hashes(array $hashes, int $limit): array
     {
-        $hashes = array_values(array_unique(array_filter(
-            array_slice($hashes, 0, 100),
+        return array_values(array_unique(array_filter(
+            array_slice($hashes, 0, $limit),
             fn ($hash): bool => is_string($hash) && preg_match('/^[a-f0-9]{64}$/', $hash) === 1,
         )));
+    }
 
-        if ($hashes === []) {
-            return [];
-        }
-
-        // Only stylesheets count as known: whether a shared snapshot exists is never told to a browser.
-        $known = ReplayAsset::query()->whereIn('hash', $hashes)->where('kind', ReplayAsset::STYLESHEET)->pluck('hash')->all();
-
+    /**
+     * Of the stylesheet hashes this batch references, the ones not stored yet;
+     * the ones that are get their last-seen date moved (at most once a day),
+     * which is what keeps a stylesheet from being pruned while recordings
+     * from before the references were stored may still need it.
+     *
+     * @param  array<int, string>  $hashes
+     * @param  array<int, string>  $known
+     * @return array<int, string>
+     */
+    protected function missingAssets(array $hashes, array $known): array
+    {
         if ($known !== []) {
             ReplayAsset::query()->whereIn('hash', $known)->where(fn ($query) => $query->whereNull('last_seen_at')->orWhere('last_seen_at', '<', now()->subDay()))->update(['last_seen_at' => now()]);
         }
@@ -289,22 +300,34 @@ class BatchIngester
      */
     protected function referenceSnapshots(string $sessionId, array $hashes): void
     {
-        $hashes = array_values(array_unique(array_filter(
-            array_slice($hashes, 0, 20),
-            fn ($hash): bool => is_string($hash) && preg_match('/^[a-f0-9]{64}$/', $hash) === 1,
-        )));
+        $hashes = $this->hashes($hashes, 20);
 
         if ($hashes === []) {
             return;
         }
 
-        $stored = ReplayAsset::query()->whereIn('hash', $hashes)->pluck('hash')->all();
+        $this->reference($sessionId, ReplayAsset::query()->whereIn('hash', $hashes)->pluck('hash')->all());
+    }
+
+    /**
+     * The recording points at these assets (stylesheets, stored or about to
+     * be uploaded, and stored shared snapshots): prune keeps an asset while a
+     * recording that is left references it, a pinned one years on included,
+     * and a reference to a hash that never arrives keeps nothing.
+     *
+     * @param  array<int, string>  $hashes
+     */
+    protected function reference(string $sessionId, array $hashes): void
+    {
+        if ($hashes === []) {
+            return;
+        }
 
         ReplaySessionAsset::query()->insertOrIgnore(array_map(fn (string $hash): array => [
             'replay_session_id' => $sessionId,
             'hash' => $hash,
             'created_at' => now(),
-        ], $stored));
+        ], $hashes));
     }
 
     protected function connection(): Connection

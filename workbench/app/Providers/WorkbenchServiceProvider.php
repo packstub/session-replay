@@ -24,6 +24,9 @@ class WorkbenchServiceProvider extends ServiceProvider
         config()->set('session-replay.on_error.ask_again', (bool) env('SESSION_REPLAY_ASK_AGAIN', false));
         config()->set('session-replay.on_error.ask_timeout', (int) env('SESSION_REPLAY_ASK_TIMEOUT', 60));
         config()->set('session-replay.on_error.buffer_seconds', (int) env('SESSION_REPLAY_BUFFER', 60));
+        // SESSION_REPLAY_MASK_ALL_TEXT=1: layout-only recordings, to check what stays readable.
+        config()->set('session-replay.privacy.mask_all_text', (bool) env('SESSION_REPLAY_MASK_ALL_TEXT', false));
+        config()->set('session-replay.privacy.mask_all_inputs', (bool) env('SESSION_REPLAY_MASK_ALL_INPUTS', true));
 
         Gate::define('viewSessionReplay', fn ($user) => true);
     }
