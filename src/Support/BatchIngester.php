@@ -190,6 +190,8 @@ class BatchIngester
     protected function updateCounters(ReplaySession $session, array $meta, int $bytes, int $events, array $markers): void
     {
         $types = array_count_values(array_column($markers, 'type'));
+        // The marker that stands for pages the app does not record (payload.skipped) is no page of the recording.
+        $pages = count(array_filter($markers, fn (array $marker): bool => $marker['type'] === 'navigation' && ! data_get(json_decode((string) $marker['payload'], true), 'skipped')));
         $vitals = $this->worstVitals($markers);
         $lastActivity = $this->time(Arr::get($meta, 'to'));
 
@@ -197,7 +199,7 @@ class BatchIngester
             'chunk_count' => $this->add('chunk_count', 1),
             'event_count' => $this->add('event_count', $events),
             'bytes' => DB::raw('bytes + '.$bytes),
-            'page_count' => $this->add('page_count', $types['navigation'] ?? 0),
+            'page_count' => $this->add('page_count', $pages),
             'error_count' => $this->add('error_count', ($types['error'] ?? 0) + ($types['request'] ?? 0)),
             'rage_click_count' => $this->add('rage_click_count', $types['rage-click'] ?? 0),
             'active_ms' => DB::raw('active_ms + '.$this->clamp(Arr::get($meta, 'activeMs'), 3_600_000)),

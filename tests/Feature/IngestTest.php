@@ -648,3 +648,18 @@ it('accepts a token signed with a previous app key, so rotating the key keeps op
     $this->ingest(['token' => $fresh])->assertCreated();
     $this->ingest(['token' => $token])->assertUnauthorized();
 });
+
+it('does not count the marker that stands for pages the app does not record as a page', function () {
+    $session = (string) Str::uuid();
+    $at = now()->getTimestampMs();
+
+    $this->ingest(['session' => $session, 'meta' => ['markers' => [
+        ['type' => 'navigation', 'label' => '/orders', 'payload' => ['url' => 'https://app.test/orders'], 'at' => $at],
+        ['type' => 'navigation', 'label' => 'Page not recorded', 'payload' => ['skipped' => true, 'durationMs' => 4200], 'at' => $at + 1000],
+    ]]])->assertCreated();
+
+    $recording = ReplaySession::query()->findOrFail($session);
+
+    expect($recording->page_count)->toBe(1)
+        ->and($recording->markers()->where('type', 'navigation')->count())->toBe(2);
+});

@@ -50,4 +50,21 @@ class AddReplayContext
 
         return $next($request);
     }
+
+    /**
+     * Once the route is known: a page the app does not record (except,
+     * except_routes) gets no replay link in its log lines and raises no
+     * server-error marker, even while the tab's recording runs around it (an
+     * excluded page inside a wire:navigate session, whose cookie is still
+     * set). Global middleware runs before routing, so this waits for
+     * RouteMatched. Livewire's update requests from such a page keep the
+     * keys: their path is not the page's.
+     */
+    public static function forgetOnExcludedPage(Request $request): void
+    {
+        if (Context::has('session_replay') && SessionReplay::isExcluded($request)) {
+            Context::forget(['session_replay', 'session_replay_url', 'session_replay_moment']);
+            app(ServerErrors::class)->forRecording(null);
+        }
+    }
 }

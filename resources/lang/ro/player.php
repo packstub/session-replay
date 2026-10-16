@@ -20,5 +20,6 @@ return [
     ],
     'copy_link' => 'Copiază linkul către acest moment',
     'link_copied' => 'Link copiat',
+    'skipped_page' => 'O pagină pe care aplicația nu o înregistrează',
 
 ];

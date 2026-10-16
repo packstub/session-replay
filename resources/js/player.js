@@ -142,6 +142,51 @@ async function load(manifest, progress) {
     return restoreAssets(events, texts);
 }
 
+/** A marker's payload, whatever shape the manifest gave it. */
+function payloadOf(marker) {
+    try {
+        return (typeof marker.payload === 'string' ? JSON.parse(marker.payload) : marker.payload) || {};
+    } catch {
+        return {};
+    }
+}
+
+/** Pages the app does not record, skipped inside the recording: the marker's start and how long they took. */
+function gapsOf(manifest, startedAt) {
+    return manifest.markers
+        .map((marker) => ({ marker, payload: payloadOf(marker) }))
+        .filter(({ marker, payload }) => marker.type === 'navigation' && payload.skipped)
+        .map(({ marker, payload }) => ({ at: Math.max(0, marker.at - startedAt), durationMs: Math.max(0, Number(payload.durationMs) || 0) }));
+}
+
+/** The label shown for a marker: the gap marker speaks the viewer's language, with how long the pages took. */
+function markerLabel(marker, text) {
+    if (marker.type !== 'navigation') return marker.label;
+
+    const payload = payloadOf(marker);
+
+    return payload.skipped ? `${text.skipped_page}${payload.durationMs > 0 ? ` (${clock(payload.durationMs)})` : ''}` : marker.label;
+}
+
+/** Hatched bands on rrweb-player's progress bar where pages the app does not record were skipped. */
+function gapBands(player, stage, manifest, startedAt, text) {
+    const gaps = gapsOf(manifest, startedAt);
+    const bar = stage.querySelector('.rr-progress');
+    const total = player.getMetaData?.()?.totalTime;
+
+    if (!gaps.length || !bar || !total) return;
+
+    for (const gap of gaps) {
+        const left = Math.min(100, (gap.at / total) * 100);
+        const band = element('span', 'sr-gap');
+
+        band.style.left = `${left}%`;
+        band.style.width = `${Math.max(0.5, Math.min(100 - left, (gap.durationMs / total) * 100))}%`;
+        band.title = `${text.skipped_page}${gap.durationMs > 0 ? ` (${clock(gap.durationMs)})` : ''}`;
+        bar.append(band);
+    }
+}
+
 function markerList(manifest, startedAt, seek, text) {
     const panel = element('aside', 'sr-markers');
     const filters = element('div', 'sr-markers__filters');
@@ -167,8 +212,10 @@ function markerList(manifest, startedAt, seek, text) {
 
             button.type = 'button';
             dot.style.background = COLORS[marker.type] || COLORS.custom;
-            button.append(dot, element('span', 'sr-marker__time', clock(offset)), element('span', 'sr-marker__label', marker.label));
-            button.title = `${text.types[marker.type] || marker.type}: ${marker.label}`;
+            const label = markerLabel(marker, text);
+
+            button.append(dot, element('span', 'sr-marker__time', clock(offset)), element('span', 'sr-marker__label', label));
+            button.title = `${text.types[marker.type] || marker.type}: ${label}`;
             // A second of lead-in, so the moment itself is seen happening.
             button.addEventListener('click', () => seek(Math.max(0, offset - 1000)));
 
@@ -394,6 +441,8 @@ async function mount(root, options = {}) {
 
     frame?.contentDocument?.open();
     frame?.contentDocument?.close();
+
+    gapBands(player, stage, manifest, startedAt, text);
 
     const stopPointer = pointer(player, root);
 

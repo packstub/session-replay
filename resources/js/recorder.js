@@ -1188,7 +1188,8 @@ const navigation = navigationPause({
         if (stopRecording && !stopped && session && ((fresh.identity ?? null) !== (session.identity ?? null) || Date.now() - session.lastActivity > fresh.idleTimeout)) {
             restart(fresh);
 
-            return;
+            // A new recording: the pages left out before this one belong to no replay.
+            return false;
         }
 
         config = fresh;
@@ -1213,6 +1214,11 @@ const navigation = navigationPause({
                 if (!stopped && buffer.length) flush();
             }, FIRST_FLUSH_MS);
         }
+    },
+    // Pages the app does not record sat between the last recorded page and this one: the replay has a gap there,
+    // and one marker at its start says so, without the pages' URLs or titles. The page count leaves it out.
+    skipped(since, until) {
+        mark('navigation', 'Page not recorded', { skipped: true, durationMs: Math.max(0, until - since) }, since);
     },
 });
 

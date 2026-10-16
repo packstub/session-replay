@@ -20,5 +20,6 @@ return [
     ],
     'copy_link' => 'Copy link to this moment',
     'link_copied' => 'Link copied',
+    'skipped_page' => 'A page the app does not record',
 
 ];

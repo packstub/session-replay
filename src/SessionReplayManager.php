@@ -142,7 +142,7 @@ class SessionReplayManager
 
         $own = trim((string) config('session-replay.path', 'session-replay'), '/');
 
-        if ($request->is($own, $own.'/*') || $this->requestMatches($request, config('session-replay.except', []), config('session-replay.except_routes', []))) {
+        if ($request->is($own, $own.'/*') || $this->isExcluded($request)) {
             return false;
         }
 
@@ -160,6 +160,12 @@ class SessionReplayManager
     }
 
     /** The request's path or route name matches one of the Str::is patterns; keys in a published list are ignored. */
+    /** Whether the app leaves this request's page out of recordings (except, except_routes). The route must be matched. */
+    public function isExcluded(Request $request): bool
+    {
+        return $this->requestMatches($request, config('session-replay.except', []), config('session-replay.except_routes', []));
+    }
+
     protected function requestMatches(Request $request, mixed $paths, mixed $routes): bool
     {
         // array_values: a keyed entry in a published list would be spread as a named argument and throw.
