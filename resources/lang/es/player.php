@@ -21,5 +21,28 @@ return [
     'copy_link' => 'Copiar enlace a este momento',
     'link_copied' => 'Enlace copiado',
     'skipped_page' => 'Una página que la aplicación no graba',
+    'details' => [
+        'open_logs' => 'Abrir en los logs',
+        'copy_report' => 'Copiar id del informe',
+        'report_copied' => 'Id del informe copiado',
+        'skipped_hint' => 'La página coincidió con except o except_routes, o recordWhen() dijo que no. Nada de ella está en la grabación, que continúa en la siguiente página grabada.',
+    ],
+    'fields' => [
+        'source' => 'Origen',
+        'status' => 'Estado',
+        'method' => 'Método',
+        'path' => 'Ruta',
+        'url' => 'URL',
+        'title' => 'Título',
+        'exception' => 'Excepción',
+        'report' => 'Id del informe',
+        'durationMs' => 'Duración',
+        'level' => 'Nivel',
+        'name' => 'Nombre',
+        'value' => 'Valor',
+        'rating' => 'Valoración',
+        'x' => 'X',
+        'y' => 'Y',
+    ],
 
 ];

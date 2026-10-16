@@ -1,5 +1,6 @@
 <?php
 
+use Illuminate\Contracts\Debug\ExceptionHandler;
 use Illuminate\Support\Facades\Context;
 use Illuminate\Support\Facades\Route;
 use Illuminate\Support\Str;
@@ -38,9 +39,25 @@ it('puts an exception of a recorded request on the replay: class, status, method
     $marker = serverMarker($session);
 
     expect($marker['label'])->toBe('Server error: RuntimeException')
-        ->and($marker['payload'])->toBe(['source' => 'server', 'exception' => RuntimeException::class, 'status' => 500, 'method' => 'POST', 'path' => '/orders'])
+        ->and($marker['payload'])->toMatchArray(['source' => 'server', 'exception' => RuntimeException::class, 'status' => 500, 'method' => 'POST', 'path' => '/orders'])
+        ->and($marker['payload']['report'])->toMatch('/^[0-9a-z]{26}$/')
         ->and($marker['at'])->toBeGreaterThan(now()->subMinute()->getTimestampMs())
         ->and($session->fresh()->error_count)->toBe(1);
+});
+
+it('gives the report an id that the log lines of the exception carry too', function () {
+    $user = $this->user();
+    $session = $this->recording($user);
+    $logged = null;
+
+    // Registered after the package's callback: what Laravel logs for the exception sees the same Context.
+    app(ExceptionHandler::class)->reportable(function (RuntimeException $exception) use (&$logged): void {
+        $logged = Context::get('session_replay_report');
+    });
+
+    $this->actingAs($user)->withUnencryptedCookie('session_replay_id', $session->id)->post('orders')->assertServerError();
+
+    expect($logged)->toBe(serverMarker($session)['payload']['report']);
 });
 
 it('adds the message, its URLs redacted, only when asked to', function () {

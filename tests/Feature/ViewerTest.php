@@ -4,6 +4,7 @@ use Illuminate\Support\Arr;
 use Illuminate\Support\Facades\Blade;
 use Illuminate\Support\Facades\Gate;
 use Packstub\SessionReplay\Facades\SessionReplay;
+use Packstub\SessionReplay\Models\ReplayMarker;
 use Packstub\SessionReplay\Models\ReplaySession;
 
 it('lets nobody in outside the local environment until the app defines the gate', function () {
@@ -118,7 +119,16 @@ it('serves the manifest, chunks as stored gzip, and stylesheets', function () {
         ->and($manifest['chunks'])->toHaveCount(2)
         ->and($manifest['chunks'][1]['url'])->toBe(route('session-replay.chunk', [$session, 1]))
         ->and($manifest['markers'][0]['label'])->toBe('Boom')
+        ->and($manifest['markers'][0]['logUrl'])->toBeNull()
         ->and($manifest['assetUrl'])->toContain('__hash__');
+
+    // Where the marker's log lines are read, when the app says: the player's "Open in logs".
+    SessionReplay::logUrlUsing(fn (ReplayMarker $marker): ?string => $marker->type === 'error' ? 'https://logs.test/?query='.urlencode($marker->label) : null);
+
+    $markers = $this->getJson(route('session-replay.manifest', $session))->assertOk()->json('markers');
+
+    expect($markers[0]['logUrl'])->toBe('https://logs.test/?query=Boom')
+        ->and(array_column($markers, 'logUrl'))->toHaveCount(count($markers));
 
     $chunk = $this->get(route('session-replay.chunk', [$session, 0]))->assertOk()->assertHeader('Content-Encoding', 'gzip');
 

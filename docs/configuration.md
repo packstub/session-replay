@@ -135,6 +135,7 @@ Share pages that look the same for everyone who opens them: a pricing page, the 
 | `SessionReplay::impersonatorUsing(fn ($request) => ...)` | The impersonator's key. |
 | `SessionReplay::propertiesUsing(fn ($request) => [...])` | Anything else to keep on the recording. |
 | `SessionReplay::urlUsing(fn (ReplaySession $session) => ...)` | Where replays are watched, when not the built-in viewer. |
+| `SessionReplay::logUrlUsing(fn (ReplayMarker $marker) => ...)` | Where a marker's log lines are read: the player's "Open in logs" button. See [Error tracking](error-tracking.md#from-the-replay-to-the-logs). |
 | `SessionReplay::visibleUsing(fn (Builder $query, $viewer) => ...)` | Narrow the recordings a viewer finds in a list. Runs as a group of its own, so an `orWhere()` only narrows. |
 
 ## Languages

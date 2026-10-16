@@ -21,5 +21,28 @@ return [
     'copy_link' => 'Link zu diesem Moment kopieren',
     'link_copied' => 'Link kopiert',
     'skipped_page' => 'Eine Seite, die die App nicht aufzeichnet',
+    'details' => [
+        'open_logs' => 'In den Logs öffnen',
+        'copy_report' => 'Report-ID kopieren',
+        'report_copied' => 'Report-ID kopiert',
+        'skipped_hint' => 'Die Seite passte auf except oder except_routes, oder recordWhen() hat Nein gesagt. Nichts davon ist in der Aufzeichnung; sie geht auf der nächsten aufgezeichneten Seite weiter.',
+    ],
+    'fields' => [
+        'source' => 'Quelle',
+        'status' => 'Status',
+        'method' => 'Methode',
+        'path' => 'Pfad',
+        'url' => 'URL',
+        'title' => 'Titel',
+        'exception' => 'Exception',
+        'report' => 'Report-ID',
+        'durationMs' => 'Dauer',
+        'level' => 'Stufe',
+        'name' => 'Name',
+        'value' => 'Wert',
+        'rating' => 'Bewertung',
+        'x' => 'X',
+        'y' => 'Y',
+    ],
 
 ];

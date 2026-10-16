@@ -3,6 +3,7 @@
     --sr-border: rgb(0 0 0 / 0.1);
     --sr-muted: rgb(0 0 0 / 0.55);
     --sr-hover: rgb(0 0 0 / 0.05);
+    --sr-selected: rgb(73 80 246 / 0.09);
     display: grid;
     grid-template-columns: minmax(0, 1fr) 20rem;
     gap: 1rem;
@@ -14,6 +15,7 @@
     --sr-border: rgb(255 255 255 / 0.12);
     --sr-muted: rgb(255 255 255 / 0.6);
     --sr-hover: rgb(255 255 255 / 0.06);
+    --sr-selected: rgb(129 140 248 / 0.16);
 }
 
 @media (max-width: 64rem) {
@@ -130,6 +132,15 @@
     background: var(--sr-hover);
 }
 
+.sr-marker[aria-current='true'] {
+    background: var(--sr-selected);
+}
+
+.sr-marker--gap .sr-marker__label {
+    color: var(--sr-muted);
+    font-style: italic;
+}
+
 .sr-marker__dot {
     width: 0.5rem;
     height: 0.5rem;
@@ -213,4 +224,103 @@
     height: 100%;
     pointer-events: none;
     background: repeating-linear-gradient(135deg, rgba(100, 116, 139, 0.55) 0 3px, transparent 3px 6px);
+}
+
+/* The details of the marker that was clicked, under the list. */
+.sr-details {
+    border-top: 1px solid var(--sr-border);
+    padding: 0.75rem 0.875rem 0.875rem;
+    display: grid;
+    gap: 0.625rem;
+    font-size: 0.8125rem;
+}
+
+.sr-details__head {
+    display: flex;
+    align-items: baseline;
+    gap: 0.5rem;
+}
+
+.sr-details__kind {
+    font-size: 0.6875rem;
+    line-height: 1.4;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    font-weight: 600;
+    padding: 0.1rem 0.45rem;
+    border-radius: 0.25rem;
+    color: #fff;
+}
+
+.sr-details__at {
+    font-variant-numeric: tabular-nums;
+    color: var(--sr-muted);
+}
+
+.sr-details__title {
+    margin: 0;
+    font-size: 0.875rem;
+    font-weight: 600;
+    overflow-wrap: anywhere;
+}
+
+.sr-details dl {
+    margin: 0;
+    display: grid;
+    grid-template-columns: max-content minmax(0, 1fr);
+    gap: 0.3rem 0.75rem;
+}
+
+.sr-details dt {
+    color: var(--sr-muted);
+}
+
+.sr-details dd {
+    margin: 0;
+    min-width: 0;
+    overflow-wrap: anywhere;
+}
+
+.sr-details code,
+.sr-details pre {
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    font-size: 0.75rem;
+    background: var(--sr-hover);
+    border-radius: 0.25rem;
+}
+
+.sr-details code {
+    padding: 0.05rem 0.3rem;
+}
+
+.sr-details pre {
+    margin: 0;
+    padding: 0.5rem 0.625rem;
+    line-height: 1.5;
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+    overflow-x: auto;
+}
+
+.sr-details__hint {
+    margin: 0;
+    font-size: 0.75rem;
+    color: var(--sr-muted);
+}
+
+.sr-details__actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.375rem;
+}
+
+.sr-details__actions a.sr-chip {
+    text-decoration: none;
+    display: inline-block;
+}
+
+.sr-chip--primary {
+    border-color: var(--sr-pointer);
+    color: var(--sr-pointer);
+    font-weight: 500;
 }

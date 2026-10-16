@@ -21,5 +21,28 @@ return [
     'copy_link' => 'Copiază linkul către acest moment',
     'link_copied' => 'Link copiat',
     'skipped_page' => 'O pagină pe care aplicația nu o înregistrează',
+    'details' => [
+        'open_logs' => 'Deschide în loguri',
+        'copy_report' => 'Copiază id-ul raportului',
+        'report_copied' => 'Id-ul raportului a fost copiat',
+        'skipped_hint' => 'Pagina s-a potrivit cu except sau except_routes, ori recordWhen() a spus nu. Nimic din ea nu este în înregistrare, care continuă pe următoarea pagină înregistrată.',
+    ],
+    'fields' => [
+        'source' => 'Sursă',
+        'status' => 'Stare',
+        'method' => 'Metodă',
+        'path' => 'Cale',
+        'url' => 'URL',
+        'title' => 'Titlu',
+        'exception' => 'Excepție',
+        'report' => 'Id raport',
+        'durationMs' => 'Durată',
+        'level' => 'Nivel',
+        'name' => 'Nume',
+        'value' => 'Valoare',
+        'rating' => 'Evaluare',
+        'x' => 'X',
+        'y' => 'Y',
+    ],
 
 ];

@@ -4,6 +4,8 @@ namespace Workbench\App\Providers;
 
 use Illuminate\Support\Facades\Gate;
 use Illuminate\Support\ServiceProvider;
+use Packstub\SessionReplay\Facades\SessionReplay;
+use Packstub\SessionReplay\Models\ReplayMarker;
 use Packstub\SessionReplay\Tests\Fixtures\Models\User;
 
 /** A page to record and a viewer anyone may open: `composer serve`, click around, then visit /session-replay. */
@@ -29,5 +31,8 @@ class WorkbenchServiceProvider extends ServiceProvider
         config()->set('session-replay.privacy.mask_all_inputs', (bool) env('SESSION_REPLAY_MASK_ALL_INPUTS', true));
 
         Gate::define('viewSessionReplay', fn ($user) => true);
+
+        // "Open in logs" on a server error's details: a Log Viewer search for the report id, as an app would register it.
+        SessionReplay::logUrlUsing(fn (ReplayMarker $marker): ?string => isset($marker->payload['report']) ? url('/log-viewer?query='.$marker->payload['report']) : null);
     }
 }

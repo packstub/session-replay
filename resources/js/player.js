@@ -193,6 +193,8 @@ function markerList(manifest, startedAt, seek, text) {
     const list = element('ol', 'sr-markers__list');
     const hidden = new Set(['vital']);
     const types = [...new Set(manifest.markers.map((marker) => marker.type))];
+    const details = markerDetails(text);
+    let selected = null;
 
     const render = () => {
         list.replaceChildren();
@@ -216,8 +218,15 @@ function markerList(manifest, startedAt, seek, text) {
 
             button.append(dot, element('span', 'sr-marker__time', clock(offset)), element('span', 'sr-marker__label', label));
             button.title = `${text.types[marker.type] || marker.type}: ${label}`;
-            // A second of lead-in, so the moment itself is seen happening.
-            button.addEventListener('click', () => seek(Math.max(0, offset - 1000)));
+            button.setAttribute('aria-current', String(marker === selected));
+            if (marker.type === 'navigation' && payloadOf(marker).skipped) button.classList.add('sr-marker--gap');
+            // A second of lead-in, so the moment itself is seen happening; the details under the list are this marker's.
+            button.addEventListener('click', () => {
+                seek(Math.max(0, offset - 1000));
+                selected = marker;
+                details.show(marker, offset);
+                for (const other of list.querySelectorAll('.sr-marker')) other.setAttribute('aria-current', String(other === button));
+            });
 
             const item = element('li');
 
@@ -241,7 +250,7 @@ function markerList(manifest, startedAt, seek, text) {
     }
 
     render();
-    panel.append(filters, list);
+    panel.append(filters, list, details.panel);
 
     return panel;
 }
@@ -341,6 +350,100 @@ function pointer(player, root) {
  * "Copy link to this moment": the page's URL with ?t= at the second the
  * replay is at, which opens the replay there for whoever may watch it.
  */
+/** Copy a text from a button's click, with the prompt as the fallback where there is no clipboard (plain http). */
+async function copy(value, button, prompt, done, idle) {
+    try {
+        await navigator.clipboard.writeText(value);
+    } catch {
+        window.prompt(prompt, value);
+
+        return;
+    }
+
+    button.textContent = done;
+    clearTimeout(button.srReset);
+    button.srReset = setTimeout(() => (button.textContent = idle), 2000);
+}
+
+/**
+ * The details of the marker that was clicked, under the list: what the index
+ * stores about it (the payload, row by row), and the actions that go with it.
+ * A server error's "Open in logs" is the URL the app gave the manifest
+ * (SessionReplay::logUrlUsing()); its report id is what the log lines carry.
+ */
+function markerDetails(text) {
+    const panel = element('section', 'sr-details');
+
+    panel.hidden = true;
+
+    const row = (key, value) => {
+        const name = element('dt', null, text.fields[key] || key);
+        const data = element('dd');
+
+        if (value !== null && typeof value === 'object') {
+            data.append(element('pre', null, JSON.stringify(value, null, 2)));
+        } else if (key === 'durationMs') {
+            data.textContent = clock(Math.max(0, Number(value) || 0));
+        } else if (['report', 'exception', 'path', 'method', 'url'].includes(key)) {
+            data.append(element('code', null, String(value)));
+        } else {
+            data.textContent = String(value);
+        }
+
+        return [name, data];
+    };
+
+    return {
+        panel,
+        show(marker, offset) {
+            const payload = payloadOf(marker);
+            const kind = element('span', 'sr-details__kind', text.types[marker.type] || marker.type);
+            const head = element('div', 'sr-details__head');
+            const list = element('dl');
+            const actions = element('div', 'sr-details__actions');
+            const skipped = marker.type === 'navigation' && payload.skipped;
+
+            kind.style.background = COLORS[marker.type] || COLORS.custom;
+            head.append(kind, element('span', 'sr-details__at', clock(offset)));
+
+            for (const [key, value] of Object.entries(payload)) {
+                if (key === 'skipped' || value === undefined || value === null || value === '') continue;
+
+                list.append(...row(key, value));
+            }
+
+            if (marker.logUrl) {
+                const open = element('a', 'sr-chip sr-chip--action sr-chip--primary', text.details.open_logs);
+
+                open.href = marker.logUrl;
+                open.target = '_blank';
+                open.rel = 'noopener';
+                actions.append(open);
+            }
+
+            if (typeof payload.report === 'string') {
+                const button = element('button', 'sr-chip sr-chip--action', text.details.copy_report);
+
+                button.type = 'button';
+                button.addEventListener('click', () => copy(payload.report, button, text.details.copy_report, text.details.report_copied, text.details.copy_report));
+                actions.append(button);
+            }
+
+            const link = element('button', 'sr-chip sr-chip--action', text.copy_link);
+
+            link.type = 'button';
+            link.addEventListener('click', () => copy(momentUrl(location.href, offset), link, text.copy_link, text.link_copied, text.copy_link));
+            actions.append(link);
+
+            panel.replaceChildren(head, element('h3', 'sr-details__title', markerLabel(marker, text)));
+            if (list.childElementCount) panel.append(list);
+            if (skipped) panel.append(element('p', 'sr-details__hint', text.details.skipped_hint));
+            panel.append(actions);
+            panel.hidden = false;
+        },
+    };
+}
+
 function copyLink(player, text) {
     const bar = element('div', 'sr-player__actions');
     const button = element('button', 'sr-chip sr-chip--action', text.copy_link);
