@@ -21,5 +21,28 @@ return [
     'copy_link' => 'Copy link to this moment',
     'link_copied' => 'Link copied',
     'skipped_page' => 'A page the app does not record',
+    'details' => [
+        'open_logs' => 'Open in logs',
+        'copy_report' => 'Copy report id',
+        'report_copied' => 'Report id copied',
+        'skipped_hint' => 'The page matched except or except_routes, or recordWhen() said no. Nothing of it is in the recording, which continues on the next recorded page.',
+    ],
+    'fields' => [
+        'source' => 'Source',
+        'status' => 'Status',
+        'method' => 'Method',
+        'path' => 'Path',
+        'url' => 'URL',
+        'title' => 'Title',
+        'exception' => 'Exception',
+        'report' => 'Report id',
+        'durationMs' => 'Lasted',
+        'level' => 'Level',
+        'name' => 'Name',
+        'value' => 'Value',
+        'rating' => 'Rating',
+        'x' => 'X',
+        'y' => 'Y',
+    ],
 
 ];

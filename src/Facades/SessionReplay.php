@@ -12,6 +12,8 @@ use Packstub\SessionReplay\SessionReplayManager;
  * @method static \Packstub\SessionReplay\SessionReplayManager impersonatorUsing(\Closure $callback)
  * @method static \Packstub\SessionReplay\SessionReplayManager propertiesUsing(\Closure $callback)
  * @method static \Packstub\SessionReplay\SessionReplayManager urlUsing(\Closure $callback)
+ * @method static \Packstub\SessionReplay\SessionReplayManager logUrlUsing(\Closure $callback)
+ * @method static string|null logUrlFor(\Packstub\SessionReplay\Models\ReplayMarker $marker)
  * @method static \Packstub\SessionReplay\SessionReplayManager visibleUsing(\Closure $callback)
  * @method static \Illuminate\Database\Eloquent\Builder visibleTo(\Illuminate\Database\Eloquent\Builder $query, mixed $viewer = null)
  * @method static bool shouldRecord(\Illuminate\Http\Request|null $request = null)

@@ -10,6 +10,7 @@ use Illuminate\Support\Facades\Gate;
 use Illuminate\Support\Facades\Vite;
 use Illuminate\Support\HtmlString;
 use Illuminate\Support\Str;
+use Packstub\SessionReplay\Models\ReplayMarker;
 use Packstub\SessionReplay\Models\ReplaySession;
 use Packstub\SessionReplay\Support\ContextToken;
 
@@ -32,6 +33,8 @@ class SessionReplayManager
     protected ?Closure $propertiesUsing = null;
 
     protected ?Closure $urlUsing = null;
+
+    protected ?Closure $logUrlUsing = null;
 
     protected ?Closure $visibleUsing = null;
 
@@ -81,6 +84,30 @@ class SessionReplayManager
         $this->urlUsing = $callback;
 
         return $this;
+    }
+
+    /**
+     * Where the log lines of a marker are read: fn (ReplayMarker $marker): ?string. Called for every marker the
+     * player shows; a URL puts an "Open in logs" button in the marker's details. A server error's payload carries
+     * `report`, the id its log lines and error report carry as `session_replay_report`.
+     */
+    public function logUrlUsing(Closure $callback): static
+    {
+        $this->logUrlUsing = $callback;
+
+        return $this;
+    }
+
+    /** The URL logUrlUsing() gives for this marker, or null without one. */
+    public function logUrlFor(ReplayMarker $marker): ?string
+    {
+        if ($this->logUrlUsing === null) {
+            return null;
+        }
+
+        $url = ($this->logUrlUsing)($marker);
+
+        return is_string($url) && $url !== '' ? $url : null;
     }
 
     /**

@@ -119,6 +119,19 @@ Markers sit on the timeline in their colour and in a list next to the player; a 
 
 The controller plays at 1x, 2x, 4x and 8x, skips inactivity and goes full screen.
 
+**Marker details.** A click on a marker also opens its details under the list: what the index stores about it, row by row. A server error shows the exception class, the status, the method and path, its report id and, with `capture.server_errors = 'message'`, the message; a failed request its status and URL; a console marker its arguments; a rage click where it happened; a page its URL and title. Under the rows, **Copy link to this moment** copies the link to that marker's second, **Copy report id** (server errors) copies the id the exception's log lines carry as `session_replay_report`, and **Open in logs** appears when your app says where a marker's log lines are read:
+
+```php
+use Packstub\SessionReplay\Facades\SessionReplay;
+use Packstub\SessionReplay\Models\ReplayMarker;
+
+SessionReplay::logUrlUsing(fn (ReplayMarker $marker): ?string => isset($marker->payload['report'])
+    ? url('/log-viewer?query='.$marker->payload['report'])
+    : null);
+```
+
+The closure is called for every marker the player shows and may return `null`; see [Error tracking](error-tracking.md#from-the-replay-to-the-logs) for the report id and more examples.
+
 `?t=83` opens a replay at 1:23:
 
 ```

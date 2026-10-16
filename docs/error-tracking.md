@@ -13,8 +13,27 @@ While a recording runs, every log line and error report of that person's request
 | `session_replay` | The recording's id |
 | `session_replay_url` | Where to watch it: the built-in viewer's page, or what `SessionReplay::urlUsing()` returns. Left out when there is nowhere to link to. |
 | `session_replay_moment` | The same page with `?at=` and the request's time, so it opens the replay a few seconds before this request. Left out with `session_replay_url`. |
+| `session_replay_report` | Added when an exception is reported during the request (`capture.server_errors`): the id of that report, the same the `error` marker on the replay carries in its payload as `report`. See [From the replay to the logs](#from-the-replay-to-the-logs). |
 
 The middleware runs no query.
+
+## From the replay to the logs
+
+The keys above take you from a log line to the replay. The other way round starts at the marker: when Laravel reports an exception during a recorded request, the package gives the report an id (a ULID), puts it on the `error` marker's payload as `report` and adds it to `Context` as `session_replay_report` before Laravel logs the exception, so the log lines of exactly that exception, and the event your error tracker receives, carry the same id. The marker's details in the player show the id with a **Copy report id** button, and an **Open in logs** button when your app says where to look:
+
+```php
+// app/Providers/SessionReplayServiceProvider.php, boot()
+use Packstub\SessionReplay\Facades\SessionReplay;
+use Packstub\SessionReplay\Models\ReplayMarker;
+
+SessionReplay::logUrlUsing(function (ReplayMarker $marker): ?string {
+    $report = $marker->payload['report'] ?? null;
+
+    return $report ? url('/log-viewer?query='.$report) : null;
+});
+```
+
+The closure receives every marker the player shows and returns a URL or `null`. Three tools, by example: [Log Viewer](https://log-viewer.opcodes.io) searches the files for `?query=<report id>`; Telescope's exceptions page lists the exception by class and time (`url('/telescope/exceptions')`); Sentry and Flare take the id as a search on the `session_replay_report` context key in their own URLs. The button opens in a new tab and is only ever shown to someone the `viewSessionReplay` gate let in.
 
 ## Where it shows up
 

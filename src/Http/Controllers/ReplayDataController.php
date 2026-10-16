@@ -43,6 +43,8 @@ class ReplayDataController
                 'payload' => $marker->payload,
                 'at' => $marker->at_ms,
                 'offset' => max(0, $marker->at_ms - $startedAt),
+                // Where this marker's log lines are read (SessionReplay::logUrlUsing()); the player's "Open in logs".
+                'logUrl' => SessionReplay::logUrlFor($marker),
             ])->all(),
         ]);
     }

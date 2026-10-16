@@ -5,6 +5,8 @@ namespace Packstub\SessionReplay\Support;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Cache;
+use Illuminate\Support\Facades\Context;
+use Illuminate\Support\Str;
 use Packstub\SessionReplay\Facades\SessionReplay;
 use Packstub\SessionReplay\Models\ReplayMarker;
 use Packstub\SessionReplay\Models\ReplaySession;
@@ -94,6 +96,12 @@ class ServerErrors
     /** @return array<string, mixed> */
     protected function marker(Throwable $exception, bool $withMessage): array
     {
+        // One id for this report, on the marker and in the Context of everything logged from here on: the join
+        // between a marker in the player and the log lines (or the error tracker's event) of exactly this exception.
+        $report = strtolower((string) Str::ulid());
+
+        Context::add('session_replay_report', $report);
+
         $label = 'Server error: '.class_basename($exception);
         $message = trim($exception->getMessage());
 
@@ -107,6 +115,7 @@ class ServerErrors
             'label' => mb_substr($label, 0, 480),
             'payload' => json_encode([
                 'source' => 'server',
+                'report' => $report,
                 'exception' => $exception::class,
                 'status' => $exception instanceof HttpExceptionInterface ? $exception->getStatusCode() : 500,
                 'method' => $this->request->method(),
