@@ -156,7 +156,7 @@ The recording itself lives on the disk; the database only holds the index, and i
 | `replay_chunks` | upload (at most one every `flush_interval` while something happens, and one per page load or `wire:navigate` page) | 175 bytes |
 | `replay_markers` | page view, vital, error, failed request, rage click | 155 bytes |
 | `replay_assets` | distinct stylesheet or shared snapshot | 200 bytes |
-| `replay_session_assets` | shared snapshot a recording points at | 100 bytes |
+| `replay_session_assets` | stylesheet or shared snapshot a recording points at | 100 bytes |
 
 In the lab's navigation run (19 page loads in 46 seconds) that came to 55 chunk rows and 75 marker rows, about 21 KB of rows next to 311 KB on the disk.
 
@@ -186,7 +186,7 @@ php artisan session-replay:prune --days=7
 
 - Deletes recordings whose last activity is older than the window, one by one, with their files.
 - Keeps pinned recordings: `$session->forceFill(['pinned' => true])->save()`.
-- Deletes stylesheets that were last referenced before the window and that no recording that is left points at, so a pinned recording keeps its styling for as long as it stays, without keeping every other stylesheet of its day. Recordings made before 1.0.0-beta.6 point at nothing: while a pinned one of those is left, stylesheets last seen since it started stay too.
+- Deletes stylesheets that were last referenced before the window and that no recording that is left points at, so a pinned recording keeps its styling for as long as it stays, without keeping every other stylesheet of its day. Recordings made before the references were stored (1.0.0-beta.5 and earlier) point at nothing: while a pinned one of those is left, stylesheets last seen since it started stay too.
 - Deletes shared snapshots no recording that is left points at, a day after they were last sent. Sending one again moves that date once it is an hour old, so the batch that points at it always has at least 23 hours to arrive.
 - Refuses a window under one day.
 
