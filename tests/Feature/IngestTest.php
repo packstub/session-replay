@@ -238,7 +238,12 @@ it('asks for stylesheets it does not have and stores them under the hash of thei
     $hash = hash('sha256', $css);
     $token = $this->token($this->user());
 
-    $this->ingest(['token' => $token, 'meta' => ['assets' => [$hash, 'not-a-hash']]])->assertCreated()->assertJson(['missing_assets' => [$hash]]);
+    $first = (string) Str::uuid();
+
+    $this->ingest(['token' => $token, 'session' => $first, 'meta' => ['assets' => [$hash, 'not-a-hash']]])->assertCreated()->assertJson(['missing_assets' => [$hash]]);
+
+    // The first recording to send a stylesheet points at it before the upload: the asset upload names no recording.
+    expect(ReplaySessionAsset::query()->pluck('hash')->all())->toBe([$hash]);
 
     $this->post(route('session-replay.ingest.asset'), [
         'token' => $token,
@@ -256,7 +261,7 @@ it('asks for stylesheets it does not have and stores them under the hash of thei
 
     $this->ingest(['token' => $token, 'session' => $session, 'meta' => ['assets' => [$hash]]])->assertCreated()->assertJson(['missing_assets' => []]);
 
-    expect(ReplaySessionAsset::query()->where('hash', $hash)->pluck('replay_session_id')->all())->toBe([$session]);
+    expect(ReplaySessionAsset::query()->where('hash', $hash)->orderBy('created_at')->pluck('replay_session_id')->all())->toEqualCanonicalizing([$first, $session]);
     $this->post(route('session-replay.ingest.asset'), ['token' => $token, 'hash' => $hash, 'content' => 'x'])->assertOk()->assertJson(['duplicate' => true]);
 });
 

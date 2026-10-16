@@ -64,7 +64,7 @@ class BatchIngester
         // The chunk row, its markers, the counters and the snapshot references land together or not at all, so a
         // retry after a failure stores the batch again instead of finding a chunk row and answering "duplicate".
         try {
-            $first = $this->connection()->transaction(function () use ($session, $sessionId, $seq, $meta, $bytes, $from, $to, $events, $markers, $knownStylesheets): bool {
+            $first = $this->connection()->transaction(function () use ($session, $sessionId, $seq, $meta, $bytes, $from, $to, $events, $markers, $stylesheets): bool {
                 // The row exists by now, so locking it is safe on every database. It also orders two batches of one
                 // recording stored at once: exactly one of them finds no chunk yet.
                 $stored = (int) ReplaySession::query()->whereKey($sessionId)->lockForUpdate()->value('chunk_count');
@@ -85,7 +85,10 @@ class BatchIngester
 
                 $this->updateCounters($session, $meta, $bytes, $events, $markers);
                 $this->referenceSnapshots($sessionId, (array) Arr::get($meta, 'snapshots', []));
-                $this->reference($sessionId, $knownStylesheets);
+                // Every stylesheet the batch points at, stored or still to come: the browser uploads a missing one
+                // right after this answer, without naming the recording, and the first recording of a new CSS build
+                // would otherwise point at nothing and lose it to prune while pinned.
+                $this->reference($sessionId, $stylesheets);
 
                 return $stored === 0;
             });
@@ -307,9 +310,10 @@ class BatchIngester
     }
 
     /**
-     * The recording points at these stored assets (stylesheets as well as
-     * shared snapshots): prune keeps an asset while a recording that is left
-     * references it, a pinned one years on included.
+     * The recording points at these assets (stylesheets, stored or about to
+     * be uploaded, and stored shared snapshots): prune keeps an asset while a
+     * recording that is left references it, a pinned one years on included,
+     * and a reference to a hash that never arrives keeps nothing.
      *
      * @param  array<int, string>  $hashes
      */
