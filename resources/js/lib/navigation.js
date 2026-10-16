@@ -33,13 +33,20 @@
  * - swapped() tells whether Livewire swapped the page at least once, recorded
  *   or not: a snapshot from then on is not a page load (a recording started
  *   after a wire:navigate, with consent given on a later page, included).
+ * - skipped(since, until) is called when a recorded page follows one or more
+ *   pages the app leaves out while a recording was paused for them: the
+ *   replay has a gap there, and the recorder marks it, without saying which
+ *   pages. Not called when resume() answers false (the new page started a
+ *   new recording), nor when nothing was recorded before the pages left out.
  */
-export function navigationPause({ pause, resume, current, setTimer = setTimeout, clearTimer = clearTimeout, timeoutMs = 5000 }) {
+export function navigationPause({ pause, resume, current, skipped = null, setTimer = setTimeout, clearTimer = clearTimeout, now = Date.now, timeoutMs = 5000 }) {
     let paused = false;
     let timer = null;
     let swapped = false;
     let awaiting = false;
     let excluded = false;
+    // When the first page left out arrived while the recording was paused for it; null outside such a stretch.
+    let excludedAt = null;
     let held = [];
 
     function clear() {
@@ -55,6 +62,8 @@ export function navigationPause({ pause, resume, current, setTimer = setTimeout,
         const config = current();
 
         if (!config) {
+            if (paused && !excluded) excludedAt = now();
+
             excluded = true;
             held = [];
 
@@ -70,14 +79,20 @@ export function navigationPause({ pause, resume, current, setTimer = setTimeout,
         }
 
         const wasPaused = paused;
+        const gapSince = wasPaused ? excludedAt : null;
         const run = held;
 
         awaiting = false;
         excluded = false;
+        excludedAt = null;
         paused = false;
         held = [];
         clear();
-        resume(config, wasPaused);
+
+        const continued = resume(config, wasPaused);
+
+        // The pages left out sit between the last recorded event and this page's snapshot: one marker at their start.
+        if (gapSince !== null && continued !== false) skipped?.(gapSince, now());
 
         for (const fn of run) fn();
 
@@ -114,6 +129,7 @@ export function navigationPause({ pause, resume, current, setTimer = setTimeout,
         stop() {
             clear();
             paused = false;
+            excludedAt = null;
             held = [];
         },
         isPaused: () => paused,

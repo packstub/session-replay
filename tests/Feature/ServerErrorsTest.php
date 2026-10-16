@@ -15,6 +15,9 @@ beforeEach(function () {
     Route::middleware('web')->get('session-replay/lab/boom', function () {
         throw new RuntimeException('The package\'s own route failed.');
     });
+    Route::middleware('web')->get('password/boom', function () {
+        throw new RuntimeException('A page the app does not record failed.');
+    });
     Route::get('context', fn () => response()->json(Context::all()));
 });
 
@@ -51,13 +54,15 @@ it('adds the message, its URLs redacted, only when asked to', function () {
     expect(serverMarker($session)['label'])->toBe('Server error: RuntimeException: Could not save https://app.test/orders?token=redacted for ada@example.com');
 });
 
-it('leaves out someone else\'s recording, exceptions Laravel does not report, the package\'s own routes, and when turned off', function () {
+it('leaves out someone else\'s recording, exceptions Laravel does not report, the package\'s own routes, pages the app does not record, and when turned off', function () {
     $owner = $this->user();
     $session = $this->recording($owner);
 
     $this->actingAs($this->user())->withUnencryptedCookie('session_replay_id', $session->id)->post('orders')->assertServerError();
     $this->actingAs($owner)->get('missing')->assertNotFound();
     $this->get('session-replay/lab/boom')->assertServerError();
+    // An except page inside a wire:navigate session: the cookie is set, the page is not in the recording.
+    $this->actingAs($owner)->withUnencryptedCookie('session_replay_id', $session->id)->get('password/boom')->assertServerError();
 
     config()->set('session-replay.capture.server_errors', false);
     $this->post('orders')->assertServerError();

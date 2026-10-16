@@ -205,3 +205,12 @@
         opacity: 0;
     }
 }
+
+/* Pages the app does not record, skipped inside the recording: a hatched band on the progress bar. */
+.sr-player .rr-progress .sr-gap {
+    position: absolute;
+    top: 0;
+    height: 100%;
+    pointer-events: none;
+    background: repeating-linear-gradient(135deg, rgba(100, 116, 139, 0.55) 0 3px, transparent 3px 6px);
+}

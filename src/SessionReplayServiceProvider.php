@@ -6,8 +6,10 @@ use Illuminate\Cache\RateLimiting\Limit;
 use Illuminate\Contracts\Debug\ExceptionHandler;
 use Illuminate\Contracts\Http\Kernel;
 use Illuminate\Http\Request;
+use Illuminate\Routing\Events\RouteMatched;
 use Illuminate\Support\Arr;
 use Illuminate\Support\Facades\Blade;
+use Illuminate\Support\Facades\Event;
 use Illuminate\Support\Facades\RateLimiter;
 use Illuminate\Support\Facades\Route;
 use Illuminate\Support\ServiceProvider;
@@ -84,6 +86,7 @@ class SessionReplayServiceProvider extends PackageServiceProvider
         if (config('session-replay.context.enabled', true)) {
             // Global, ahead of cookie decryption: the recorder writes its cookie in the clear.
             $this->app->make(Kernel::class)->prependMiddleware(AddReplayContext::class);
+            Event::listen(RouteMatched::class, fn (RouteMatched $event) => AddReplayContext::forgetOnExcludedPage($event->request));
         }
 
         RateLimiter::for('session-replay', function (Request $request) {

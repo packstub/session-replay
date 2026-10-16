@@ -49,6 +49,7 @@ The replay shows a failed request from the browser's side ("Livewire request fai
 - **Whose recording:** only the recording of the person who made the request. The marker is skipped when the request is signed in as someone else. Recordings that name nobody (guests, `privacy.anonymous`) take it on their id alone, a random UUID only that browser and your logs know.
 - **Recordings not stored yet:** in mode `on_error` the failed request is what makes the browser upload, so the recording often isn't stored yet. The marker then waits in your cache for `idle_timeout`, and the recording's next batch takes it.
 - **Requests only:** queued jobs carry the Context keys along but are never put on a timeline. The package's own routes (uploads, the viewer) are left out too.
+- **Pages the app does not record:** a request to an `except` path or an `except_routes` name carries none of the keys and raises no marker, even while the tab's recording runs around it (a page reached with `wire:navigate` inside a recorded session still sends the cookie). Livewire's update requests from such a page keep the keys: their path is not the page's.
 - **The message:** left out by default, because it often carries personal data (a query's values, an email address). `'message'` adds it to the label, with the URLs in it redacted by `privacy.redact_query`. `false` turns server errors off.
 
 It needs `context.enabled`: the recording's cookie is how a request is matched to its recording.

@@ -20,5 +20,6 @@ return [
     ],
     'copy_link' => 'Copiar enlace a este momento',
     'link_copied' => 'Enlace copiado',
+    'skipped_page' => 'Una página que la aplicación no graba',
 
 ];

@@ -16,7 +16,13 @@ function setup(options = {}) {
 
             return options.pauseResult;
         },
-        resume: (config, paused) => calls.push(paused ? 'resume' : 'config'),
+        resume: (config, paused) => {
+            calls.push(paused ? 'resume' : 'config');
+
+            return options.resumeResult;
+        },
+        skipped: options.skipped,
+        now: options.now,
         setTimer: (callback, ms) => {
             const id = next++;
 
@@ -317,4 +323,63 @@ test('the console plugin of another window (a same-origin iframe) runs as rrweb 
 
     stopFrame();
     assert.equal(state.restores, 1);
+});
+
+test('a recorded page after pages left out reports the gap once, from the first of them', () => {
+    const skips = [];
+    let time = 1000;
+    const { pause, page } = setup({ config: null, skipped: (since, until) => skips.push([since, until]), now: () => time });
+
+    // Two pages the app leaves out in a row, then one it records.
+    pause.navigating(true);
+    pause.navigated();
+    time = 2000;
+    pause.navigating(true);
+    pause.navigated();
+    assert.deepEqual(skips, []);
+
+    time = 3000;
+    page.config = { token: 'next' };
+    pause.navigating(true);
+    pause.navigated();
+
+    assert.deepEqual(skips, [[1000, 3000]]);
+
+    // A recorded page after a recorded page: no gap.
+    time = 4000;
+    pause.navigating(true);
+    pause.navigated();
+    assert.deepEqual(skips, [[1000, 3000]]);
+});
+
+test('no gap is reported when nothing was recorded before, when the page starts a new recording, or after stop', () => {
+    const skips = [];
+    const { pause, page } = setup({ config: null, skipped: (since, until) => skips.push([since, until]), resumeResult: false });
+
+    // Nothing recorded (a tab whose recording never started): the page left out is no gap in anything.
+    pause.navigating(false);
+    pause.navigated();
+    page.config = { token: 'next' };
+    pause.navigating(false);
+    pause.navigated();
+    assert.deepEqual(skips, []);
+
+    // Recorded, pages left out, then a page signed for someone else: resume() answers false, the gap belongs to no replay.
+    page.config = null;
+    pause.navigating(true);
+    pause.navigated();
+    page.config = { token: 'other' };
+    pause.navigating(true);
+    pause.navigated();
+    assert.deepEqual(skips, []);
+
+    // Stopped for good during the pages left out: the next recorded page starts fresh.
+    page.config = null;
+    pause.navigating(true);
+    pause.navigated();
+    pause.stop();
+    page.config = { token: 'next' };
+    pause.navigating(true);
+    pause.navigated();
+    assert.deepEqual(skips, []);
 });
