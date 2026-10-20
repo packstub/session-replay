@@ -6,6 +6,7 @@ use Illuminate\Support\Facades\Gate;
 use Packstub\SessionReplay\Facades\SessionReplay;
 use Packstub\SessionReplay\Models\ReplayMarker;
 use Packstub\SessionReplay\Models\ReplaySession;
+use Packstub\SessionReplay\Tests\Fixtures\Policies\ReplaySessionPolicy;
 
 it('lets nobody in outside the local environment until the app defines the gate', function () {
     $session = $this->recording();
@@ -248,4 +249,93 @@ it('offers the link to the moment in the player unless the page turns it off', f
 
     expect(Blade::render('<x-session-replay::player :session="$session" :assets="false" />', ['session' => $session]))->toContain('data-copy-link="true"')
         ->and(Blade::render('<x-session-replay::player :session="$session" :assets="false" :copy-link="false" />', ['session' => $session]))->toContain('data-copy-link="false"');
+});
+
+it('asks a ReplaySession policy, for the pages and the data, when the app defines no gate', function () {
+    Gate::policy(ReplaySession::class, ReplaySessionPolicy::class);
+
+    $open = $this->recording();
+    $pinned = $this->recording(null, ['pinned' => true]);
+
+    $this->actingAs($this->user(['is_staff' => true]));
+
+    $this->get(route('session-replay.index'))->assertOk();
+    $this->get(route('session-replay.show', $open))->assertOk();
+    $this->get(route('session-replay.manifest', $open))->assertOk();
+    $this->get(route('session-replay.chunk', [$open, 0]))->assertOk();
+    $this->get(route('session-replay.manifest', $pinned))->assertForbidden();
+
+    $this->actingAs($this->user());
+
+    $this->get(route('session-replay.index'))->assertForbidden();
+    $this->get(route('session-replay.manifest', $open))->assertForbidden();
+});
+
+it('lets the gate decide when the app defines both the gate and a policy', function () {
+    Gate::policy(ReplaySession::class, ReplaySessionPolicy::class);
+    Gate::define('viewSessionReplay', fn ($user) => $user->email === 'support@example.com');
+
+    $session = $this->recording();
+
+    $this->actingAs($this->user(['is_staff' => true]))->get(route('session-replay.manifest', $session))->assertForbidden();
+    $this->actingAs($this->user(['email' => 'support@example.com']))->get(route('session-replay.manifest', $session))->assertOk();
+});
+
+it('lists the recordings the person reported a problem from', function () {
+    Gate::define('viewSessionReplay', fn ($user) => true);
+
+    $ada = $this->user(['email' => 'ada@example.com']);
+    $grace = $this->user(['email' => 'grace@example.com']);
+
+    $this->ingest(['token' => $this->token($ada), 'meta' => ['markers' => [
+        ['type' => 'report', 'label' => 'Wrong total on the invoice', 'at' => now()->getTimestampMs()],
+    ]]])->assertCreated();
+    $this->ingest(['token' => $this->token($grace), 'meta' => ['markers' => [
+        ['type' => 'custom', 'label' => 'Checkout started', 'at' => now()->getTimestampMs()],
+    ]]])->assertCreated();
+
+    expect(ReplaySession::query()->reported()->sole()->user->is($ada))->toBeTrue();
+
+    $this->actingAs($ada);
+
+    $this->get(route('session-replay.index'))->assertSeeInOrder(['ada@example.com', 'reported'])->assertSee('grace@example.com');
+    $this->get(route('session-replay.index', ['reported' => 1]))->assertSee('ada@example.com')->assertDontSee('grace@example.com');
+});
+
+it('names the impersonator in the player page when impersonatorUsing() gave a model', function () {
+    Gate::define('viewSessionReplay', fn ($user) => true);
+
+    $admin = $this->user(['email' => 'admin@example.com']);
+    $customer = $this->user();
+    $byModel = $this->recording(null, []);
+    $byModel->forceFill(['impersonator_type' => $admin->getMorphClass(), 'impersonator_id' => (string) $admin->id])->save();
+    $byKey = $this->recording($customer, ['impersonator_id' => '42']);
+
+    $this->actingAs($admin);
+
+    $this->get(route('session-replay.show', $byModel))->assertSee('admin@example.com');
+    $this->get(route('session-replay.show', $byKey))->assertSee('#42');
+});
+
+it('serves a stylesheet only to a recording that points at it, once the recording has references', function () {
+    Gate::define('viewSessionReplay', fn ($user) => true);
+
+    $user = $this->user();
+    $css = str_repeat('a{b:c}', 1000);
+    $other = str_repeat('d{e:f}', 1000);
+    $session = $this->recording($user);
+
+    foreach ([$css, $other] as $sheet) {
+        $this->post(route('session-replay.ingest.asset'), ['token' => $this->token($user), 'hash' => hash('sha256', $sheet), 'content' => $sheet])->assertCreated();
+    }
+
+    $this->actingAs($user);
+
+    // From before the references were stored: by hash, as it was.
+    $this->get(route('session-replay.asset', [$session, hash('sha256', $other)]))->assertOk();
+
+    $this->ingest(['token' => $this->token($user), 'session' => $session->id, 'seq' => 1, 'meta' => ['assets' => [hash('sha256', $css)]]])->assertOk();
+
+    $this->get(route('session-replay.asset', [$session, hash('sha256', $css)]))->assertOk();
+    $this->get(route('session-replay.asset', [$session, hash('sha256', $other)]))->assertNotFound();
 });

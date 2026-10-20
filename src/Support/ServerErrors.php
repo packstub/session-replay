@@ -22,7 +22,7 @@ use Throwable;
  *
  * In mode "on_error" the failed request is what makes the browser upload, so
  * the recording is usually not stored yet: the marker waits in the cache for
- * idle_timeout and the recording's next batch takes it (takePending()).
+ * idle_minutes and the recording's next batch takes it (takePending()).
  */
 class ServerErrors
 {
@@ -151,7 +151,7 @@ class ServerErrors
 
         $pending[] = ['marker' => $marker, 'user_type' => $user?->getMorphClass(), 'user_id' => $user === null ? null : (string) $user->getKey()];
 
-        Cache::put($key, $pending, now()->addMinutes(max(1, (int) config('session-replay.idle_timeout', 30))));
+        Cache::put($key, $pending, now()->addMinutes(SessionReplay::idleMinutes()));
     }
 
     /**

@@ -9,6 +9,7 @@ use Illuminate\Support\Arr;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Str;
+use Packstub\SessionReplay\Events\ReplayReported;
 use Packstub\SessionReplay\Events\ReplaySessionStarted;
 use Packstub\SessionReplay\Facades\SessionReplay;
 use Packstub\SessionReplay\Models\ReplayAsset;
@@ -43,7 +44,7 @@ class BatchIngester
         [$session, $created] = $this->session($sessionId, $meta, $context, $userAgent);
 
         // Another first batch of this id made the row a moment ago, after the controller looked: check it the same way.
-        if (! $created && ! ($context->sameUserAs($session->user_type, $session->user_id) && $context->sameImpersonatorAs($session->impersonator_id) && $context->sameTenantAs($session->tenant_type, $session->tenant_id))) {
+        if (! $created && ! ($context->sameUserAs($session->user_type, $session->user_id) && $context->sameImpersonatorAs($session->impersonator_id, $session->impersonator_type) && $context->sameTenantAs($session->tenant_type, $session->tenant_id))) {
             return ['session' => $session, 'created' => false, 'duplicate' => false, 'foreign' => true, 'missing_assets' => []];
         }
 
@@ -106,6 +107,8 @@ class BatchIngester
             ReplaySessionStarted::dispatch($session);
         }
 
+        $this->dispatchReports($session, $markers);
+
         return [
             'session' => $session,
             'created' => $created,
@@ -138,6 +141,7 @@ class BatchIngester
             'user_id' => $context->userId,
             'tenant_type' => $context->tenantType,
             'tenant_id' => $context->tenantId,
+            'impersonator_type' => $context->impersonatorType,
             'impersonator_id' => $context->impersonatorId,
             'properties' => $context->properties ?: null,
             'entry_url' => Str::limit((string) Arr::get($meta, 'url', ''), 2000, '') ?: null,
@@ -178,6 +182,29 @@ class BatchIngester
         }
 
         return $rows;
+    }
+
+    /**
+     * ReplayReported for every report marker this batch stored. A batch is stored once (a retry answers "duplicate"
+     * before it gets here), so each report is announced once.
+     *
+     * @param  array<int, array<string, mixed>>  $markers
+     */
+    protected function dispatchReports(ReplaySession $session, array $markers): void
+    {
+        $times = array_column(array_filter($markers, fn (array $marker): bool => $marker['type'] === ReplayMarker::REPORT), 'at_ms');
+
+        if ($times === []) {
+            return;
+        }
+
+        ReplayMarker::query()
+            ->where('replay_session_id', $session->getKey())
+            ->where('type', ReplayMarker::REPORT)
+            ->whereIn('at_ms', array_unique($times))
+            ->orderBy('at_ms')
+            ->get()
+            ->each(fn (ReplayMarker $marker) => ReplayReported::dispatch($session, $marker));
     }
 
     /**

@@ -21,6 +21,8 @@ return [
     'from' => 'From',
     'to' => 'To',
     'with_errors' => 'With errors',
+    'reported' => 'Reported a problem',
+    'reported_badge' => 'reported',
     'filter' => 'Filter',
     'reset' => 'Reset',
     'empty' => 'No recordings yet. Put @sessionReplay before </body> in a layout and open a page.',

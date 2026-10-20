@@ -43,7 +43,11 @@ return [
     ],
 
     // Minutes without activity after which the browser starts a new recording.
-    'idle_timeout' => 30,
+    'idle_minutes' => 30,
+
+    // Seconds between uploads while the page is open (at least 1). A batch also goes up when the tab is hidden
+    // and when the page goes away.
+    'flush_seconds' => 5,
 
     /*
     |--------------------------------------------------------------------------
@@ -56,6 +60,8 @@ return [
     | and records the rest of the tab's session as usual. A full page load
     | while waiting starts the memory over, so the window holds the pages a
     | tab went through with wire:navigate, not the ones before a reload.
+    | Any other value is read as "on_error", the one that uploads less, and
+    | logged as a warning.
     |
     */
 
@@ -73,7 +79,7 @@ return [
         'triggers' => ['error', 'request'],
         // Ask the person first: send the replay or not, and, when someone is signed in, without their name. true
         // (or 'dialog') asks in a small modal dialog the recorder draws; 'toast' asks in a card at the bottom corner
-        // that leaves the page usable, and counts as "no" when it is left unanswered (ask_timeout). A "no" drops
+        // that leaves the page usable, and counts as "no" when it is left unanswered (ask_timeout_seconds). A "no" drops
         // what was kept.
         'ask' => false,
         // After a "no" (or a toast left unanswered): false leaves the tab alone until its session ends; true asks again
@@ -81,14 +87,14 @@ return [
         'ask_again' => false,
         // Seconds the toast waits for an answer before it counts as "no" (5 to 600); 0 keeps it up until answered.
         // The dialog never times out.
-        'ask_timeout' => 60,
+        'ask_timeout_seconds' => 60,
         // Livewire opens its own modal with the error page when a request fails. When that request puts the question
         // up (ask), "keep" shows the question over Livewire's modal, "replace" shows the question instead of it,
         // and "production" replaces it only while app.debug is off: the production error page says no more than
         // "500 | Server Error", the debug one is worth keeping.
         'livewire_error_modal' => 'production',
         // Keep the uploaded window in the browser (IndexedDB) while its upload fails, so a page reload during the
-        // outage does not lose it: the tab's next page load sends it first. Dropped after idle_timeout, when the
+        // outage does not lose it: the tab's next page load sends it first. Dropped after idle_minutes, when the
         // person changes or when the tab stops. false keeps nothing recorded at rest in the browser.
         'keep_pending' => true,
     ],
@@ -100,7 +106,9 @@ return [
     |
     | "always": recording starts with the page (a product used under a
     | contract that covers it). "opt-in": the recorder loads but waits for
-    | window.SessionReplay.consent(true), and remembers the answer.
+    | window.SessionReplay.consent(true), and remembers the answer. Any
+    | other value is read as "opt-in" and logged as a warning: a typo never
+    | records without consent.
     |
     */
 
@@ -220,9 +228,6 @@ return [
         'volatile_ids' => ['fi-dropdown-panel-*'],
     ],
 
-    // Milliseconds between uploads while the page is open.
-    'flush_interval' => 5000,
-
     /*
     |--------------------------------------------------------------------------
     | Routes
@@ -243,7 +248,7 @@ return [
         // the recorder does not send: identity comes from the token the page was rendered with.
         'middleware' => [],
         // Requests per minute per person (for guests: per rendered page); null turns the limiter off.
-        'throttle' => 240,
+        'requests_per_minute' => 240,
         // Megabytes one person may upload per day, as sent (compressed); null turns it off. A day of steady
         // work in a panel is well under 100 MB.
         'daily_mb' => 250,
@@ -287,7 +292,7 @@ return [
 
     'retention' => [
         // session-replay:prune deletes recordings older than this, except pinned ones.
-        'days' => 30,
+        'days' => (int) env('SESSION_REPLAY_RETENTION_DAYS', 30),
     ],
 
     /*

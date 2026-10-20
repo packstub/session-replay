@@ -1,6 +1,21 @@
 # Configuration
 
-`php artisan session-replay:install` publishes `config/session-replay.php`; `php artisan vendor:publish --tag=session-replay-config` does the same on its own. Your file is merged over the package defaults key by key, so it may contain only what you change. A list you set (`except`, `except_routes`, `capture.console`, `size.strip_attributes`, `size.keep_attributes`, `snapshots.share_routes`, `snapshots.share_paths`, `snapshots.volatile_ids`, `ingest.middleware`, `viewer.middleware`) replaces the default list as a whole, so `[]` really turns a list off.
+`php artisan session-replay:install` publishes `config/session-replay.php`; `php artisan vendor:publish --tag=session-replay-config` does the same on its own. Your file is merged over the package defaults key by key, so it may contain only what you change. A list you set (`except`, `except_routes`, `on_error.triggers`, `privacy.redact_query`, `capture.console`, `size.strip_attributes`, every list) replaces the default list as a whole: `[]` really turns a list off, and a shorter list keeps nothing of the default's.
+
+A value with a few allowed words (`consent`, `mode`) is read in any case and the usual spellings (`opt_in`, `on-error`); anything else is read as the stricter choice (`opt-in`, `on_error`) and logged as a warning.
+
+### Renamed keys
+
+Four keys were renamed in 1.0.0-beta.6 so that each names its unit. A published config with the old names keeps working: an old key stands in for the new one unless the new one is set too. Rename them in your file when convenient.
+
+| Old | New |
+| --- | --- |
+| `idle_timeout` (minutes) | `idle_minutes` |
+| `flush_interval` (milliseconds) | `flush_seconds` (`flush_interval / 1000`) |
+| `on_error.ask_timeout` | `on_error.ask_timeout_seconds` |
+| `ingest.throttle` | `ingest.requests_per_minute` |
+
+Only a published file is read this way; `config()->set()` at runtime needs the new names.
 
 ## Recording
 
@@ -11,8 +26,8 @@
 | `guests` | `env('SESSION_REPLAY_GUESTS', false)` | Record people who are not signed in. |
 | `except` | password-reset and verification pages | Request paths (`Str::is` patterns) that never get the recorder. The package's own pages are always left out. The default list covers `*password-reset*`, `*reset-password*`, `*forgot-password*`, `password/*`, `*email-verification*`, `*verify-email*` and `email/verify*`; a list you set replaces it, so keep those in yours. |
 | `except_routes` | password-reset and verification routes | Route names (`Str::is` patterns) that never get the recorder, whatever their URL. The default list covers `password.*` and `verification.*` (Laravel's starter kits) and `filament.*.auth.password-reset.*`, `filament.*.auth.email-verification.*` and `filament.*.auth.email-change-verification.*` (Filament panels). |
-| `idle_timeout` | `30` | Minutes without activity after which a tab starts a new recording. |
-| `flush_interval` | `5000` | Milliseconds between uploads while the page is open (minimum 1000). |
+| `idle_minutes` | `30` | Minutes without activity after which a tab starts a new recording. |
+| `flush_seconds` | `5` | Seconds between uploads while the page is open (minimum 1; `2.5` works too). |
 
 ## Mode
 
@@ -24,7 +39,7 @@
 | `on_error.triggers` | `['error', 'request']` | Marker types that upload the window: `error`, `request`, `console`, `rage-click`, `custom`. A type also has to be captured (`capture.*`). |
 | `on_error.ask` | `false` | Ask the person before anything is sent: `true` (or `dialog`) in a small modal dialog the recorder draws, `toast` in a card at the bottom corner that leaves the page usable. See [Privacy](privacy.md#asking-before-a-replay-is-sent). |
 | `on_error.ask_again` | `false` | After "Don't send" (or a toast left unanswered): `false` leaves the tab alone until its session ends; `true` asks again on the next trigger, at most once per window, and keeps the window going meanwhile. |
-| `on_error.ask_timeout` | `60` | Seconds the toast waits for an answer before it counts as "Don't send", 5 to 600; `0` keeps it up until it is answered. The dialog never times out. |
+| `on_error.ask_timeout_seconds` | `60` | Seconds the toast waits for an answer before it counts as "Don't send", 5 to 600; `0` keeps it up until it is answered. The dialog never times out. |
 | `on_error.livewire_error_modal` | `production` | What happens to Livewire's error modal when a failed request puts the question up: `keep` shows the question over it, `replace` shows the question instead of it, `production` replaces it only while `app.debug` is off. See [Privacy](privacy.md#asking-before-a-replay-is-sent). |
 | `on_error.keep_pending` | `true` | Keep the uploaded window in the browser (IndexedDB) while its upload fails, so a reload during the outage does not lose it. See [When the upload fails](recording.md#when-the-upload-fails). |
 
@@ -32,7 +47,7 @@
 
 | Key | Default | Meaning |
 | --- | --- | --- |
-| `consent` | `env('SESSION_REPLAY_CONSENT', 'always')` | `always` or `opt-in` (waits for `SessionReplay.consent(true)`). |
+| `consent` | `env('SESSION_REPLAY_CONSENT', 'always')` | `always` or `opt-in` (waits for `SessionReplay.consent(true)`). Any other value is read as `opt-in` and logged. |
 | `respect_gpc` | `false` | Do not record browsers that send Global Privacy Control. |
 
 ## Privacy
@@ -88,7 +103,7 @@ Share pages that look the same for everyone who opens them: a pricing page, the 
 | `path` | `session-replay` | Prefix of every package route. |
 | `domain` | `null` | Restrict the routes to one domain. |
 | `ingest.middleware` | `[]` | Extra middleware for the upload routes. None is needed: identity comes from the signed token. |
-| `ingest.throttle` | `240` | Uploads per minute per person (for guests, per rendered page: a value in the signed token, not one the browser picks). `null` turns it off. |
+| `ingest.requests_per_minute` | `240` | Uploads per minute per person (for guests, per rendered page: a value in the signed token, not one the browser picks). `null` turns it off. |
 | `ingest.daily_mb` | `250` | Megabytes one person may upload per day, as sent. A day of steady work in a panel is well under 100 MB. `null` turns it off. |
 | `ingest.guest_daily_mb` | `2048` | Megabytes all guests together may upload per day. Guests cannot be told apart, so this is the cap that keeps a script from filling the disk. `null` turns it off. |
 | `ingest.max_batch_kb` | `1536` | Largest upload accepted, as sent; a shared snapshot gets the same limit. |
@@ -105,7 +120,7 @@ Share pages that look the same for everyone who opens them: a pricing page, the 
 | `storage.directory` | `session-replay` | Folder on that disk. |
 | `storage.connection` | `env('SESSION_REPLAY_DB_CONNECTION')` | Database connection of the package's tables; `null` is the default connection. |
 | `run_migrations` | `true` | Run the package migrations with `php artisan migrate`. |
-| `retention.days` | `30` | What `session-replay:prune` keeps. |
+| `retention.days` | `env('SESSION_REPLAY_RETENTION_DAYS', 30)` | What `session-replay:prune` keeps. |
 
 ## Viewer
 
@@ -113,7 +128,7 @@ Share pages that look the same for everyone who opens them: a pricing page, the 
 | --- | --- | --- |
 | `viewer.enabled` | `true` | The built-in list and player page. The data routes stay either way. |
 | `viewer.middleware` | `['web', 'auth']` | Runs before the `viewSessionReplay` gate on pages and data routes. |
-| `viewer.guard` | `null` | The guard whose user is handed to the gate. |
+| `viewer.guard` | `null` | The guard whose user is handed to the gate. A plain `auth` in `viewer.middleware` asks this guard too (`auth:admin`). |
 | `viewer.per_page` | `25` | Recordings per list page. |
 | `viewer.user_label` | `email` | Attribute shown for a person in the list. |
 
@@ -121,19 +136,19 @@ Share pages that look the same for everyone who opens them: a pricing page, the 
 
 | Key | Default | Meaning |
 | --- | --- | --- |
-| `context.enabled` | `true` | Write the cookie and add `session_replay` / `session_replay_url` to Laravel's `Context`. |
+| `context.enabled` | `true` | Write the cookie and add `session_replay`, `session_replay_url`, `session_replay_moment` and `session_replay_report` to Laravel's `Context` (see [Error tracking](error-tracking.md#how-it-works)). Server-error markers need it. |
 | `context.cookie` | `session_replay_id` | The cookie's name. |
 
 ## What is registered in code
 
 | Call | Purpose |
 | --- | --- |
-| `Gate::define('viewSessionReplay', fn ($user, ?ReplaySession $session = null) => ...)` | Who may watch. |
+| `Gate::define('viewSessionReplay', fn ($user, ?ReplaySession $session = null) => ...)` | Who may watch. Without it, a `ReplaySession` policy (`viewAny`, `view`) decides. |
 | `SessionReplay::recordWhen(fn ($user, $request) => ...)` | Narrow who is recorded. |
 | `SessionReplay::userUsing(fn ($request) => ...)` | The signed-in person, when not the default guard's. |
 | `SessionReplay::tenantUsing(fn ($request) => ...)` | The workspace of a recording. |
-| `SessionReplay::impersonatorUsing(fn ($request) => ...)` | The impersonator's key. |
-| `SessionReplay::propertiesUsing(fn ($request) => [...])` | Anything else to keep on the recording. |
+| `SessionReplay::impersonatorUsing(fn ($request) => ...)` | The impersonator: a model (stored with its type) or a key. |
+| `SessionReplay::propertiesUsing(fn ($request) => [...])` | Anything else to keep on the recording, at most 4 KB as JSON. Readable in the page's source. |
 | `SessionReplay::urlUsing(fn (ReplaySession $session) => ...)` | Where replays are watched, when not the built-in viewer. |
 | `SessionReplay::logUrlUsing(fn (ReplayMarker $marker) => ...)` | Where a marker's log lines are read: the player's "Open in logs" button. See [Error tracking](error-tracking.md#from-the-replay-to-the-logs). |
 | `SessionReplay::visibleUsing(fn (Builder $query, $viewer) => ...)` | Narrow the recordings a viewer finds in a list. Runs as a group of its own, so an `orWhere()` only narrows. |

@@ -17,6 +17,7 @@ return [
         'navigation' => 'Seite',
         'vital' => 'Vital',
         'custom' => 'Eigene',
+        'report' => 'Meldung',
     ],
     'copy_link' => 'Link zu diesem Moment kopieren',
     'link_copied' => 'Link kopiert',

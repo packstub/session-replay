@@ -116,3 +116,20 @@ it('indexes a workspace\'s recordings by start, and adds the index to an install
 
     expect(Schema::hasIndex('replay_sessions', $columns))->toBeTrue();
 });
+
+it('has the impersonator\'s type on a fresh install, and adds it to an install from before it only once', function () {
+    $migration = require __DIR__.'/../../database/migrations/2026_10_20_000001_add_impersonator_type_to_replay_sessions_table.php';
+
+    expect(Schema::hasColumn('replay_sessions', 'impersonator_type'))->toBeTrue();
+
+    // Already there on a fresh install: nothing happens.
+    $migration->up();
+
+    Schema::table('replay_sessions', fn ($table) => $table->dropColumn('impersonator_type'));
+
+    expect(Schema::hasColumn('replay_sessions', 'impersonator_type'))->toBeFalse();
+
+    $migration->up();
+
+    expect(Schema::hasColumn('replay_sessions', 'impersonator_type'))->toBeTrue();
+});

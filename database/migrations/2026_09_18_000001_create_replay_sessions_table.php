@@ -25,6 +25,7 @@ return new class extends Migration
             $table->string('user_id')->nullable();
             $table->string('tenant_type')->nullable();
             $table->string('tenant_id')->nullable();
+            $table->string('impersonator_type')->nullable(); // null when impersonatorUsing() gave a key, not a model
             $table->string('impersonator_id')->nullable();
             $table->json('properties')->nullable(); // what the app attached when the page rendered (panel, plan…)
             $table->string('entry_url', 2048)->nullable();

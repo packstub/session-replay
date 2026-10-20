@@ -11,6 +11,10 @@ use Illuminate\Database\Eloquent\Model;
  * upload. The ingest endpoint trusts nothing else about identity, so it
  * needs no session, no cookie and no CSRF token, and a panel on its own
  * guard or a tenant in the URL is recorded correctly.
+ *
+ * Signed, not encrypted: everything in it can be read in the page's source.
+ *
+ * @internal
  */
 class ContextToken
 {
@@ -31,6 +35,8 @@ class ContextToken
         // privacy.anonymous: a keyed hash of the person, never stored; their uploads are limited per person and a
         // change of person still starts a new recording, while the recording names nobody.
         public ?string $pseudonym = null,
+        // The impersonator's morph class when impersonatorUsing() gave a model; null for a bare key.
+        public ?string $impersonatorType = null,
     ) {}
 
     /**
@@ -43,21 +49,23 @@ class ContextToken
             ? $this->pseudonym
             : substr(hash_hmac('sha256', 'session-replay-person|'.$this->userType.'|'.$this->userId, self::key()), 0, 32);
 
-        return new self(null, null, $this->tenantType, $this->tenantId, null, $this->properties, $this->issuedAt, $this->nonce, $pseudonym);
+        return new self(null, null, $this->tenantType, $this->tenantId, null, $this->properties, $this->issuedAt, $this->nonce, $pseudonym, null);
     }
 
     /** @param array<string, mixed> $properties */
-    public static function for(?Model $user, ?Model $tenant = null, ?string $impersonatorId = null, array $properties = []): self
+    public static function for(?Model $user, ?Model $tenant = null, Model|string|null $impersonator = null, array $properties = []): self
     {
         return new self(
             $user?->getMorphClass(),
             $user === null ? null : (string) $user->getKey(),
             $tenant?->getMorphClass(),
             $tenant === null ? null : (string) $tenant->getKey(),
-            $impersonatorId,
+            $impersonator instanceof Model ? (string) $impersonator->getKey() : $impersonator,
             $properties,
             time(),
             bin2hex(random_bytes(8)),
+            null,
+            $impersonator instanceof Model ? $impersonator->getMorphClass() : null,
         );
     }
 
@@ -95,10 +103,13 @@ class ContextToken
         return $this->userType === $userType && $this->userId === $userId;
     }
 
-    /** The same impersonator (or none) as the recording's first batch. */
-    public function sameImpersonatorAs(?string $impersonatorId): bool
+    /**
+     * The same impersonator (or none) as the recording's first batch. The type counts once the recording has one: a
+     * recording started before the app returned a model (or before the column existed) has the key alone.
+     */
+    public function sameImpersonatorAs(?string $impersonatorId, ?string $impersonatorType = null): bool
     {
-        return $this->impersonatorId === $impersonatorId;
+        return $this->impersonatorId === $impersonatorId && ($impersonatorType === null || $this->impersonatorType === $impersonatorType);
     }
 
     /** What the ingest limits count against: the person, or for guests the page render the token came from. */
@@ -123,6 +134,7 @@ class ContextToken
             'u' => $this->isGuest() ? null : [$this->userType, $this->userId],
             't' => $this->tenantId === null ? null : [$this->tenantType, $this->tenantId],
             'i' => $this->impersonatorId,
+            'it' => $this->impersonatorType,
             'p' => $this->properties,
             'iat' => $this->issuedAt,
             'n' => $this->nonce,
@@ -164,6 +176,7 @@ class ContextToken
             $data['iat'],
             isset($data['n']) ? (string) $data['n'] : null,
             isset($data['a']) ? (string) $data['a'] : null,
+            isset($data['it']) ? (string) $data['it'] : null,
         );
 
         return $token->isExpired() ? null : $token;

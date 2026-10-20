@@ -31,6 +31,14 @@ use Throwable;
 
 class SessionReplayServiceProvider extends PackageServiceProvider
 {
+    /** Keys renamed before 1.0 to name their unit, old => new; a published config with the old names keeps working. */
+    protected const RENAMED = [
+        'idle_timeout' => 'idle_minutes',
+        'flush_interval' => 'flush_seconds',
+        'on_error.ask_timeout' => 'on_error.ask_timeout_seconds',
+        'ingest.throttle' => 'ingest.requests_per_minute',
+    ];
+
     public function configurePackage(Package $package): void
     {
         $package
@@ -61,21 +69,60 @@ class SessionReplayServiceProvider extends PackageServiceProvider
     public function packageRegistered(): void
     {
         $defaults = require __DIR__.'/../config/session-replay.php';
-        $published = (array) config('session-replay', []);
 
-        config()->set('session-replay', array_replace_recursive($defaults, $published));
-
-        // A list the app set replaces the default list; merged index by index, [] could never turn anything off.
-        foreach (['except', 'capture.console', 'size.strip_attributes', 'size.keep_attributes', 'snapshots.share_routes', 'snapshots.share_paths', 'snapshots.volatile_ids', 'ingest.middleware', 'viewer.middleware'] as $list) {
-            if (Arr::has($published, $list)) {
-                config()->set('session-replay.'.$list, Arr::get($published, $list));
-            }
-        }
+        config()->set('session-replay', self::merge($defaults, self::renamed((array) config('session-replay', []))));
 
         $this->app->singleton(SessionReplayManager::class);
         $this->app->singleton(ReplayStorage::class);
         // Per request: which recording a request belongs to must not leak into the next one (Octane, queue workers).
         $this->app->scoped(ServerErrors::class);
+    }
+
+    /**
+     * The published values over the defaults, key by key. A list the app set replaces the default list as a whole:
+     * merged index by index, [] could never turn anything off and a shorter list would keep the default's tail
+     * (['custom'] over the triggers ['error', 'request'] gave ['custom', 'request']).
+     *
+     * @param  array<array-key, mixed>  $defaults
+     * @param  array<array-key, mixed>  $published
+     * @return array<array-key, mixed>
+     */
+    protected static function merge(array $defaults, array $published): array
+    {
+        foreach ($published as $key => $value) {
+            $default = $defaults[$key] ?? null;
+
+            $defaults[$key] = is_array($value) && is_array($default) && $default !== [] && ! array_is_list($default)
+                ? self::merge($default, $value)
+                : $value;
+        }
+
+        return $defaults;
+    }
+
+    /**
+     * A published config from before the keys named their unit, read under the new names: an old key the app set
+     * stands in for the new one unless the new one is set too. flush_interval was in milliseconds.
+     *
+     * @param  array<array-key, mixed>  $published
+     * @return array<array-key, mixed>
+     */
+    protected static function renamed(array $published): array
+    {
+        foreach (self::RENAMED as $old => $new) {
+            if (! Arr::has($published, $old)) {
+                continue;
+            }
+
+            $value = Arr::get($published, $old);
+            Arr::forget($published, $old);
+
+            if (! Arr::has($published, $new)) {
+                Arr::set($published, $new, $old === 'flush_interval' && is_numeric($value) ? $value / 1000 : $value);
+            }
+        }
+
+        return $published;
     }
 
     public function packageBooted(): void
@@ -90,7 +137,7 @@ class SessionReplayServiceProvider extends PackageServiceProvider
         }
 
         RateLimiter::for('session-replay', function (Request $request) {
-            $perMinute = config('session-replay.ingest.throttle');
+            $perMinute = config('session-replay.ingest.requests_per_minute');
 
             if (! $perMinute) {
                 return Limit::none();
@@ -137,7 +184,7 @@ class SessionReplayServiceProvider extends PackageServiceProvider
                 Route::post('ingest/snapshot', [IngestController::class, 'snapshot'])->name('ingest.snapshot');
             });
 
-            Route::middleware([...(array) config('session-replay.viewer.middleware', ['web', 'auth']), AuthorizeViewer::class])->group(function () use ($uuid): void {
+            Route::middleware([...$this->viewerMiddleware(), AuthorizeViewer::class])->group(function () use ($uuid): void {
                 // The data routes stay when the pages are turned off: the player component needs them.
                 Route::get('{session}/manifest', [ReplayDataController::class, 'manifest'])->where('session', $uuid)->name('manifest');
                 Route::get('{session}/chunks/{seq}', [ReplayDataController::class, 'chunk'])->where('session', $uuid)->whereNumber('seq')->name('chunk');
@@ -150,6 +197,24 @@ class SessionReplayServiceProvider extends PackageServiceProvider
                 }
             });
         });
+    }
+
+    /**
+     * viewer.middleware, with a plain "auth" asking viewer.guard when one is set: the gate is handed that guard's
+     * user, so the login has to be that guard's too.
+     *
+     * @return array<int, mixed>
+     */
+    protected function viewerMiddleware(): array
+    {
+        $middleware = array_values((array) config('session-replay.viewer.middleware', ['web', 'auth']));
+        $guard = config('session-replay.viewer.guard');
+
+        if (! is_string($guard) || $guard === '') {
+            return $middleware;
+        }
+
+        return array_map(fn (mixed $entry): mixed => $entry === 'auth' ? 'auth:'.$guard : $entry, $middleware);
     }
 
     /** app/Providers/SessionReplayServiceProvider.php with the gate in it, the way Telescope and Horizon do. */

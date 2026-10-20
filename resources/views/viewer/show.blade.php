@@ -15,7 +15,7 @@
         <div><dt>{{ __('session-replay::viewer.device') }}</dt><dd>{{ $session->device ?? '·' }} @if ($session->viewport_width) <span class="muted">{{ $session->viewport_width }}×{{ $session->viewport_height }}</span> @endif</dd></div>
         <div><dt>{{ __('session-replay::viewer.size') }}</dt><dd>{{ \Illuminate\Support\Number::fileSize($session->bytes) }}</dd></div>
         @if ($session->impersonator_id)
-            <div><dt>{{ __('session-replay::viewer.impersonated_by') }}</dt><dd>#{{ $session->impersonator_id }}</dd></div>
+            <div><dt>{{ __('session-replay::viewer.impersonated_by') }}</dt><dd>{{ $impersonatorLabel }}</dd></div>
         @endif
         <div><dt>{{ __('session-replay::viewer.first_page') }}</dt><dd title="{{ $session->entry_url }}">{{ $session->entry_url }}</dd></div>
     </dl>

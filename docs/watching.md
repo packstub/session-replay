@@ -17,6 +17,16 @@ Gate::define('viewSessionReplay', function ($user, ?ReplaySession $session = nul
 - It is called **with the recording** for the player page and for every data route behind it: the manifest, each chunk, each stylesheet. A guessed URL gets a 403, and the player component is protected wherever you embed it.
 - **Until your app defines it, only the `local` environment is let in.** A forgotten setup never exposes a recording.
 
+### A policy instead of the gate
+
+Without the gate, a policy registered for `ReplaySession` decides: its `viewAny` for the list and its `view` for a recording, the player page and every data route behind it. That is the shape [Filament Shield](https://github.com/bezhanSalleh/filament-shield) generates, so its permissions cover the player's data too.
+
+```php
+Gate::policy(ReplaySession::class, \App\Policies\ReplaySessionPolicy::class);
+```
+
+When both exist, the gate decides. Without either, only the `local` environment is let in.
+
 `php artisan session-replay:install` publishes `App\Providers\SessionReplayServiceProvider` with the gate in it, the way Telescope and Horizon do.
 
 ### Examples
@@ -78,7 +88,7 @@ SessionReplay::check($session, $user);  // for someone else
 
 ## The built-in viewer
 
-`/session-replay` lists recordings, newest first: person, start, length, pages, errors and rage clicks, the vitals rating, the first page. Filters: **User ID**, **From**, **To**, **With errors**. A recording that received events in the last two minutes is marked live.
+`/session-replay` lists recordings, newest first: person, start, length, pages, errors and rage clicks, the vitals rating, the first page. Filters: **User ID**, **From**, **To**, **With errors**, **Reported a problem** (recordings with a `report` marker, from [`SessionReplay.send()`](recording.md#the-browser-api); they also carry a "reported" badge). A recording that received events in the last two minutes is marked live.
 
 `/session-replay/{session}` shows the facts of one recording and the player with its marker list.
 
@@ -88,18 +98,19 @@ SessionReplay::check($session, $user);  // for someone else
 | `domain` | `null` | Serve the routes on one domain only |
 | `viewer.enabled` | `true` | `false` removes the two pages; the data routes and the component stay |
 | `viewer.middleware` | `['web', 'auth']` | In front of the gate, for the pages and the data routes |
-| `viewer.guard` | `null` | The guard whose user is handed to the gate (`null`: the default guard) |
+| `viewer.guard` | `null` | The guard whose user is handed to the gate (`null`: the default guard); a plain `auth` in `viewer.middleware` then asks this guard too |
 | `viewer.per_page` | `25` | Recordings per page |
 | `viewer.user_label` | `email` | The attribute shown for a person; falls back to `#id`, and to "Guest" |
 
-With a guard of its own, set both the middleware and the guard:
+With a guard of its own, set the guard; the `auth` middleware follows it (`auth:admin`), so the login and the gate ask the same guard:
 
 ```php
 'viewer' => [
-    'middleware' => ['web', 'auth:admin'],
     'guard' => 'admin',
 ],
 ```
+
+A middleware list that names a guard itself (`auth:staff`) is left as it is.
 
 The viewer's own pages are never recorded.
 
@@ -217,7 +228,7 @@ class User extends Authenticatable
 $user->sessionReplays()->latest('started_at')->first()?->url();
 ```
 
-`ReplaySession` has `user()` and `tenant()` (morph relations), `chunks()`, `markers()`, and these scopes:
+`ReplaySession` has `user()`, `tenant()` and `impersonator()` (morph relations; `impersonator()` is `null` when [`impersonatorUsing()`](recording.md#who-is-recorded) gave a key, not a model), `chunks()`, `markers()`, and these scopes:
 
 ```php
 use Packstub\SessionReplay\Models\ReplaySession;
@@ -231,6 +242,7 @@ ReplaySession::query()->forTenant($team)->poorVitals()->count();
 | `forUser($user)` | of that person |
 | `forTenant($tenant)` | of that workspace |
 | `withErrors()` | with at least one `error` or `request` marker |
+| `reported()` | where the person reported a problem (`SessionReplay.send()`, a `report` marker) |
 | `poorVitals()` | with LCP over 4000 ms, INP over 500 ms or CLS over 0.25 |
 | `prunable($days)` | older than the window and not pinned |
 
@@ -249,5 +261,16 @@ use Packstub\SessionReplay\Events\ReplaySessionStarted;
 
 Event::listen(function (ReplaySessionStarted $event): void {
     logger()->info('Recording started', ['url' => $event->session->url()]);
+});
+```
+
+`ReplayReported` is dispatched once for every problem a person reported with `SessionReplay.send()`, when the batch with it is stored. It carries the recording and the `report` marker (its label and payload), so support can be told with a link:
+
+```php
+use Packstub\SessionReplay\Events\ReplayReported;
+
+Event::listen(function (ReplayReported $event): void {
+    Notification::route('slack', config('services.slack.support'))
+        ->notify(new ProblemReported($event->marker->label, $event->session->url()));
 });
 ```

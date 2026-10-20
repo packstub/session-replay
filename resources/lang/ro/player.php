@@ -17,6 +17,7 @@ return [
         'navigation' => 'Pagină',
         'vital' => 'Vital',
         'custom' => 'Personalizat',
+        'report' => 'Raportare',
     ],
     'copy_link' => 'Copiază linkul către acest moment',
     'link_copied' => 'Link copiat',

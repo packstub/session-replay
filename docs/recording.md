@@ -24,8 +24,8 @@ It accepts an options array for a page that knows more than the defaults:
 | --- | --- |
 | `user` | The signed-in person, when it is not the default guard's user. Overrides `SessionReplay::userUsing()`. `null` means a guest. |
 | `tenant` | The workspace (an Eloquent model). Overrides `SessionReplay::tenantUsing()`. |
-| `impersonator` | The key of the person impersonating the user. Overrides `SessionReplay::impersonatorUsing()`. |
-| `properties` | An array merged over what `SessionReplay::propertiesUsing()` returns; stored on the recording. |
+| `impersonator` | The person impersonating the user: a model (stored with its morph class, so the recording links to them) or a key. Overrides `SessionReplay::impersonatorUsing()`. |
+| `properties` | An array merged over what `SessionReplay::propertiesUsing()` returns; stored on the recording. At most 4 KB as JSON: larger properties are left out and a warning is logged. |
 | `nonce` | A CSP nonce for both script tags. |
 
 Outside Blade, `SessionReplay::recorder($options)` returns the same HTML.
@@ -55,11 +55,15 @@ The resolvers tell the package who and where:
 ```php
 SessionReplay::userUsing(fn ($request) => auth('customer')->user());
 SessionReplay::tenantUsing(fn ($request) => $request->user()?->currentTeam);
-SessionReplay::impersonatorUsing(fn ($request) => session('impersonated_by'));
+SessionReplay::impersonatorUsing(fn ($request) => Admin::find(session('impersonated_by')));
 SessionReplay::propertiesUsing(fn ($request) => ['release' => config('app.version')]);
 ```
 
 All four are evaluated when the page renders and signed into the token the recorder uploads with, so the ingest endpoint never has to work out identity itself. A token is accepted for seven days (`ingest.token_days`).
+
+`impersonatorUsing()` may return the impersonator's model or only their key. A model is stored with its morph class (`impersonator_type`), so `$session->impersonator` loads them and the viewer shows them by `viewer.user_label`; a key is stored alone and shown as `#key`. Return the model when the people who impersonate are another model than the people being recorded (an `Admin` next to `User`).
+
+**The token is signed, not encrypted.** Anyone who can read the page's source can read what is in it: the morph class and key of the person, of the workspace and of the impersonator, and the properties. Nobody can change it without the app key. Keep secrets and personal data out of the properties; they are meant for a plan, a panel or a release. They are capped at 4 KB, since every recorded page carries them.
 
 The token is signed with `APP_KEY`. When you rotate the key the way Laravel does, with the old key in `APP_PREVIOUS_KEYS` (`app.previous_keys`), tokens signed with the old key are still accepted, so tabs that are open keep recording; new pages get tokens signed with the new key. Without the old key in `APP_PREVIOUS_KEYS`, every open tab's uploads are refused until its next page load.
 
@@ -77,15 +81,15 @@ A page served from a full-page cache (a response cache, a CDN, a static export) 
 ],
 ```
 
-`guest_tokens_expire` only ever applies to a token with no person, no workspace and no impersonator in it; a token that names someone always expires. Uploads with such a token are size-limited like every other and refused while `guests` is off. Guests are throttled per rendered page, so everyone served the same cached copy shares one `ingest.throttle` budget: on a busy cached page, raise it (each open tab uploads about 12 times a minute), and keep `ingest.guest_daily_mb` above a day of guest traffic. Cache only guest pages: a cached page with a person's token in it would attribute every visitor's recording to that person.
+`guest_tokens_expire` only ever applies to a token with no person, no workspace and no impersonator in it; a token that names someone always expires. Uploads with such a token are size-limited like every other and refused while `guests` is off. Guests are throttled per rendered page, so everyone served the same cached copy shares one `ingest.requests_per_minute` budget: on a busy cached page, raise it (each open tab uploads about 12 times a minute), and keep `ingest.guest_daily_mb` above a day of guest traffic. Cache only guest pages: a cached page with a person's token in it would attribute every visitor's recording to that person.
 
 ## Sessions, idle time and sampling
 
 - **One recording per browser tab.** The recording's id (a UUID) lives in `sessionStorage` and continues across page loads: every full page load adds a new snapshot to the same recording.
 - **One person, one workspace per recording.** A tab that signs in, signs out, switches to another person, moves to another workspace or starts impersonating starts a new recording on that page load. A visitor's walk through your public pages and their signed-in session are two recordings, and a recording filed under one workspace never holds pages of another. The server holds the same line: an upload whose token names another person or workspace than the recording's first batch is refused.
-- **`idle_timeout`** (minutes, default 30): a tab without activity for longer starts a new recording on its next page load, or its next page with `wire:navigate`.
+- **`idle_minutes`** (default 30): a tab without activity for longer starts a new recording on its next page load, or its next page with `wire:navigate`.
 - **`sample_rate`** (0 to 1, default 1): the share of recordings that are kept. The decision is made once, in the browser, when a recording starts, and stays with it.
-- **`flush_interval`** (milliseconds, default 5000, minimum 1000): how often events upload while the page is open. A batch also uploads when the tab is hidden and when the page goes away.
+- **`flush_seconds`** (default 5, minimum 1): how often events upload while the page is open. A batch also uploads when the tab is hidden and when the page goes away.
 - A recording that reaches `ingest.max_session_mb` is marked truncated and the recorder stops.
 
 ## Recording only when something goes wrong
@@ -109,7 +113,7 @@ Most of the replays worth watching show something going wrong. `mode = on_error`
 - **The window covers `wire:navigate` page swaps**, which keep the page alive. A full page load starts the memory over: the window holds the pages a tab went through without a reload, not the ones before it.
 - **`sample_rate`** still applies, to the tabs that keep a window. **`consent = opt-in`**: nothing is kept in memory before consent either.
 - **Memory stays bounded.** The window may take `on_error.max_buffer_mb` (5 MB of events, as the recorder estimates them); a page that changes a lot reaches it before `buffer_seconds` and shrinks the window to its newest snapshot rather than grow without limit.
-- **A "report a problem" button.** `SessionReplay.send('Wrong total on the invoice')` uploads the kept window right away, without the question, with a `custom` marker at that moment; the tab records from then on. See [The browser API](#the-browser-api).
+- **A "report a problem" button.** `SessionReplay.send('Wrong total on the invoice')` uploads the kept window right away, without the question, with a `report` marker at that moment; the tab records from then on. See [The browser API](#the-browser-api).
 - **`on_error.ask`** asks the person before anything is sent, and `on_error.livewire_error_modal` decides whether the question replaces Livewire's own error modal in production; see [Privacy](privacy.md#asking-before-a-replay-is-sent).
 - **Log context.** The recording's cookie is set while the window is kept (never in a tab that is not sampled), so the log line of the server error behind a failed request already points at the recording the browser is about to upload. Log lines of requests where nothing went wrong point at a recording that never comes.
 
@@ -120,7 +124,7 @@ Most of the replays worth watching show something going wrong. `mode = on_error`
 The server that cannot take an upload is often the one whose failed request fired the trigger, so the window's upload is treated with more care than an ordinary batch:
 
 - **Retries while the page stays open.** Every upload that fails, in both modes, is retried for about four minutes (after 2, 4, 8, 16 and 32 seconds, then once a minute), or sooner when the browser reports it is back online. Later batches wait in memory, in order.
-- **The window survives a reload** (`on_error.keep_pending`, default `true`). The window is kept in the browser's IndexedDB as it goes up, before the server answers: a server that is down often answers only after half a minute, and a reload before that aborts the upload. The tab's next page load sends it before anything that page records, with its original place in the recording, and the kept copy goes as soon as the server has answered. It is dropped unsent after `idle_timeout`, when a different person is signed in, when the tab stops recording (consent withdrawn, the person declined, the server said stop), and it is never sent by another tab. Every page load of your app looks for such leftovers, recorded or not, and withdrawing consent removes every kept window of your origin. With `on_error.ask`, nothing is kept before the person agreed, and their anonymous choice is kept with it.
+- **The window survives a reload** (`on_error.keep_pending`, default `true`). The window is kept in the browser's IndexedDB as it goes up, before the server answers: a server that is down often answers only after half a minute, and a reload before that aborts the upload. The tab's next page load sends it before anything that page records, with its original place in the recording, and the kept copy goes as soon as the server has answered. It is dropped unsent after `idle_minutes`, when a different person is signed in, when the tab stops recording (consent withdrawn, the person declined, the server said stop), and it is never sent by another tab. Every page load of your app looks for such leftovers, recorded or not, and withdrawing consent removes every kept window of your origin. With `on_error.ask`, nothing is kept before the person agreed, and their anonymous choice is kept with it.
 - **`keep_pending = false`** keeps nothing recorded at rest in the browser; a reload during the outage then loses the window, as a browser without IndexedDB does.
 
 ## Markers
@@ -135,9 +139,10 @@ Markers are the moments worth jumping to. Each one is stored in `replay_markers`
 | `request` | A Livewire request that failed. Payload: status, URL. Also any other same-origin request (`fetch`, `XMLHttpRequest`: Inertia, axios) answered with a status at or above `capture.requests` (500), or not at all. Label: method, path and status, as in `POST /api/orders failed (500)`. Payload: method, status, URL, duration in ms. Never headers or bodies; other origins, aborted requests and requests cut off by leaving the page are left out. | `capture.livewire`, `capture.requests` |
 | `vital` | LCP, INP and CLS, with value and rating. | `capture.vitals` |
 | `rage-click` | Three or more clicks on the same spot within 700 ms. Label: the control that was clicked (the button around the icon, not the icon), named by its `alt`, `aria-label` or `title`, or by a button's own caption, as in `button "Save changes"`; tag, id and classes when it has no name or sits in a masked area. The text of links, cells and anything else is never used. | `capture.rage_clicks` |
-| `custom` | Your own, from the browser. | always |
+| `custom` | Your own, from the browser: `SessionReplay.mark()`. | always |
+| `report` | The person reported a problem: `SessionReplay.send()`, from a "report a problem" button or a feedback form. Label and payload are the ones `send()` was given. Filter with `ReplaySession::reported()`; `ReplayReported` is dispatched for each (see [Watching replays](watching.md#models-and-scopes)). | always |
 
-A recording's `error_count` counts `error` and `request` markers, `page_count` counts `navigation`, `rage_click_count` counts `rage-click`, and `lcp_ms`, `inp_ms` and `cls` keep the worst value measured.
+A recording's `error_count` counts `error` and `request` markers (not `report`: what the person reported is no error until someone looks), `page_count` counts `navigation`, `rage_click_count` counts `rage-click`, and `lcp_ms`, `inp_ms` and `cls` keep the worst value measured.
 
 ### Your own markers
 
@@ -155,11 +160,24 @@ SessionReplay.mark('Checkout started', { cart: 3 });
 | `stop()` | Stops recording, drops what was not uploaded yet and clears the log-context cookie. |
 | `flush()` | Uploads what is buffered now. Returns a promise. |
 | `mark(label, payload = {})` | Adds a `custom` marker. |
-| `send(label = 'Problem reported', payload = {})` | The person asks for the replay to be sent: a "report a problem" button, a feedback form. Adds a `custom` marker with the label and uploads what the browser holds now. In mode `on_error` the kept window goes up without the `on_error.ask` question, and the tab records from then on; a tab that declined the question, or is not recording, sends nothing. Returns a promise that resolves once the upload went through or was given up on, to `true` when something was sent. |
+| `send(label = 'Problem reported', payload = {})` | The person asks for the replay to be sent: a "report a problem" button, a feedback form. Adds a `report` marker with the label and payload and uploads what the browser holds now. In mode `on_error` the kept window goes up without the `on_error.ask` question, and the tab records from then on; a tab that declined the question, or is not recording, sends nothing. Returns a promise that resolves once the upload went through or was given up on, to `true` when something was sent. |
 | `consent(given)` | `true` remembers the answer and starts; `false` remembers it and stops. See [Privacy](privacy.md#consent). |
 | `isRecording()` | `true` while events are being recorded and uploaded. |
 | `isBuffering()` | `true` while mode `on_error` keeps the last moments in memory and waits for a trigger. |
 | `sessionId()` | The recording's id while recording (in mode `on_error` also while waiting, the id the recording will get), otherwise `null`. |
+
+### When the recording changes
+
+The recorder dispatches `session-replay:session` on `window` whenever the id `sessionId()` returns changes: when a tab starts recording, starts a new recording (after `idle_minutes`, or on a page signed for another person, workspace or impersonator), and when it stops (`event.detail.id` is then `null`). A script that tags its own events with the recording, a front-end error tracker for one, follows it without polling:
+
+```js
+const tag = (id) => Sentry.setTag('session_replay', id ?? undefined);
+
+window.addEventListener('session-replay:session', (event) => tag(event.detail.id));
+tag(window.SessionReplay?.sessionId());
+```
+
+The first event comes as the recorder starts, which may be before your script runs: read `sessionId()` once as well, as above.
 
 ## Livewire
 

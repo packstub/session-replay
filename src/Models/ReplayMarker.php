@@ -13,7 +13,10 @@ use Illuminate\Database\Eloquent\Relations\BelongsTo;
  */
 class ReplayMarker extends ReplayModel
 {
-    public const TYPES = ['error', 'console', 'request', 'navigation', 'vital', 'rage-click', 'custom'];
+    /** "report" is the person's own SessionReplay.send() (a "report a problem" button); "custom" is the app's mark(). */
+    public const TYPES = ['error', 'console', 'request', 'navigation', 'vital', 'rage-click', 'custom', 'report'];
+
+    public const REPORT = 'report';
 
     public const UPDATED_AT = null;
 
