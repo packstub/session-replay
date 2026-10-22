@@ -23,6 +23,8 @@ use Throwable;
  * In mode "on_error" the failed request is what makes the browser upload, so
  * the recording is usually not stored yet: the marker waits in the cache for
  * idle_minutes and the recording's next batch takes it (takePending()).
+ *
+ * @internal Wired by the package; not part of the public API.
  */
 class ServerErrors
 {

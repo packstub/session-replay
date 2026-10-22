@@ -708,6 +708,55 @@ it('keeps a recording started with the impersonator\'s key going when the app st
     $this->ingest(['token' => ContextToken::for($ada, null, $admin)->encode(), 'session' => $session->id, 'seq' => 1])->assertOk();
 });
 
+it('announces a recording\'s reports at most once a minute, every marker stored, so a button pressed in a loop does not flood support', function () {
+    Event::fake([ReplayReported::class]);
+
+    $user = $this->user();
+    $id = (string) Str::uuid();
+    $now = now()->getTimestampMs();
+    $reports = fn (int $from, int $count): array => array_map(fn (int $i): array => ['type' => 'report', 'label' => 'Report '.($from + $i), 'at' => $now + $from + $i], range(0, $count - 1));
+
+    $this->ingest(['token' => $this->token($user), 'session' => $id, 'meta' => ['markers' => $reports(0, 5)]])->assertCreated();
+    $this->ingest(['token' => $this->token($user), 'session' => $id, 'seq' => 1, 'meta' => ['markers' => $reports(5, 1)]])->assertOk();
+
+    Event::assertDispatchedTimes(ReplayReported::class, 1);
+    Event::assertDispatched(ReplayReported::class, fn (ReplayReported $event): bool => $event->marker->label === 'Report 0');
+
+    expect(ReplayMarker::query()->where('type', 'report')->count())->toBe(6);
+
+    $this->travel(61)->seconds();
+    $this->ingest(['token' => $this->token($user), 'session' => $id, 'seq' => 2, 'meta' => ['markers' => $reports(6, 1)]])->assertOk();
+
+    Event::assertDispatchedTimes(ReplayReported::class, 2);
+    Event::assertDispatched(ReplayReported::class, fn (ReplayReported $event): bool => $event->marker->label === 'Report 6');
+});
+
+it('stores the browser\'s times in the app\'s timezone, next to the rows\' own timestamps', function () {
+    config()->set('app.timezone', 'Europe/Bucharest');
+    date_default_timezone_set('Europe/Bucharest');
+
+    $id = (string) Str::uuid();
+    $from = now()->subSeconds(30)->getTimestamp() * 1000;
+
+    $this->ingest(['token' => $this->token($this->user()), 'session' => $id, 'meta' => ['from' => $from, 'to' => $from + 1000, 'markers' => [['type' => 'custom', 'label' => 'Checkout', 'at' => $from + 500]]]])->assertCreated();
+
+    $session = ReplaySession::query()->findOrFail($id);
+    $stored = $session->getConnection()->table('replay_sessions')->where('id', $id)->first();
+
+    expect($session->started_at->getTimestampMs())->toBe($from)
+        ->and($session->started_at->timezoneName)->toBe('Europe/Bucharest')
+        ->and($stored->started_at)->toBe(now()->setTimestamp(intdiv($from, 1000))->format('Y-m-d H:i:s'))
+        ->and(abs($session->created_at->diffInSeconds($session->last_activity_at, true)))->toBeLessThan(60)
+        ->and($session->isLive())->toBeTrue();
+
+    $this->actingAs($this->user());
+    Gate::define('viewSessionReplay', fn ($user) => true);
+
+    $manifest = $this->getJson(route('session-replay.manifest', $id))->assertOk()->json();
+
+    expect($manifest['markers'][0]['offset'])->toBe(500);
+});
+
 it('announces every problem the person reported once, with its recording', function () {
     Event::fake([ReplayReported::class]);
 

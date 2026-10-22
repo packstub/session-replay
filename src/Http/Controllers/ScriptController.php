@@ -5,7 +5,11 @@ namespace Packstub\SessionReplay\Http\Controllers;
 use Packstub\SessionReplay\Facades\SessionReplay;
 use Symfony\Component\HttpFoundation\BinaryFileResponse;
 
-/** GET {path}/scripts/{file} — the built recorder and player, so nothing has to be published. */
+/**
+ * GET {path}/scripts/{file} — the built recorder and player, so nothing has to be published.
+ *
+ * @internal Wired by the package; not part of the public API.
+ */
 class ScriptController
 {
     protected const FILES = [

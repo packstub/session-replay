@@ -101,6 +101,7 @@ SessionReplay::check($session, $user);  // for someone else
 | `viewer.guard` | `null` | The guard whose user is handed to the gate (`null`: the default guard); a plain `auth` in `viewer.middleware` then asks this guard too |
 | `viewer.per_page` | `25` | Recordings per page |
 | `viewer.user_label` | `email` | The attribute shown for a person; falls back to `#id`, and to "Guest" |
+| `viewer.autoplay` | `false` | Start playing as soon as the player is ready; with `?t=` or `?at=`, from that moment |
 
 With a guard of its own, set the guard; the `auth` middleware follows it (`auth:admin`), so the login and the gate ask the same guard:
 
@@ -127,6 +128,7 @@ Markers sit on the timeline in their colour and in a list next to the player; a 
 | `navigation` | blue |
 | `vital` | green (hidden in the list until its chip is pressed) |
 | `custom` | slate |
+| `report` | rose |
 
 The controller plays at 1x, 2x, 4x and 8x, skips inactivity and goes full screen.
 
@@ -166,6 +168,7 @@ Embed the player anywhere; the data routes check the gate for that recording on 
 | `session` | required | A `ReplaySession` or its id |
 | `markers` | `true` | Show the marker list next to the player |
 | `copy-link` | `true` | Show "Copy link to this moment" under the controller |
+| `autoplay` | `viewer.autoplay` | Start playing as soon as the player is ready |
 | `assets` | `true` | Include the player's stylesheet and script (once per page) |
 
 Other attributes (`class`, `id`) pass through to the element. To load the player's files yourself, for example in `<head>`:
@@ -179,7 +182,7 @@ Other attributes (`class`, `id`) pass through to the element. To load the player
 </body>
 ```
 
-In the browser, `window.SessionReplayPlayer.mount(element, { manifestUrl, autoPlay })` mounts a player on an element (it reads `data-manifest` when `manifestUrl` is left out), `mountAll()` mounts every `[data-session-replay-player]` element, `unmount(element)` stops one and empties its element, and the element dispatches `session-replay:ready` once the player is up:
+In the browser, `window.SessionReplayPlayer.mount(element, { manifestUrl, autoplay })` mounts a player on an element (it reads `data-manifest` when `manifestUrl` is left out, and `data-autoplay` when `autoplay` is; `autoPlay` is accepted too), `mountAll()` mounts every `[data-session-replay-player]` element, `unmount(element)` stops one and empties its element, and the element dispatches `session-replay:ready` once the player is up. An element you write yourself may also carry `data-markers="false"` (no marker list), `data-copy-link="false"` and `data-labels` (the JSON of `session-replay::player`, the strings in the app's language; English without it):
 
 ```js
 document.addEventListener('session-replay:ready', (event) => {

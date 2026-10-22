@@ -160,7 +160,7 @@ SessionReplay.mark('Checkout started', { cart: 3 });
 | `stop()` | Stops recording, drops what was not uploaded yet and clears the log-context cookie. |
 | `flush()` | Uploads what is buffered now. Returns a promise. |
 | `mark(label, payload = {})` | Adds a `custom` marker. |
-| `send(label = 'Problem reported', payload = {})` | The person asks for the replay to be sent: a "report a problem" button, a feedback form. Adds a `report` marker with the label and payload and uploads what the browser holds now. In mode `on_error` the kept window goes up without the `on_error.ask` question, and the tab records from then on; a tab that declined the question, or is not recording, sends nothing. Returns a promise that resolves once the upload went through or was given up on, to `true` when something was sent. |
+| `send(label = 'Problem reported', payload = {})` | The person asks for the replay to be sent: a "report a problem" button, a feedback form. Adds a `report` marker with the label and payload and uploads what the browser holds now. In mode `on_error` the kept window goes up without the `on_error.ask` question, and the tab records from then on; a tab that declined the question, or is not recording, sends nothing. Returns a promise that resolves once the upload went through or was given up on, to `true` when the server took it. |
 | `consent(given)` | `true` remembers the answer and starts; `false` remembers it and stops. See [Privacy](privacy.md#consent). |
 | `isRecording()` | `true` while events are being recorded and uploaded. |
 | `isBuffering()` | `true` while mode `on_error` keeps the last moments in memory and waits for a trigger. |

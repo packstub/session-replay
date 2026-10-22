@@ -12,6 +12,8 @@ use Symfony\Component\HttpFoundation\StreamedResponse;
 /**
  * What the player loads. Every route here runs behind AuthorizeViewer with
  * the recording, so the component is protected wherever it is embedded.
+ *
+ * @internal Wired by the package; not part of the public API.
  */
 class ReplayDataController
 {

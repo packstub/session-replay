@@ -245,6 +245,19 @@ it('loads the player script once per tab with wire:navigate', function () {
         ->and($html)->toContain('player.css');
 });
 
+it('starts the player paused unless the config or the page asks it to play', function () {
+    $session = $this->recording($this->user());
+    $render = fn (string $props = '') => Blade::render('<x-session-replay::player :session="$session" :assets="false" '.$props.' />', ['session' => $session]);
+
+    expect($render())->toContain('data-autoplay="false"')
+        ->and($render(':autoplay="true"'))->toContain('data-autoplay="true"');
+
+    config(['session-replay.viewer.autoplay' => true]);
+
+    expect($render())->toContain('data-autoplay="true"')
+        ->and($render(':autoplay="false"'))->toContain('data-autoplay="false"');
+});
+
 it('offers the link to the moment in the player unless the page turns it off', function () {
     $session = $this->recording($this->user());
 

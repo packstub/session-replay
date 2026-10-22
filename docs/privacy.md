@@ -56,7 +56,7 @@ Three attributes cover what the defaults cannot know about:
 'privacy' => ['mask_all_text' => true],
 ```
 
-Every text node is replaced with asterisks, and so is text the page shows through attributes: `alt`, `title`, `aria-label`, `placeholder`, `download`, an option's `label`, the caption of an `<input type="submit">` (also when a script changes it later) and the `content` of a `<meta>` tag. Page titles are left out of the `navigation` markers. The replay still shows where people click and what breaks, without a readable word. The same attributes are masked inside `privacy.mask_text_selector` (`data-replay-mask`), and a button whose caption holds masked text is named by its tag in rage-click markers.
+Every text node is replaced with asterisks, and so is text the page shows through attributes: `alt`, `title`, `aria-label`, `placeholder`, `download`, an option's `label`, the caption of an `<input type="submit">` (also when a script changes it later) and the `content` of a `<meta>` tag. Page titles are left out of the `navigation` markers. The replay still shows where people click and what breaks, without a readable word of the page's text. Links keep their `href` (the path of a profile page, a `mailto:` address) and elements their `data-*` attributes, which stylesheets select on; add `data-replay-mask` or `privacy.mask_text_selector` where such an attribute says something. The same attributes are masked inside `privacy.mask_text_selector` (`data-replay-mask`), and a button whose caption holds masked text is named by its tag in rage-click markers.
 
 To keep your own interface readable in this mode (menus, headings, column headers, button captions), mark it with `data-replay-unmask`:
 

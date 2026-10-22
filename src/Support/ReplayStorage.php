@@ -85,6 +85,8 @@ class ReplayStorage
      * compressed here, so everything on disk has one shape. Null when the
      * payload is not valid gzip or inflates past the ceiling (a small upload
      * must not expand into all of the viewer's memory).
+     *
+     * @internal
      */
     public function toGzip(string $body, int $maxRawBytes): ?string
     {
@@ -101,6 +103,8 @@ class ReplayStorage
      * served as sent, and a browser that decodes every member would see more
      * than was checked here (a stylesheet other than its hash, a batch past the
      * ceiling). Small pieces keep the peak memory near the ceiling.
+     *
+     * @internal
      */
     public function inflate(string $gzip, int $maxRawBytes): ?string
     {

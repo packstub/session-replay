@@ -6,7 +6,7 @@ A value with a few allowed words (`consent`, `mode`) is read in any case and the
 
 ### Renamed keys
 
-Four keys were renamed in 1.0.0-beta.6 so that each names its unit. A published config with the old names keeps working: an old key stands in for the new one unless the new one is set too. Rename them in your file when convenient.
+Four keys were renamed before 1.0 so that each names its unit. A published config with the old names keeps working: an old key stands in for the new one unless the new one is set too. Rename them in your file when convenient.
 
 | Old | New |
 | --- | --- |
@@ -131,6 +131,7 @@ Share pages that look the same for everyone who opens them: a pricing page, the 
 | `viewer.guard` | `null` | The guard whose user is handed to the gate. A plain `auth` in `viewer.middleware` asks this guard too (`auth:admin`). |
 | `viewer.per_page` | `25` | Recordings per list page. |
 | `viewer.user_label` | `email` | Attribute shown for a person in the list. |
+| `viewer.autoplay` | `false` | The player starts playing once it is ready (from the linked moment with `?t=` or `?at=`). The component's `autoplay` prop overrides it. |
 
 ## Log context
 

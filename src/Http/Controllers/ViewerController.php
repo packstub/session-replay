@@ -10,7 +10,11 @@ use Packstub\SessionReplay\Facades\SessionReplay;
 use Packstub\SessionReplay\Models\ReplayMarker;
 use Packstub\SessionReplay\Models\ReplaySession;
 
-/** The built-in pages: a list and a player. Deliberately small; a panel does more. */
+/**
+ * The built-in pages: a list and a player. Deliberately small; a panel does more.
+ *
+ * @internal Wired by the package; not part of the public API.
+ */
 class ViewerController
 {
     /** GET {path} */

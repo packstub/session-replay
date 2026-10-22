@@ -314,6 +314,8 @@ return [
         'per_page' => 25,
         // The attribute shown for a person in the list; falls back to the key.
         'user_label' => 'email',
+        // Start playing as soon as the player is ready (also with ?t= or ?at=, from that moment).
+        'autoplay' => false,
     ],
 
     /*
