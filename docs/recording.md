@@ -61,7 +61,7 @@ SessionReplay::propertiesUsing(fn ($request) => ['release' => config('app.versio
 
 All four are evaluated when the page renders and signed into the token the recorder uploads with, so the ingest endpoint never has to work out identity itself. A token is accepted for seven days (`ingest.token_days`).
 
-`impersonatorUsing()` may return the impersonator's model or only their key. A model is stored with its morph class (`impersonator_type`), so `$session->impersonator` loads them and the viewer shows them by `viewer.user_label`; a key is stored alone and shown as `#key`. Return the model when the people who impersonate are another model than the people being recorded (an `Admin` next to `User`). In a Filament panel, [Filament Session Replay](https://packstub.dev/docs/filament-session-replay) detects Packstub's [Account Switcher](https://packstub.dev/docs/filament-account-switcher) on its own and passes the impersonator's model through, nothing to set.
+`impersonatorUsing()` may return the impersonator's model or only their key. A model is stored with its morph class (`impersonator_type`), so `$session->impersonator` loads them and the viewer shows them by `viewer.user_label`; a key is stored alone and shown as `#key`. Return the model when the people who impersonate are another model than the people being recorded (an `Admin` next to `User`).
 
 **The token is signed, not encrypted.** Anyone who can read the page's source can read what is in it: the morph class and key of the person, of the workspace and of the impersonator, and the properties. Nobody can change it without the app key. Keep secrets and personal data out of the properties; they are meant for a plan, a panel or a release. They are capped at 4 KB, since every recorded page carries them.
 
