@@ -159,6 +159,11 @@
     white-space: nowrap;
 }
 
+/* rrweb puts its cursor in the top left corner until the first mouse or touch event sets left and top: hide it till then. */
+.sr-player .replayer-mouse:not([style*='left']) {
+    visibility: hidden;
+}
+
 /* rrweb's dot under the cursor, in the same colour. */
 .sr-player .replayer-mouse::after {
     background: var(--sr-pointer);

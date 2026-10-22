@@ -131,6 +131,7 @@ Share pages that look the same for everyone who opens them: a pricing page, the 
 | `viewer.guard` | `null` | The guard whose user is handed to the gate. A plain `auth` in `viewer.middleware` asks this guard too (`auth:admin`). |
 | `viewer.per_page` | `25` | Recordings per list page. |
 | `viewer.user_label` | `email` | Attribute shown for a person in the list. |
+| `viewer.autoplay` | `false` | The player starts playing once it is ready (from the linked moment with `?t=` or `?at=`). The component's `autoplay` prop overrides it. |
 
 ## Log context
 

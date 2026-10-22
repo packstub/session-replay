@@ -526,7 +526,7 @@ async function mount(root, options = {}) {
         props: {
             events,
             ...size(),
-            autoPlay: options.autoPlay ?? false,
+            autoPlay: false,
             skipInactive: true,
             showController: true,
             speedOption: [1, 2, 4, 8],
@@ -578,8 +578,9 @@ async function mount(root, options = {}) {
 
     // ?t=83 opens the replay at 1:23; ?at=<epoch ms> (a log line's link) a moment before that time.
     const offset = startOffset(location.search, startedAt);
+    const autoPlay = options.autoPlay ?? root.dataset.autoplay === 'true';
 
-    if (offset > 0) player.goto(offset, false);
+    if (offset > 0 || autoPlay) player.goto(offset, autoPlay);
 
     root.dispatchEvent(new CustomEvent('session-replay:ready', { detail: { player, manifest }, bubbles: true }));
 

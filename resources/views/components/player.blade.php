@@ -1,4 +1,4 @@
-@props(['session', 'markers' => true, 'copyLink' => true, 'assets' => true])
+@props(['session', 'markers' => true, 'copyLink' => true, 'autoplay' => null, 'assets' => true])
 
 @php
     /** @var \Packstub\SessionReplay\Models\ReplaySession|string $session */
@@ -18,6 +18,7 @@
     data-manifest="{{ \Packstub\SessionReplay\Facades\SessionReplay::route('manifest', ['session' => $sessionId]) }}"
     data-markers="{{ $markers ? 'true' : 'false' }}"
     data-copy-link="{{ $copyLink ? 'true' : 'false' }}"
+    data-autoplay="{{ ($autoplay ?? config('session-replay.viewer.autoplay', false)) ? 'true' : 'false' }}"
     data-labels="{{ json_encode(__('session-replay::player'), JSON_UNESCAPED_UNICODE) }}"
     data-replay-block
 ></div>
