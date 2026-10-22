@@ -12,6 +12,8 @@ use Illuminate\Routing\Middleware\ThrottleRequests;
  * vitals), and on the default stack (SQLite with the database cache) the
  * second counter update fails with "database is locked". That upload cannot
  * be retried by the browser, so the count is retried here instead.
+ *
+ * @internal Wired by the package; not part of the public API.
  */
 class ThrottleIngest extends ThrottleRequests
 {

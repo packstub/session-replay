@@ -128,6 +128,7 @@ Markers sit on the timeline in their colour and in a list next to the player; a 
 | `navigation` | blue |
 | `vital` | green (hidden in the list until its chip is pressed) |
 | `custom` | slate |
+| `report` | rose |
 
 The controller plays at 1x, 2x, 4x and 8x, skips inactivity and goes full screen.
 
@@ -181,7 +182,7 @@ Other attributes (`class`, `id`) pass through to the element. To load the player
 </body>
 ```
 
-In the browser, `window.SessionReplayPlayer.mount(element, { manifestUrl, autoPlay })` mounts a player on an element (it reads `data-manifest` when `manifestUrl` is left out, and `data-autoplay` when `autoPlay` is), `mountAll()` mounts every `[data-session-replay-player]` element, `unmount(element)` stops one and empties its element, and the element dispatches `session-replay:ready` once the player is up:
+In the browser, `window.SessionReplayPlayer.mount(element, { manifestUrl, autoplay })` mounts a player on an element (it reads `data-manifest` when `manifestUrl` is left out, and `data-autoplay` when `autoplay` is; `autoPlay` is accepted too), `mountAll()` mounts every `[data-session-replay-player]` element, `unmount(element)` stops one and empties its element, and the element dispatches `session-replay:ready` once the player is up. An element you write yourself may also carry `data-markers="false"` (no marker list), `data-copy-link="false"` and `data-labels` (the JSON of `session-replay::player`, the strings in the app's language; English without it):
 
 ```js
 document.addEventListener('session-replay:ready', (event) => {

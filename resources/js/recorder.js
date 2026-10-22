@@ -3,7 +3,7 @@ import { getRecordConsolePlugin } from '@rrweb/rrweb-plugin-console-record';
 import { onCLS, onINP, onLCP } from 'web-vitals';
 import { dropHiddenValues, inputMaskOptions, isUnmasked, maskTextAttributes, redactPluginUrls, redactUrl, redactUrlAttributes, redactUrls, textMasker } from './lib/privacy.js';
 import { EVENT_FULL_SNAPSHOT, assetPlaceholder, attributeMatcher, referencedAssets, renameVolatileIds, shareSnapshot, sharedSnapshots, stripAttributes, styleSlots } from './lib/process.js';
-import { ACTIVE_SOURCES, activeTime, checkoutInterval, estimateChars, isTrigger, trimWindow, windowStart } from './lib/buffer.js';
+import { ACTIVE_SOURCES, activeTime, checkoutInterval, estimateChars, estimateEventChars, isTrigger, trimWindow, windowStart } from './lib/buffer.js';
 import { lastingPlugin, navigationPause } from './lib/navigation.js';
 import { hasHeader, observe, requestMarker } from './lib/requests.js';
 import { MAX_RETRIES, pendingFate, retryDelay } from './lib/pending.js';
@@ -44,6 +44,8 @@ const FIRST_FLUSH_MS = 800;
 const CONSENT_KEY = 'sr:consent';
 const CONSOLE_PLUGIN = 'rrweb/console@1';
 const KEEPALIVE_LIMIT = 60 * 1024;
+// Batches waiting to go up while the server is away; beyond this they are dropped (see queue()).
+const MAX_QUEUED = 40;
 const MAX_BUFFERED_EVENTS = 400;
 const MAX_BUFFERED_CHARS = 1_500_000;
 
@@ -65,7 +67,8 @@ let pendingAssetText = new Map();
 let assetRetry = new Set();
 let hashCache = new Map();
 let pendingAsync = 0;
-let sending = Promise.resolve();
+let sending = Promise.resolve(false);
+let queued = 0;
 let flushTimer = null;
 let flushInterval = config ? config.flushInterval : 5000;
 let activeMs = 0;
@@ -152,7 +155,8 @@ function loadSession() {
     }
 
     // A tab from before mode "on_error" was turned on keeps recording; one that was buffering when it was turned off records.
-    if (!['buffering', 'recording', 'declined'].includes(state.phase)) state.phase = onError && state.seq === 0 ? 'buffering' : 'recording';
+    // "stopped": the server said so (the size or daily limit, a recording that is someone else's); quiet until the session idles out.
+    if (!['buffering', 'recording', 'declined', 'stopped'].includes(state.phase)) state.phase = onError && state.seq === 0 ? 'buffering' : 'recording';
     if (!onError && state.phase === 'buffering') state.phase = 'recording';
 
     return state;
@@ -166,7 +170,7 @@ function saveSession() {
 
     // While buffering the cookie is set too: the log line of the server error that triggers the upload names the recording.
     // A tab that is not recorded (not sampled, declined) sets none: log lines would name a recording that never exists.
-    if (config.cookie && session.phase !== 'declined' && session.sampled) {
+    if (config.cookie && !['declined', 'stopped'].includes(session.phase) && session.sampled) {
         const secure = location.protocol === 'https:' ? '; Secure' : '';
 
         document.cookie = `${config.cookie}=${session.id}; path=/; max-age=${Math.round(config.idleTimeout / 1000)}; SameSite=Lax${secure}`;
@@ -239,7 +243,7 @@ function report(label, payload = {}) {
 
     if (session.phase !== 'recording') return Promise.resolve(false);
 
-    return flush().then(() => true);
+    return flush();
 }
 
 async function sha256(text) {
@@ -273,7 +277,7 @@ async function dedupeStyles(event, slots) {
 
 function push(event) {
     buffer.push(event);
-    bufferedChars += event.type === EVENT_FULL_SNAPSHOT ? 200_000 : 300;
+    bufferedChars += estimateEventChars(event);
 
     if (session?.phase === 'buffering') {
         holdWindow(event);
@@ -592,6 +596,12 @@ async function uploadAssets(hashes, token) {
         try {
             const response = await fetch(config.assetUrl, { method: 'POST', body: data });
 
+            if (response.status === 429 && (await answer(response)).stop) {
+                stop(true);
+
+                return failed;
+            }
+
             if (response.status === 429 || response.status >= 500) failed.push(hash);
         } catch {
             failed.push(hash);
@@ -675,10 +685,9 @@ async function send(batch) {
         tail.meta.from = tail.events[0].timestamp;
         saveSession();
 
-        await send(batch);
-        await send(tail);
+        const first = await send(batch);
 
-        return;
+        return (await send(tail)) && first;
     }
 
     // The window is kept before it goes up, not after the upload failed: a server that is down often answers only
@@ -693,34 +702,46 @@ async function send(batch) {
         return failed(batch);
     }
 
+    const body = await answer(response);
+
+    // "Stop" comes with a 429 too (the daily limit): read before the retry decision, or the tab would retry all day.
+    if (body.stop) {
+        if (batch.kept) settle(batch);
+        stop(true);
+
+        return false;
+    }
+
     if (response.status === 429 || response.status >= 500) {
         if (response.status === 429) flushInterval = Math.min(flushInterval * 2, 60_000);
 
         return failed(batch);
     }
 
-    // The server answered: accepted, refused or asking to stop. Either way the kept copy has done its job.
+    // The server answered: accepted or refused. Either way the kept copy has done its job.
     if (batch.kept) settle(batch);
 
-    let body = {};
-
-    try {
-        body = await response.json();
-    } catch {
-        body = {};
-    }
-
-    if (body.stop) {
-        stop();
-
-        return;
-    }
-
     if (response.ok) {
+        // Back to the usual pace once the server takes batches again.
+        flushInterval = config.flushInterval;
+
         // A stylesheet whose upload failed earlier goes again with the next batch; its text is kept until then.
         assetRetry = new Set(await uploadAssets([...new Set([...(body.missing_assets || []), ...assetRetry])], batch.token));
 
         for (const hash of batch.meta.assets) if (!assetRetry.has(hash)) pendingAssetText.delete(hash);
+    }
+
+    return response.ok;
+}
+
+/** The server's JSON answer, or nothing readable. */
+async function answer(response) {
+    try {
+        const body = await response.json();
+
+        return body && typeof body === 'object' ? body : {};
+    } catch {
+        return {};
     }
 }
 
@@ -752,9 +773,9 @@ function settle(batch) {
 }
 
 function retry(batch) {
-    if (++batch.tries > MAX_RETRIES || stopped) return;
+    if (++batch.tries > MAX_RETRIES || stopped) return false;
 
-    return wait(retryDelay(batch.tries)).then(() => (stopped ? undefined : send(batch)));
+    return wait(retryDelay(batch.tries)).then(() => (stopped ? false : send(batch)));
 }
 
 /** Waits `ms`, or less when the browser says it is back online. */
@@ -771,14 +792,26 @@ function wait(ms) {
     });
 }
 
+/**
+ * Batches go up one after the other, in order. While the server is away the
+ * queue is capped: a batch past the cap is dropped (its events are lost, the
+ * recording is cut there), rather than hours of raw events held in memory.
+ */
 function queue(batch) {
-    sending = sending.then(() => send(batch)).catch(() => {});
+    if (queued >= MAX_QUEUED) return Promise.resolve(false);
+
+    queued++;
+    sending = sending
+        .then(() => send(batch))
+        .catch(() => false)
+        .finally(() => queued--);
 
     return sending;
 }
 
+/** Uploads what the buffer holds; resolves to whether the server took it. */
 function flush() {
-    if (stopped || !session || session.phase !== 'recording' || buffer.length === 0) return sending;
+    if (stopped || !session || session.phase !== 'recording' || buffer.length === 0) return Promise.resolve(false);
 
     return queue(takeBatch());
 }
@@ -813,8 +846,12 @@ async function resumePending() {
     }
 }
 
-/** The page is going away: no time for compression or retries, one keepalive request with what is left. */
-function flushOnUnload() {
+/**
+ * The page is going away: no time for compression or retries, one keepalive
+ * request with what is left. A tab that is only hidden (`final` false) keeps
+ * the usual path for what keepalive cannot carry: gzip, split, retries.
+ */
+function flushOnUnload(final = true) {
     if (stopped || !session || session.phase !== 'recording' || buffer.length === 0) return;
 
     const batch = takeBatch();
@@ -822,9 +859,20 @@ function flushOnUnload() {
     // The browser counts the whole body against keepalive's 64 KB, the index and the token included.
     const size = blob.size + JSON.stringify(batch.meta).length + String(batch.token).length + 1024;
 
+    if (!final && size >= KEEPALIVE_LIMIT) {
+        queue(batch);
+
+        return;
+    }
+
     try {
+        const body = form(batch, blob);
+
+        // Firefox before 133 ignores keepalive and cancels the request with the page; sendBeacon carries the same size.
+        if (size < KEEPALIVE_LIMIT && !('keepalive' in Request.prototype) && navigator.sendBeacon?.(config.ingestUrl, body)) return;
+
         // Caught: on a page that stays (a tab switch while offline) a rejection would count as the app's own error.
-        fetch(config.ingestUrl, { method: 'POST', body: form(batch, blob), keepalive: size < KEEPALIVE_LIMIT }).catch(() => {});
+        fetch(config.ingestUrl, { method: 'POST', body, keepalive: size < KEEPALIVE_LIMIT }).catch(() => {});
     } catch {
         // Nothing left to do on a closing page.
     }
@@ -951,7 +999,7 @@ function watchLivewire() {
                 fail(({ status, content, preventDefault }) => {
                     askError = { status: Number(status) || null, message: errorTitle(content) };
 
-                    const asked = mark('request', `Livewire request failed (${status})`, { status, url: String(url || '').slice(0, 500) });
+                    const asked = mark('request', `Livewire request failed (${status})`, { status, url: redacted(String(url || '')).slice(0, 500) });
 
                     askError = null;
 
@@ -1306,7 +1354,7 @@ function begin() {
     // An unsampled tab sets no cookie (saveSession) but clears none either: the cookie is one per origin, and another
     // tab may be recording.
 
-    if (!session.sampled || session.phase === 'declined') return false;
+    if (!session.sampled || session.phase === 'declined' || session.phase === 'stopped') return false;
 
     stopped = false;
     lastSnapshotAt = 0;
@@ -1370,6 +1418,8 @@ function restart(fresh) {
     clearTimeout(flushTimer);
     // The batches in flight keep their recording; the tab's next one is new, whatever the old one's last activity.
     write('sessionStorage', STORAGE_KEY, 'null');
+    // A question still up asks about the recording that ends here.
+    if (asking) dismiss();
     asking = false;
 
     try {
@@ -1393,11 +1443,19 @@ function restart(fresh) {
     start();
 }
 
-function stop() {
+/** `remember`: the server said stop (a limit, someone else's recording); the tab stays quiet until the session idles out. */
+function stop(remember = false) {
     stopped = true;
     startOnNextPage = false;
     clearTimeout(flushTimer);
     navigation.stop();
+    if (asking) dismiss();
+    asking = false;
+
+    if (remember && session) {
+        session.phase = 'stopped';
+        saveSession();
+    }
 
     try {
         stopRecording?.();
@@ -1433,13 +1491,13 @@ if (config && !window.SessionReplay) {
     if (config.capture.rageClicks) watchRageClicks();
 
     document.addEventListener('visibilitychange', () => {
-        if (document.visibilityState === 'hidden') pendingAsync === 0 ? flushOnUnload() : flush();
+        if (document.visibilityState === 'hidden') pendingAsync === 0 ? flushOnUnload(false) : flush();
     });
-    window.addEventListener('pagehide', flushOnUnload);
+    window.addEventListener('pagehide', () => flushOnUnload());
 
     window.SessionReplay = {
         start,
-        stop,
+        stop: () => stop(),
         flush,
         /** Record a moment of your own: SessionReplay.mark('Checkout started', { cart: 3 }). */
         mark: (label, payload = {}) => mark('custom', label, payload),

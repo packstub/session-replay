@@ -79,11 +79,31 @@ export function trimWindow(events, markers, start) {
     return { events: kept, markers: keptMarkers };
 }
 
-/** Rough size of buffered events, the same estimate the recorder flushes by: a snapshot counts as 200 kB. */
+/**
+ * Rough size of one event, the estimate the recorder flushes and bounds its window by: a snapshot counts as
+ * 200 kB, a mutation that changes a lot (a Livewire morph of a long table) is measured, anything else is 300.
+ */
+export function estimateEventChars(event) {
+    if (event.type === EVENT_FULL_SNAPSHOT) return 200_000;
+
+    const data = event.type === EVENT_INCREMENTAL && event.data?.source === 0 ? event.data : null;
+
+    if (data && ((data.adds?.length || 0) > 10 || (data.texts?.length || 0) > 20 || (data.attributes?.length || 0) > 20)) {
+        try {
+            return JSON.stringify(event).length;
+        } catch {
+            return 300;
+        }
+    }
+
+    return 300;
+}
+
+/** Rough size of buffered events, the same estimate the recorder flushes by. */
 export function estimateChars(events) {
     let chars = 0;
 
-    for (const event of events) chars += event.type === EVENT_FULL_SNAPSHOT ? 200_000 : 300;
+    for (const event of events) chars += estimateEventChars(event);
 
     return chars;
 }

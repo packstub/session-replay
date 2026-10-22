@@ -17,6 +17,8 @@ use Packstub\SessionReplay\Support\ReplayStorage;
 /**
  * Where the recorder uploads. Identity comes from the signed token the page
  * was rendered with (see ContextToken), never from the request's session.
+ *
+ * @internal Wired by the package; not part of the public API.
  */
 class IngestController
 {

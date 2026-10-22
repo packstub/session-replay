@@ -12,6 +12,8 @@ use Symfony\Component\HttpFoundation\Response;
  * The viewSessionReplay gate on every viewer and data route: without a
  * recording for the list, with it for anything that belongs to one — the
  * page, the manifest, a chunk, a stylesheet.
+ *
+ * @internal Wired by the package; not part of the public API.
  */
 class AuthorizeViewer
 {

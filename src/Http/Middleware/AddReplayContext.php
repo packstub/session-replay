@@ -15,6 +15,8 @@ use Symfony\Component\HttpFoundation\Response;
  * While a recording runs the browser sends its id in a plain cookie. Put it,
  * and where to watch it, into Laravel's Context, so every log line, queued
  * job and error report of this request points at the replay.
+ *
+ * @internal Wired by the package; not part of the public API.
  */
 class AddReplayContext
 {

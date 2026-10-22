@@ -1,4 +1,5 @@
 import Player from 'rrweb-player';
+import { withDefaults } from './lib/labels.js';
 import 'rrweb-player/dist/style.css';
 import './player.css';
 import { momentUrl, startOffset } from './lib/moment.js';
@@ -27,29 +28,6 @@ const COLORS = {
     report: '#e11d48',
 };
 
-// English, unless the element carries data-labels (the Blade component passes the app's language).
-const TEXT = {
-    loading: 'Loading the recording…',
-    forbidden: 'You are not allowed to watch this recording.',
-    failed: 'The recording could not be loaded.',
-    just_started: 'This recording just started; there is nothing to play yet.',
-    no_snapshot: 'This recording has no page snapshot to play.',
-    none_selected: 'Nothing of the selected kinds.',
-    none_marked: 'Nothing was marked in this recording.',
-    types: {
-        error: 'Error',
-        request: 'Request',
-        console: 'Console',
-        'rage-click': 'Rage click',
-        navigation: 'Page',
-        vital: 'Vital',
-        custom: 'Custom',
-        report: 'Report',
-    },
-    copy_link: 'Copy link to this moment',
-    link_copied: 'Link copied',
-};
-
 function labels(root) {
     let given = {};
 
@@ -59,7 +37,7 @@ function labels(root) {
         // Unreadable labels leave the English ones.
     }
 
-    return { ...TEXT, ...given, types: { ...TEXT.types, ...(given.types || {}) } };
+    return withDefaults(given);
 }
 
 function element(tag, className, text) {
@@ -578,7 +556,7 @@ async function mount(root, options = {}) {
 
     // ?t=83 opens the replay at 1:23; ?at=<epoch ms> (a log line's link) a moment before that time.
     const offset = startOffset(location.search, startedAt);
-    const autoPlay = options.autoPlay ?? root.dataset.autoplay === 'true';
+    const autoPlay = options.autoPlay ?? options.autoplay ?? root.dataset.autoplay === 'true';
 
     if (offset > 0 || autoPlay) player.goto(offset, autoPlay);
 

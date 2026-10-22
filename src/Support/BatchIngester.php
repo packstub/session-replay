@@ -7,6 +7,7 @@ use Illuminate\Database\Query\Expression;
 use Illuminate\Database\UniqueConstraintViolationException;
 use Illuminate\Support\Arr;
 use Illuminate\Support\Carbon;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Str;
 use Packstub\SessionReplay\Events\ReplayReported;
@@ -22,6 +23,8 @@ use Packstub\SessionReplay\Models\ReplaySessionAsset;
  * Stores one upload: the gzip file, its chunk row, the markers the browser
  * listed next to it and the recording's counters. The events are never
  * parsed here; everything the index needs arrives in the sidecar ("meta").
+ *
+ * @internal Wired by the package; not part of the public API.
  */
 class BatchIngester
 {
@@ -185,8 +188,10 @@ class BatchIngester
     }
 
     /**
-     * ReplayReported for every report marker this batch stored. A batch is stored once (a retry answers "duplicate"
-     * before it gets here), so each report is announced once.
+     * ReplayReported for the first report marker this batch stored, at most one per recording a minute: the event
+     * is what tells support, and a button pressed in a loop (or a crafted batch of 200 report markers) must not send
+     * them a notification per press. Every marker is stored. A batch is stored once (a retry answers "duplicate"
+     * before it gets here), so no report is announced twice.
      *
      * @param  array<int, array<string, mixed>>  $markers
      */
@@ -194,17 +199,20 @@ class BatchIngester
     {
         $times = array_column(array_filter($markers, fn (array $marker): bool => $marker['type'] === ReplayMarker::REPORT), 'at_ms');
 
-        if ($times === []) {
+        if ($times === [] || ! Cache::add('session-replay:reported:'.$session->getKey(), 1, 60)) {
             return;
         }
 
-        ReplayMarker::query()
+        $marker = ReplayMarker::query()
             ->where('replay_session_id', $session->getKey())
             ->where('type', ReplayMarker::REPORT)
             ->whereIn('at_ms', array_unique($times))
             ->orderBy('at_ms')
-            ->get()
-            ->each(fn (ReplayMarker $marker) => ReplayReported::dispatch($session, $marker));
+            ->first();
+
+        if ($marker !== null) {
+            ReplayReported::dispatch($session, $marker);
+        }
     }
 
     /**
@@ -372,7 +380,8 @@ class BatchIngester
             return null;
         }
 
-        $time = Carbon::createFromTimestampMs($milliseconds);
+        // In the app's timezone, like every now() stored next to it: a UTC instance would be stored as UTC text.
+        $time = Carbon::createFromTimestampMs($milliseconds, config('app.timezone'));
 
         // A browser clock that is far off would sort the recording into the wrong decade.
         return $time->between(now()->subDays(8), now()->addMinutes(10)) ? $time : now();

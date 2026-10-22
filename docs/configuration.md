@@ -6,7 +6,7 @@ A value with a few allowed words (`consent`, `mode`) is read in any case and the
 
 ### Renamed keys
 
-Four keys were renamed in 1.0.0-beta.6 so that each names its unit. A published config with the old names keeps working: an old key stands in for the new one unless the new one is set too. Rename them in your file when convenient.
+Four keys were renamed before 1.0 so that each names its unit. A published config with the old names keeps working: an old key stands in for the new one unless the new one is set too. Rename them in your file when convenient.
 
 | Old | New |
 | --- | --- |

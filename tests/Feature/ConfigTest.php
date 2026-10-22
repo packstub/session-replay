@@ -13,12 +13,12 @@ function rendered(string $html): array
     return json_decode($match[1] ?? 'null', true) ?? [];
 }
 
-/** Read a published config/session-replay.php the way the package does when the app boots. */
+/** Read a published config/session-replay.php the way the package does when the app boots: the provider's whole register(). */
 function publishedConfig(array $published): void
 {
     config()->set('session-replay', $published);
 
-    (new SessionReplayServiceProvider(app()))->packageRegistered();
+    (new SessionReplayServiceProvider(app()))->register();
 }
 
 it('replaces a default list with the one a published config sets, however short or empty', function () {

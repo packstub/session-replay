@@ -65,12 +65,24 @@ class SessionReplayServiceProvider extends PackageServiceProvider
             });
     }
 
+    /**
+     * Before the package's defaults are merged in (registerPackageConfigs(), top-level), while the config holds the
+     * app's published file alone: an old key is read under its new name only while the new one is not there yet, and
+     * the defaults would bring every new key.
+     */
+    public function registeringPackage(): void
+    {
+        if (config()->has('session-replay')) {
+            config()->set('session-replay', self::renamed((array) config('session-replay', [])));
+        }
+    }
+
     /** Deep-merge the package's config defaults under any user-published values (mergeConfigFrom is top-level only). */
     public function packageRegistered(): void
     {
         $defaults = require __DIR__.'/../config/session-replay.php';
 
-        config()->set('session-replay', self::merge($defaults, self::renamed((array) config('session-replay', []))));
+        config()->set('session-replay', self::merge($defaults, (array) config('session-replay', [])));
 
         $this->app->singleton(SessionReplayManager::class);
         $this->app->singleton(ReplayStorage::class);

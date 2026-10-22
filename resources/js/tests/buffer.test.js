@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { activeTime, checkoutInterval, estimateChars, isTrigger, trimWindow, windowStart } from '../lib/buffer.js';
+import { activeTime, checkoutInterval, estimateChars, estimateEventChars, isTrigger, trimWindow, windowStart } from '../lib/buffer.js';
 
 const meta = (timestamp) => ({ type: 4, timestamp, data: { href: 'https://app.test/' } });
 const snapshot = (timestamp) => ({ type: 2, timestamp, data: { node: {} } });
@@ -67,4 +67,14 @@ test('triggers only on the configured types, and never on page views or vitals',
 test('estimates the size like the recorder does and counts active time', () => {
     assert.equal(estimateChars([snapshot(1), move(2), move(3)]), 200_600);
     assert.equal(activeTime([move(1_000), move(2_000), mutation(2_500), move(9_000), move(9_500)]), 1_500);
+});
+
+test('a mutation that changes a lot is measured, the rest estimated, so max_buffer_mb bounds a polling page too', () => {
+    const small = { type: 3, timestamp: 1, data: { source: 0, adds: [], texts: [{ id: 1, value: 'x' }], attributes: [] } };
+    const adds = Array.from({ length: 200 }, (_, i) => ({ parentId: 1, nextId: null, node: { type: 2, tagName: 'tr', attributes: { class: 'row' }, childNodes: [], id: 10 + i } }));
+    const big = { type: 3, timestamp: 2, data: { source: 0, adds, texts: [], attributes: [] } };
+
+    assert.equal(estimateEventChars(small), 300);
+    assert.equal(estimateEventChars({ type: 2, timestamp: 3, data: {} }), 200_000);
+    assert.ok(estimateEventChars(big) > 10_000);
 });
