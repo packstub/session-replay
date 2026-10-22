@@ -14,8 +14,6 @@ Record what a person did in the browser, keep the recording on your own disk and
 
 "The form did nothing when I clicked save" becomes a 40-second replay with the console error and the failed Livewire request marked on the timeline.
 
-> **Beta.** 1.0 is close and feedback is very welcome in the [issues](https://github.com/packstub/session-replay/issues). Until 1.0, names and config may still change between betas; the changelog says how to upgrade.
-
 - Docs: [docs/](https://github.com/packstub/session-replay/tree/main/docs)
 - Support: [GitHub issues](https://github.com/packstub/session-replay/issues)
 
@@ -36,7 +34,7 @@ Record what a person did in the browser, keep the recording on your own disk and
 ## Quick start
 
 ```bash
-composer require "packstub/session-replay:^1.0@beta"
+composer require packstub/session-replay
 php artisan session-replay:install
 ```
 

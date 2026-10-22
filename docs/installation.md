@@ -17,7 +17,7 @@ The package has no front-end build step. The recorder and the player ship prebui
 Recordings and their index go to your default database connection. If they belong somewhere else (a central connection in a multi-tenant app), set `SESSION_REPLAY_DB_CONNECTION` first, because the install command offers to run the migrations; see [Storage](storage.md#multi-tenant-apps).
 
 ```bash
-composer require "packstub/session-replay:^1.0@beta"
+composer require packstub/session-replay
 php artisan session-replay:install
 ```
 
