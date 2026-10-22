@@ -1184,7 +1184,7 @@ const navigation = navigationPause({
     },
     resume(fresh, paused) {
         // Signed for another person or workspace (a tenant switch with wire:navigate): a recording belongs to one.
-        // Idle for longer than idle_timeout: a page load would start a new one too.
+        // Idle for longer than idle_minutes: a page load would start a new one too.
         if (stopRecording && !stopped && session && ((fresh.identity ?? null) !== (session.identity ?? null) || Date.now() - session.lastActivity > fresh.idleTimeout)) {
             restart(fresh);
 
@@ -1361,7 +1361,7 @@ function begin() {
 
 /**
  * The page Livewire swapped in was signed for another person or workspace,
- * or the tab sat idle past idle_timeout. What this recording holds goes up
+ * or the tab sat idle past idle_minutes. What this recording holds goes up
  * under its own token, and the page starts a new recording, as a page load
  * would.
  */

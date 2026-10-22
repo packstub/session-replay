@@ -6,6 +6,7 @@ use Illuminate\Support\Facades\Gate;
 use Packstub\SessionReplay\Facades\SessionReplay;
 use Packstub\SessionReplay\Models\ReplayMarker;
 use Packstub\SessionReplay\Models\ReplaySession;
+use Packstub\SessionReplay\Models\ReplaySessionAsset;
 use Packstub\SessionReplay\Tests\Fixtures\Policies\ReplaySessionPolicy;
 
 it('lets nobody in outside the local environment until the app defines the gate', function () {
@@ -331,7 +332,11 @@ it('serves a stylesheet only to a recording that points at it, once the recordin
 
     $this->actingAs($user);
 
-    // From before the references were stored: by hash, as it was.
+    // From before stylesheets were referenced: by hash, as it was.
+    $this->get(route('session-replay.asset', [$session, hash('sha256', $other)]))->assertOk();
+
+    // Also when the recording points at shared snapshots, which were referenced since 1.0.0-beta.3.
+    ReplaySessionAsset::query()->insert(['replay_session_id' => $session->id, 'hash' => hash('sha256', 'a shared snapshot'), 'created_at' => now()]);
     $this->get(route('session-replay.asset', [$session, hash('sha256', $other)]))->assertOk();
 
     $this->ingest(['token' => $this->token($user), 'session' => $session->id, 'seq' => 1, 'meta' => ['assets' => [hash('sha256', $css)]]])->assertOk();

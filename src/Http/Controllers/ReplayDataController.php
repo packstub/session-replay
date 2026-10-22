@@ -61,11 +61,12 @@ class ReplayDataController
     public function asset(ReplaySession $session, string $hash): StreamedResponse
     {
         // Only one the recording points at, like a shared snapshot: a stylesheet may carry a workspace's own theme.
-        // A recording from before the references were stored (1.0.0-beta.5 and earlier) points at nothing and is
-        // served by hash alone, as it was.
+        // A recording from before stylesheets were referenced (1.0.0-beta.5 and earlier) points at no stylesheet,
+        // only at its shared snapshots if it has any, and is served by hash alone, as it was.
         $references = $session->snapshotReferences();
+        $stylesheets = ReplayAsset::query()->select('hash')->where('kind', ReplayAsset::STYLESHEET);
 
-        abort_if((clone $references)->where('hash', $hash)->doesntExist() && $references->exists(), 404);
+        abort_if((clone $references)->where('hash', $hash)->doesntExist() && (clone $references)->whereIn('hash', $stylesheets)->exists(), 404);
 
         // Stylesheets only: a shared snapshot is served by snapshot(), to a viewer of a recording that points at it.
         $asset = ReplayAsset::query()->where('hash', $hash)->where('kind', ReplayAsset::STYLESHEET)->firstOrFail();
