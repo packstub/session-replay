@@ -21,6 +21,8 @@ return [
     'from' => 'De la',
     'to' => 'Până la',
     'with_errors' => 'Cu erori',
+    'reported' => 'Problemă raportată',
+    'reported_badge' => 'raportat',
     'filter' => 'Filtrează',
     'reset' => 'Resetează',
     'empty' => 'Nicio înregistrare încă. Pune @sessionReplay înainte de </body> într-un layout și deschide o pagină.',

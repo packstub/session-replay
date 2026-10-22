@@ -7,6 +7,7 @@ use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Gate;
+use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Vite;
 use Illuminate\Support\HtmlString;
 use Illuminate\Support\Str;
@@ -21,6 +22,12 @@ class SessionReplayManager
 
     /** Marker types that may upload the window in mode "on_error". */
     public const TRIGGERS = ['error', 'request', 'console', 'rage-click', 'custom'];
+
+    /** The most propertiesUsing() and the directive's properties may take, as JSON: they travel in every recorded page. */
+    public const MAX_PROPERTIES_BYTES = 4096;
+
+    /** @var array<string, true> The config values already logged as unknown, once per process. */
+    protected array $warned = [];
 
     protected ?Closure $recordWhen = null;
 
@@ -38,7 +45,7 @@ class SessionReplayManager
 
     protected ?Closure $visibleUsing = null;
 
-    /** Narrow who is recorded: fn (?Authenticatable $user, Request $request): bool. */
+    /** Narrow who is recorded: fn (?Model $user, Request $request): bool. */
     public function recordWhen(Closure $callback): static
     {
         $this->recordWhen = $callback;
@@ -62,7 +69,11 @@ class SessionReplayManager
         return $this;
     }
 
-    /** The key of the person impersonating the signed-in user, if any: fn (Request $request): int|string|null. */
+    /**
+     * The person impersonating the signed-in user, if any: fn (Request $request): Model|int|string|null. A model
+     * stores its morph class next to its key (impersonator_type), so the recording links to them; a key stores the
+     * key alone.
+     */
     public function impersonatorUsing(Closure $callback): static
     {
         $this->impersonatorUsing = $callback;
@@ -98,7 +109,11 @@ class SessionReplayManager
         return $this;
     }
 
-    /** The URL logUrlUsing() gives for this marker, or null without one. */
+    /**
+     * The URL logUrlUsing() gives for this marker, or null without one.
+     *
+     * @internal
+     */
     public function logUrlFor(ReplayMarker $marker): ?string
     {
         if ($this->logUrlUsing === null) {
@@ -161,6 +176,7 @@ class SessionReplayManager
         return $this->shouldRecordFor($this->user($request), $request);
     }
 
+    /** @internal shouldRecord() for a user the caller already knows; recorder() uses it with the directive's "user". */
     public function shouldRecordFor(?Model $user, Request $request): bool
     {
         if (! $this->enabled()) {
@@ -180,19 +196,27 @@ class SessionReplayManager
         return $this->recordWhen === null || (bool) ($this->recordWhen)($user, $request);
     }
 
-    /** Whether this page's snapshot is stored once per content hash (snapshots.share_routes, snapshots.share_paths). */
+    /**
+     * Whether this page's snapshot is stored once per content hash (snapshots.share_routes, snapshots.share_paths).
+     *
+     * @internal
+     */
     public function sharesSnapshots(?Request $request = null): bool
     {
         return $this->requestMatches($request ?? request(), config('session-replay.snapshots.share_paths', []), config('session-replay.snapshots.share_routes', []));
     }
 
-    /** The request's path or route name matches one of the Str::is patterns; keys in a published list are ignored. */
-    /** Whether the app leaves this request's page out of recordings (except, except_routes). The route must be matched. */
+    /**
+     * Whether the app leaves this request's page out of recordings (except, except_routes). The route must be matched.
+     *
+     * @internal
+     */
     public function isExcluded(Request $request): bool
     {
         return $this->requestMatches($request, config('session-replay.except', []), config('session-replay.except_routes', []));
     }
 
+    /** The request's path or route name matches one of the Str::is patterns; keys in a published list are ignored. */
     protected function requestMatches(Request $request, mixed $paths, mixed $routes): bool
     {
         // array_values: a keyed entry in a published list would be spread as a named argument and throw.
@@ -206,7 +230,9 @@ class SessionReplayManager
      * The recorder's script tags, or nothing when this request is not recorded.
      * Options: "user", "tenant", "impersonator" and "properties" override what
      * the resolvers would give (a panel knows its own guard and workspace),
-     * "nonce" a CSP nonce.
+     * "nonce" a CSP nonce. The token in them is signed, not encrypted: who is
+     * signed in, the workspace, the impersonator and the properties can be
+     * read in the page's source.
      *
      * @param  array<string, mixed>  $options
      */
@@ -222,15 +248,15 @@ class SessionReplayManager
 
         $tenant = array_key_exists('tenant', $options) ? $options['tenant'] : ($this->tenantUsing ? ($this->tenantUsing)($request) : null);
         $impersonator = array_key_exists('impersonator', $options) ? $options['impersonator'] : ($this->impersonatorUsing ? ($this->impersonatorUsing)($request) : null);
-        $properties = array_merge(
+        $properties = $this->properties(array_merge(
             $this->propertiesUsing ? (array) ($this->propertiesUsing)($request) : [],
             (array) ($options['properties'] ?? []),
-        );
+        ));
 
         $token = ContextToken::for(
             $user,
             $tenant instanceof Model ? $tenant : null,
-            $impersonator === null ? null : (string) $impersonator,
+            $impersonator instanceof Model || $impersonator === null ? $impersonator : (string) $impersonator,
             $properties,
         );
 
@@ -242,14 +268,15 @@ class SessionReplayManager
             'token' => $token->encode(),
             // Who and where the token was signed for, so the browser starts a new recording when the person, the
             // workspace or the impersonator changes: a recording belongs to one person in one workspace.
-            'identity' => $token->isAnonymous() ? null : substr(hash('sha256', implode('|', [$token->userType, $token->userId, $token->tenantType, $token->tenantId, $token->impersonatorId, $token->pseudonym, config('app.key')])), 0, 16),
+            // The impersonator's type only when there is one: the hash of every other page stays what it was before.
+            'identity' => $token->isAnonymous() ? null : substr(hash('sha256', implode('|', [$token->userType, $token->userId, $token->tenantType, $token->tenantId, $token->impersonatorId, ...($token->impersonatorType === null ? [] : [$token->impersonatorType]), $token->pseudonym, config('app.key')])), 0, 16),
             'ingestUrl' => $this->route('ingest'),
             'assetUrl' => $this->route('ingest.asset'),
             'sampleRate' => (float) config('session-replay.sample_rate', 1.0),
-            'idleTimeout' => (int) config('session-replay.idle_timeout', 30) * 60 * 1000,
-            'flushInterval' => max(1000, (int) config('session-replay.flush_interval', 5000)),
+            'idleTimeout' => $this->idleMinutes() * 60 * 1000,
+            'flushInterval' => max(1000, (int) round((float) config('session-replay.flush_seconds', 5) * 1000)),
             'maxBatchBytes' => (int) config('session-replay.ingest.max_batch_kb', 1536) * 1024,
-            'consent' => config('session-replay.consent', 'always') === 'opt-in' ? 'opt-in' : 'always',
+            'consent' => $this->consent(),
             'respectGpc' => (bool) config('session-replay.respect_gpc', false),
             'privacy' => [
                 'maskAllInputs' => (bool) config('session-replay.privacy.mask_all_inputs', true),
@@ -298,6 +325,32 @@ class SessionReplayManager
         );
     }
 
+    /**
+     * The properties as they go into the token, or none when they are larger than MAX_PROPERTIES_BYTES: every
+     * recorded page carries them, and a recording stores them. Logged, so the missing properties have a reason.
+     *
+     * @param  array<array-key, mixed>  $properties
+     * @return array<array-key, mixed>
+     */
+    protected function properties(array $properties): array
+    {
+        $bytes = strlen((string) json_encode($properties, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE));
+
+        if ($bytes <= self::MAX_PROPERTIES_BYTES) {
+            return $properties;
+        }
+
+        $this->warnOnce('properties', sprintf('Session Replay: the recording properties take %d bytes, more than the %d a page may carry; they were left out.', $bytes, self::MAX_PROPERTIES_BYTES));
+
+        return [];
+    }
+
+    /** @internal Minutes without activity after which the browser starts a new recording (idle_minutes, at least 1). */
+    public function idleMinutes(): int
+    {
+        return max(1, (int) config('session-replay.idle_minutes', 30));
+    }
+
     /** The status from which a request is a failure (capture.requests), or false when requests are not watched. */
     protected function requestThreshold(): int|false
     {
@@ -310,10 +363,58 @@ class SessionReplayManager
         return $threshold === true ? 500 : max(400, min(599, (int) $threshold));
     }
 
-    /** "session" (every recorded tab uploads from its first page) or "on_error" (only when something goes wrong). */
+    /**
+     * "session" (every recorded tab uploads from its first page) or "on_error" (only when something goes wrong). Any
+     * other value is read as "on_error", the one that uploads less, and logged.
+     */
     public function mode(): string
     {
-        return config('session-replay.mode', 'session') === 'on_error' ? 'on_error' : 'session';
+        return $this->choice('mode', 'session', ['session' => 'session', 'on_error' => 'on_error', 'on-error' => 'on_error', 'onerror' => 'on_error'], 'on_error');
+    }
+
+    /**
+     * "always" (recording starts with the page) or "opt-in" (it waits for SessionReplay.consent(true)). Any other
+     * value is read as "opt-in" and logged: a typo never records without consent.
+     */
+    public function consent(): string
+    {
+        return $this->choice('consent', 'always', ['always' => 'always', 'opt-in' => 'opt-in', 'opt_in' => 'opt-in', 'optin' => 'opt-in'], 'opt-in');
+    }
+
+    /**
+     * A config value that is one of a few words, in any case and the usual spellings. Unset means the default; anything
+     * else the strict choice, logged once per process so the misspelt value can be found.
+     *
+     * @param  array<string, string>  $spellings
+     */
+    protected function choice(string $key, string $default, array $spellings, string $strict): string
+    {
+        $value = config('session-replay.'.$key);
+
+        if ($value === null || $value === '') {
+            return $default;
+        }
+
+        $spelling = is_string($value) ? strtolower(trim($value)) : null;
+
+        if ($spelling !== null && isset($spellings[$spelling])) {
+            return $spellings[$spelling];
+        }
+
+        $this->warnOnce($key, sprintf('Session Replay: %s "%s" is none of %s; it is read as "%s".', $key, is_scalar($value) ? (string) $value : get_debug_type($value), implode(', ', array_unique($spellings)), $strict));
+
+        return $strict;
+    }
+
+    protected function warnOnce(string $key, string $message): void
+    {
+        if (isset($this->warned[$key])) {
+            return;
+        }
+
+        $this->warned[$key] = true;
+
+        Log::warning($message);
     }
 
     /**
@@ -366,10 +467,10 @@ class SessionReplayManager
         };
     }
 
-    /** How long the toast waits for an answer (on_error.ask_timeout, 5 to 600 s; 0 for ever), in milliseconds. */
+    /** How long the toast waits for an answer (on_error.ask_timeout_seconds, 5 to 600; 0 for ever), in milliseconds. */
     protected function askTimeoutMs(): int
     {
-        $seconds = (int) config('session-replay.on_error.ask_timeout', 60);
+        $seconds = (int) config('session-replay.on_error.ask_timeout_seconds', 60);
 
         return $seconds <= 0 ? 0 : max(5, min(600, $seconds)) * 1000;
     }
@@ -401,19 +502,27 @@ class SessionReplayManager
 
     /**
      * May this person watch — the list when no recording is given, that one
-     * recording otherwise. The app's viewSessionReplay gate decides; until it
-     * is defined only the local environment is let in, so a forgotten setup
-     * never exposes a recording.
+     * recording otherwise. The app's viewSessionReplay gate decides. Without
+     * the gate, a policy registered for ReplaySession does (viewAny for the
+     * list, view for a recording), the way Filament Shield sets one up.
+     * Without either only the local environment is let in, so a forgotten
+     * setup never exposes a recording.
      */
     public function check(?ReplaySession $session = null, mixed $user = null): bool
     {
-        if (! Gate::has(self::ABILITY)) {
-            return app()->environment('local');
+        if (Gate::has(self::ABILITY)) {
+            $gate = Gate::forUser($user ?? $this->viewer());
+
+            return $session === null ? $gate->allows(self::ABILITY) : $gate->allows(self::ABILITY, [$session]);
         }
 
-        $gate = $user === null ? Gate::forUser($this->viewer()) : Gate::forUser($user);
+        if (Gate::getPolicyFor(ReplaySession::class) !== null) {
+            $gate = Gate::forUser($user ?? $this->viewer());
 
-        return $session === null ? $gate->allows(self::ABILITY) : $gate->allows(self::ABILITY, [$session]);
+            return $session === null ? $gate->allows('viewAny', ReplaySession::class) : $gate->allows('view', $session);
+        }
+
+        return app()->environment('local');
     }
 
     /** The person looking at the viewer (viewer.guard, or the default guard). */
@@ -437,11 +546,13 @@ class SessionReplayManager
         return route('session-replay.'.$name, $parameters);
     }
 
+    /** @internal */
     public function scriptUrl(string $file): string
     {
         return $this->route('script', ['file' => $file]).'?v='.$this->scriptVersion($file);
     }
 
+    /** @internal */
     public function scriptPath(string $file): string
     {
         return __DIR__.'/../resources/dist/'.$file;
@@ -454,7 +565,11 @@ class SessionReplayManager
         return $versions[$file] ??= substr(md5((string) @filemtime($this->scriptPath($file)).(string) @filesize($this->scriptPath($file))), 0, 10);
     }
 
-    /** "desktop", "tablet" or "mobile" from a user agent; good enough for a filter. */
+    /**
+     * "desktop", "tablet" or "mobile" from a user agent; good enough for a filter.
+     *
+     * @internal
+     */
     public function device(?string $userAgent): ?string
     {
         if ($userAgent === null || $userAgent === '') {

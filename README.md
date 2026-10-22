@@ -71,7 +71,7 @@ Sign in, click around, then open `/session-replay`.
 ## How it works
 
 1. **Recorder.** `@sessionReplay` renders a small config object and a deferred script. The script records the DOM and what happens to it with rrweb, one recording per browser tab, continued across page loads until the tab sits idle.
-2. **Signed token.** When the page renders, the server signs who is signed in, the workspace, an impersonator and your own properties with the app key. The recorder sends that token back with every upload, so the ingest endpoint needs no session, no cookie and no CSRF token.
+2. **Signed token.** When the page renders, the server signs who is signed in, the workspace, an impersonator and your own properties with the app key (signed, not encrypted: the page's source shows them). The recorder sends that token back with every upload, so the ingest endpoint needs no session, no cookie and no CSRF token.
 3. **Ingest.** Every few seconds the recorder uploads a gzip batch with a small index next to it (markers, counts, the stylesheets the batch references). The server stores the file and updates the index; it never parses the events.
 4. **Storage.** Chunks go to `sessions/{id}/{seq}.json.gz` on your disk, stylesheets to `assets/` under the hash of their content, the index to `replay_sessions`, `replay_chunks`, `replay_markers` and `replay_assets`.
 5. **Viewer.** `/session-replay` lists recordings; the player loads the manifest, the chunks and the stylesheets through routes that check the `viewSessionReplay` gate for that recording on every request.

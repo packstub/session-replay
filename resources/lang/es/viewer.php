@@ -21,6 +21,8 @@ return [
     'from' => 'Desde',
     'to' => 'Hasta',
     'with_errors' => 'Con errores',
+    'reported' => 'Problema informado',
+    'reported_badge' => 'informado',
     'filter' => 'Filtrar',
     'reset' => 'Restablecer',
     'empty' => 'Aún no hay grabaciones. Coloca @sessionReplay antes de </body> en un layout y abre una página.',

@@ -5,6 +5,7 @@ use Illuminate\Support\Facades\Event;
 use Illuminate\Support\Facades\Gate;
 use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Str;
+use Packstub\SessionReplay\Events\ReplayReported;
 use Packstub\SessionReplay\Events\ReplaySessionStarted;
 use Packstub\SessionReplay\Facades\SessionReplay;
 use Packstub\SessionReplay\Models\ReplayAsset;
@@ -278,7 +279,7 @@ it('refuses a stylesheet whose content does not match its hash', function () {
 });
 
 it('throttles per person, not per address', function () {
-    config()->set('session-replay.ingest.throttle', 2);
+    config()->set('session-replay.ingest.requests_per_minute', 2);
 
     $ada = $this->token($this->user());
 
@@ -290,7 +291,7 @@ it('throttles per person, not per address', function () {
 
 it('throttles guests by the page their token came from, never by a session id they make up', function () {
     config()->set('session-replay.guests', true);
-    config()->set('session-replay.ingest.throttle', 2);
+    config()->set('session-replay.ingest.requests_per_minute', 2);
 
     $page = $this->token(null);
 
@@ -662,4 +663,74 @@ it('does not count the marker that stands for pages the app does not record as a
 
     expect($recording->page_count)->toBe(1)
         ->and($recording->markers()->where('type', 'navigation')->count())->toBe(2);
+});
+
+it('stores the impersonator as a model when impersonatorUsing() gives one, and the key alone when it gives a key', function () {
+    $admin = $this->team('Admins');
+    $ada = $this->user();
+    $byModel = (string) Str::uuid();
+    $byKey = (string) Str::uuid();
+
+    $this->ingest(['token' => ContextToken::for($ada, null, $admin)->encode(), 'session' => $byModel])->assertCreated();
+    $this->ingest(['token' => $this->token($ada, null, '7'), 'session' => $byKey])->assertCreated();
+
+    $model = ReplaySession::query()->findOrFail($byModel);
+    $key = ReplaySession::query()->findOrFail($byKey);
+
+    expect($model->impersonator_type)->toBe($admin->getMorphClass())
+        ->and($model->impersonator_id)->toBe((string) $admin->id)
+        ->and($model->impersonator->is($admin))->toBeTrue()
+        ->and($key->impersonator_type)->toBeNull()
+        ->and($key->impersonator_id)->toBe('7')
+        ->and($key->impersonator)->toBeNull();
+});
+
+it('never lets an impersonator of another model write into a recording with the same key', function () {
+    $ada = $this->user();
+    $admin = $this->team('Admins');
+    $staff = $this->user();
+    $staff->forceFill(['id' => $admin->id]);
+    $id = (string) Str::uuid();
+
+    $this->ingest(['token' => ContextToken::for($ada, null, $admin)->encode(), 'session' => $id])->assertCreated();
+
+    // The same key, another model.
+    $this->ingest(['token' => ContextToken::for($ada, null, $staff)->encode(), 'session' => $id, 'seq' => 1])->assertForbidden();
+    $this->ingest(['token' => ContextToken::for($ada, null, $admin)->encode(), 'session' => $id, 'seq' => 1])->assertOk();
+});
+
+it('keeps a recording started with the impersonator\'s key going when the app starts to give the model', function () {
+    $ada = $this->user();
+    $admin = $this->team('Admins');
+    $session = $this->recording($ada);
+    $session->forceFill(['impersonator_id' => (string) $admin->id])->save();
+
+    $this->ingest(['token' => ContextToken::for($ada, null, $admin)->encode(), 'session' => $session->id, 'seq' => 1])->assertOk();
+});
+
+it('announces every problem the person reported once, with its recording', function () {
+    Event::fake([ReplayReported::class]);
+
+    $user = $this->user();
+    $id = (string) Str::uuid();
+    $now = now()->getTimestampMs();
+    $report = ['type' => 'report', 'label' => 'Wrong total on the invoice', 'payload' => ['invoice' => 12], 'at' => $now];
+
+    $this->ingest(['token' => $this->token($user), 'session' => $id, 'meta' => ['markers' => [
+        ['type' => 'custom', 'label' => 'Checkout started', 'at' => $now - 10],
+        $report,
+    ]]])->assertCreated();
+
+    // The retry of the same batch is a duplicate and announces nothing.
+    $this->ingest(['token' => $this->token($user), 'session' => $id, 'meta' => ['markers' => [$report]]])->assertJson(['duplicate' => true]);
+
+    $this->ingest(['token' => $this->token($user), 'session' => $id, 'seq' => 1])->assertOk();
+
+    Event::assertDispatchedTimes(ReplayReported::class, 1);
+    Event::assertDispatched(ReplayReported::class, fn (ReplayReported $event): bool => $event->session->id === $id
+        && $event->marker->label === 'Wrong total on the invoice'
+        && $event->marker->payload === ['invoice' => 12]);
+
+    expect(ReplayMarker::query()->where('type', 'report')->count())->toBe(1)
+        ->and(ReplaySession::query()->findOrFail($id)->error_count)->toBe(0);
 });

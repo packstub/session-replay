@@ -15,6 +15,8 @@ class SessionReplayServiceProvider extends ServiceProvider
          * Who may watch recordings. Called without a recording for the list
          * and with it for a single replay and every file that belongs to it.
          * Until this gate exists, only the local environment is let in.
+         * A policy registered for ReplaySession (viewAny, view) is asked
+         * when there is no gate, the way Filament Shield sets one up.
          */
         Gate::define('viewSessionReplay', function ($user, ?ReplaySession $session = null): bool {
             return in_array($user->email, [

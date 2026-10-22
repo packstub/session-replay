@@ -24,6 +24,7 @@ const COLORS = {
     navigation: '#3b82f6',
     vital: '#10b981',
     custom: '#64748b',
+    report: '#e11d48',
 };
 
 // English, unless the element carries data-labels (the Blade component passes the app's language).
@@ -43,6 +44,7 @@ const TEXT = {
         navigation: 'Page',
         vital: 'Vital',
         custom: 'Custom',
+        report: 'Report',
     },
     copy_link: 'Copy link to this moment',
     link_copied: 'Link copied',

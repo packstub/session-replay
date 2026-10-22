@@ -282,8 +282,9 @@ it('tells the browser the window and the triggers in mode "on_error"', function 
     config()->set('session-replay.on_error.max_buffer_mb', 500);
     expect(recorderConfig((string) SessionReplay::recorder())['onError']['maxWindowChars'])->toBe(50_000_000);
 
+    // A value that is neither mode uploads less, not more (see the strict-fallback tests).
     config()->set('session-replay.mode', 'something else');
-    expect(recorderConfig((string) SessionReplay::recorder())['mode'])->toBe('session');
+    expect(recorderConfig((string) SessionReplay::recorder())['mode'])->toBe('on_error');
 });
 
 it('hands the browser the question in the app\'s language, with the anonymous choice only for a named person', function () {
@@ -338,19 +339,19 @@ it('tells the browser whether to ask again after a no, and how long the toast wa
     expect($onError())->toMatchArray(['askAgain' => false, 'askTimeoutMs' => 60_000]);
 
     config()->set('session-replay.on_error.ask_again', true);
-    config()->set('session-replay.on_error.ask_timeout', 120);
+    config()->set('session-replay.on_error.ask_timeout_seconds', 120);
     expect($onError())->toMatchArray(['askAgain' => true, 'askTimeoutMs' => 120_000]);
 
     // Clamped to 5 s and 10 min; 0 (or less) keeps the toast up until it is answered.
-    config()->set('session-replay.on_error.ask_timeout', 1);
+    config()->set('session-replay.on_error.ask_timeout_seconds', 1);
     expect($onError()['askTimeoutMs'])->toBe(5_000);
-    config()->set('session-replay.on_error.ask_timeout', 3600);
+    config()->set('session-replay.on_error.ask_timeout_seconds', 3600);
     expect($onError()['askTimeoutMs'])->toBe(600_000);
-    config()->set('session-replay.on_error.ask_timeout', 0);
+    config()->set('session-replay.on_error.ask_timeout_seconds', 0);
     expect($onError()['askTimeoutMs'])->toBe(0);
 
     // The dialog never times out; without a question neither setting applies.
-    config()->set('session-replay.on_error.ask_timeout', 60);
+    config()->set('session-replay.on_error.ask_timeout_seconds', 60);
     config()->set('session-replay.on_error.ask', 'dialog');
     expect($onError())->toMatchArray(['askAgain' => true, 'askTimeoutMs' => 0]);
     config()->set('session-replay.on_error.ask', false);
@@ -385,4 +386,25 @@ it('tells the browser whether the question replaces Livewire\'s error modal', fu
     config()->set('session-replay.on_error.livewire_error_modal', 'replace');
     config()->set('session-replay.on_error.ask', false);
     expect($replaces())->toBeFalse();
+});
+
+it('signs the impersonator\'s model type next to its key, and keeps the identity of a page without one as it was', function () {
+    $user = $this->user();
+    $admin = $this->team('Admins');
+    $this->actingAs($user);
+
+    $byModel = ContextToken::decode(recorderConfig((string) SessionReplay::recorder(['impersonator' => $admin]))['token']);
+    $keyConfig = recorderConfig((string) SessionReplay::recorder(['impersonator' => 7]));
+    $byKey = ContextToken::decode($keyConfig['token']);
+
+    expect($byModel->impersonatorType)->toBe($admin->getMorphClass())
+        ->and($byModel->impersonatorId)->toBe((string) $admin->id)
+        ->and($byKey->impersonatorType)->toBeNull()
+        ->and($byKey->impersonatorId)->toBe('7');
+
+    // The hash every open tab compares with: unchanged for a page without an impersonator's type, so a deploy does
+    // not start a new recording in every tab.
+    $before = substr(hash('sha256', implode('|', [$user->getMorphClass(), (string) $user->id, null, null, '7', null, config('app.key')])), 0, 16);
+
+    expect($keyConfig['identity'])->toBe($before);
 });

@@ -73,6 +73,8 @@ Text inside stays as it is, except where `mask_text_selector` matches (`data-rep
 | `always` (default) | Recording starts with the page. For a product used under a contract or terms that cover it. |
 | `opt-in` | The recorder loads and waits. Nothing is recorded or uploaded until the person agrees. |
 
+Any other value, a typo such as `SESSION_REPLAY_CONSENT=optin` included, is read as `opt-in` and logged as a warning, so a misspelt setting never records without consent. `opt_in` and any capitalisation are read as `opt-in` without a warning. `mode` works the same way: an unknown value is read as `on_error`, the mode that uploads less.
+
 With `opt-in`, call the browser API from your consent banner:
 
 ```js
@@ -90,17 +92,19 @@ SessionReplay.consent(false);
 With `mode = on_error` and `on_error.ask = true`, the recorder asks the person after something went wrong whether to send the replay of what just happened. Nothing is uploaded unless they agree.
 
 - **Send** uploads the kept window, and the tab keeps recording for the rest of its session; the dialog says so.
-- **Don't send** (or Escape) drops what was kept, and the tab is not recorded again until its session ends (`idle_timeout`, or a change of person or workspace). With `on_error.ask_again = true` the tab keeps a window instead and asks again on the next trigger, at most once per window (`buffer_seconds`), so a burst of errors asks once.
+- **Don't send** (or Escape) drops what was kept, and the tab is not recorded again until its session ends (`idle_minutes`, or a change of person or workspace). With `on_error.ask_again = true` the tab keeps a window instead and asks again on the next trigger, at most once per window (`buffer_seconds`), so a burst of errors asks once.
 - **Anonymously.** When someone is signed in, a checkbox sends the replay without their name: the same rule as `privacy.anonymous`, for this recording only. No person and no impersonator are stored, the workspace and your properties stay, and the upload still counts against the person's daily allowance. The choice only ever removes identity from the signed token; the request carries nothing else about who someone is.
 - **Nothing is kept before the answer.** Only a window the person agreed to send may wait in the browser's storage when its upload fails (`on_error.keep_pending`, see [below](#what-stays-in-the-browser)), and the anonymous choice is kept with it.
 - **The dialog** is drawn by the recorder in plain DOM, inside a closed shadow root: your page's styles do not reach it, its styles do not leak into your page, and it never appears in a replay. It is a native modal `<dialog>` in the browser's top layer, centred in the viewport and above everything on the page.
-- **A toast instead of the dialog.** `on_error.ask = 'toast'` asks the same question in a card at the bottom corner of the viewport: the page stays usable, nothing takes the focus, Escape is left to the page, and the person can carry on and answer later. The window stops moving while the question is up, as with the dialog, so a question left unanswered for `on_error.ask_timeout` seconds (60 by default; `0` waits for ever) counts as "Don't send", with the same consequences, `ask_again` included. The card is drawn in the browser's top layer where it has one (a manual popover), so a modal dialog of the page does not hide it.
+- **A toast instead of the dialog.** `on_error.ask = 'toast'` asks the same question in a card at the bottom corner of the viewport: the page stays usable, nothing takes the focus, Escape is left to the page, and the person can carry on and answer later. The window stops moving while the question is up, as with the dialog, so a question left unanswered for `on_error.ask_timeout_seconds` (60 seconds by default; `0` waits for ever) counts as "Don't send", with the same consequences, `ask_again` included. The card is drawn in the browser's top layer where it has one (a manual popover), so a modal dialog of the page does not hide it.
 - **A button of your own.** A "report a problem" button that calls `SessionReplay.send()` uploads the kept window without the question: pressing it is the answer. See [The browser API](recording.md#the-browser-api).
 - **Livewire's error modal.** A failed Livewire request opens Livewire's own modal with the error page. When that request puts the question up, `on_error.livewire_error_modal` decides what the person sees: `production` (the default) shows only the question while `app.debug` is off, where the error page says no more than "500 | Server Error", and keeps the debug error page behind the question in development; `replace` always shows only the question; `keep` always shows the question over Livewire's modal. When a failed request put the question up, the dialog carries what the modal would have shown: the status code and the error page's title ("500 · Server Error" in production), and a line saying the last action could not be completed, with the advice to try again or reload. An expired page (419) keeps Livewire's offer to reload in every setting. Without `on_error.ask`, Livewire's modal is never touched. It is labelled, takes focus when it opens, keeps it inside and gives it back when it closes, and follows the system's light or dark scheme. After "Send" a short notice thanks the person. Its strings follow the app's locale; change them in `lang/vendor/session-replay/{locale}/recorder.php` (see [Languages](configuration.md#languages)).
 
 ## What stays in the browser
 
-The recorder keeps nothing recorded at rest, with one exception. In `mode = on_error`, a window whose upload failed waits in the browser's IndexedDB (same origin as your app) until it gets through, so a reload while the server is down does not lose the replay of the error. It holds the same masked events the upload holds, is dropped after `idle_timeout` (30 minutes by default), when another person signs in or when the tab stops recording, and is never sent by another tab. `on_error.keep_pending = false` turns it off. See [When the upload fails](recording.md#when-the-upload-fails).
+The recorder keeps nothing recorded at rest, with one exception. In `mode = on_error`, a window whose upload failed waits in the browser's IndexedDB (same origin as your app) until it gets through, so a reload while the server is down does not lose the replay of the error. It holds the same masked events the upload holds, is dropped after `idle_minutes` (30 by default), when another person signs in or when the tab stops recording, and is never sent by another tab. `on_error.keep_pending = false` turns it off. See [When the upload fails](recording.md#when-the-upload-fails).
+
+The page itself carries the signed token the recorder uploads with. It is signed, not encrypted: the page's source shows the morph class and key of the person, of the workspace and of the impersonator, and the properties your app attached. That is what the person's own browser already knows about itself, but keep secrets and personal data out of the properties. See [Who is recorded](recording.md#who-is-recorded).
 
 ## Who is recorded
 
@@ -122,11 +126,11 @@ The list then shows "Guest" for every recording, a person's Session replays tab 
 
 ## Who may watch
 
-Nobody outside the `local` environment, until your app defines the `viewSessionReplay` gate. The gate receives the recording, and it guards every file the player loads, not only the page. See [Watching replays](watching.md#the-gate).
+Nobody outside the `local` environment, until your app defines the `viewSessionReplay` gate (or a policy for `ReplaySession`). The gate receives the recording, and it guards every file the player loads, not only the page. See [Watching replays](watching.md#the-gate).
 
 ## Retention and deletion
 
-- `session-replay:prune` deletes recordings older than `retention.days` (default 30) with their files. Schedule it daily.
+- `session-replay:prune` deletes recordings older than `retention.days` (default 30, `SESSION_REPLAY_RETENTION_DAYS`) with their files. Schedule it daily.
 - `$session->delete()` deletes one recording, its chunks, its markers and its files, for example to answer an erasure request:
 
 ```php

@@ -17,6 +17,7 @@ use Packstub\SessionReplay\Support\ReplayStorage;
  * @property string|null $user_id
  * @property string|null $tenant_type
  * @property string|null $tenant_id
+ * @property string|null $impersonator_type
  * @property string|null $impersonator_id
  * @property array<string, mixed>|null $properties
  * @property string|null $entry_url
@@ -71,6 +72,12 @@ class ReplaySession extends ReplayModel
         return $this->morphTo();
     }
 
+    /** Who impersonated the person, when impersonatorUsing() gave a model; null for a bare key (impersonator_id alone). */
+    public function impersonator(): MorphTo
+    {
+        return $this->morphTo();
+    }
+
     public function chunks(): HasMany
     {
         return $this->hasMany(ReplayChunk::class)->orderBy('seq');
@@ -81,7 +88,7 @@ class ReplaySession extends ReplayModel
         return $this->hasMany(ReplayMarker::class)->orderBy('at_ms');
     }
 
-    /** The shared snapshots this recording points at (by hash). */
+    /** The stylesheets and shared snapshots this recording points at (by hash); named when only snapshots were. */
     public function snapshotReferences(): HasMany
     {
         return $this->hasMany(ReplaySessionAsset::class);
@@ -150,6 +157,12 @@ class ReplaySession extends ReplayModel
     public function scopeWithErrors(Builder $query): void
     {
         $query->where('error_count', '>', 0);
+    }
+
+    /** The person reported a problem from the page (SessionReplay.send()). */
+    public function scopeReported(Builder $query): void
+    {
+        $query->whereHas('markers', fn (Builder $markers) => $markers->where('type', ReplayMarker::REPORT));
     }
 
     public function scopePoorVitals(Builder $query): void

@@ -13,15 +13,21 @@ use Packstub\SessionReplay\SessionReplayManager;
  * @method static \Packstub\SessionReplay\SessionReplayManager propertiesUsing(\Closure $callback)
  * @method static \Packstub\SessionReplay\SessionReplayManager urlUsing(\Closure $callback)
  * @method static \Packstub\SessionReplay\SessionReplayManager logUrlUsing(\Closure $callback)
- * @method static string|null logUrlFor(\Packstub\SessionReplay\Models\ReplayMarker $marker)
  * @method static \Packstub\SessionReplay\SessionReplayManager visibleUsing(\Closure $callback)
  * @method static \Illuminate\Database\Eloquent\Builder visibleTo(\Illuminate\Database\Eloquent\Builder $query, mixed $viewer = null)
+ * @method static bool enabled()
+ * @method static \Illuminate\Database\Eloquent\Model|null user(\Illuminate\Http\Request|null $request = null)
  * @method static bool shouldRecord(\Illuminate\Http\Request|null $request = null)
+ * @method static string mode()
+ * @method static string consent()
  * @method static \Illuminate\Support\HtmlString recorder(array $options = [])
  * @method static \Illuminate\Support\HtmlString playerAssets()
  * @method static bool check(\Packstub\SessionReplay\Models\ReplaySession|null $session = null, mixed $user = null)
+ * @method static mixed viewer()
  * @method static string|null urlFor(\Packstub\SessionReplay\Models\ReplaySession $session)
  * @method static string route(string $name, array $parameters = [])
+ *
+ * The methods marked @internal on SessionReplayManager are not part of the public API and may change in a minor.
  *
  * @see SessionReplayManager
  */

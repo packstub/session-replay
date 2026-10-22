@@ -17,6 +17,7 @@ return [
         'navigation' => 'Page',
         'vital' => 'Vital',
         'custom' => 'Custom',
+        'report' => 'Report',
     ],
     'copy_link' => 'Copy link to this moment',
     'link_copied' => 'Link copied',

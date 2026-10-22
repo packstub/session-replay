@@ -17,6 +17,7 @@ return [
         'navigation' => 'Страница',
         'vital' => 'Vital',
         'custom' => 'Своя',
+        'report' => 'Жалоба',
     ],
     'copy_link' => 'Скопировать ссылку на этот момент',
     'link_copied' => 'Ссылка скопирована',

@@ -11,6 +11,7 @@
         <label>{{ __('session-replay::viewer.from') }} <input type="date" name="from" value="{{ $filters['from'] ?? '' }}"></label>
         <label>{{ __('session-replay::viewer.to') }} <input type="date" name="to" value="{{ $filters['to'] ?? '' }}"></label>
         <label class="check"><input type="checkbox" name="errors" value="1" @checked($filters['errors'] ?? false)> {{ __('session-replay::viewer.with_errors') }}</label>
+        <label class="check"><input type="checkbox" name="reported" value="1" @checked($filters['reported'] ?? false)> {{ __('session-replay::viewer.reported') }}</label>
         <button class="primary" type="submit">{{ __('session-replay::viewer.filter') }}</button>
         @if (array_filter($filters))
             <a class="button" href="{{ route('session-replay.index') }}">{{ __('session-replay::viewer.reset') }}</a>
@@ -40,6 +41,7 @@
                             <td>
                                 {{ $userLabel($session) }}
                                 @if ($session->impersonator_id) <span class="badge warn" title="{{ __('session-replay::viewer.impersonated_by_id', ['id' => $session->impersonator_id]) }}">{{ __('session-replay::viewer.impersonated') }}</span> @endif
+                                @if ($session->reported) <span class="badge danger">{{ __('session-replay::viewer.reported_badge') }}</span> @endif
                             </td>
                             <td title="{{ $session->started_at?->toDayDateTimeString() }}">
                                 {{ $session->started_at?->diffForHumans() }}

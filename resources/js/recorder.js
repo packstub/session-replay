@@ -215,7 +215,7 @@ function note(type, label, payload, at, live) {
 
 /**
  * The person asks for the replay to be sent (a "report a problem" button):
- * a custom marker at this moment and, in mode "on_error", the kept window
+ * a "report" marker at this moment and, in mode "on_error", the kept window
  * goes up without the question, as the first batch of the recording. A tab
  * that declined or stopped sends nothing. Resolves once the upload went
  * through or was given up on, to whether anything was sent.
@@ -226,7 +226,7 @@ function report(label, payload = {}) {
     const at = Date.now();
 
     // During a wire:navigate swap the marker waits for the new page, as every marker does; the upload does not.
-    if (!navigation.defer(() => mark('custom', label, payload, at))) note('custom', label, payload, at, true);
+    if (!navigation.defer(() => mark('report', label, payload, at))) note('report', label, payload, at, true);
 
     if (session.phase === 'buffering') {
         // The question that may be up is answered by the button; its own answer, if one still comes, is ignored.
@@ -1184,7 +1184,7 @@ const navigation = navigationPause({
     },
     resume(fresh, paused) {
         // Signed for another person or workspace (a tenant switch with wire:navigate): a recording belongs to one.
-        // Idle for longer than idle_timeout: a page load would start a new one too.
+        // Idle for longer than idle_minutes: a page load would start a new one too.
         if (stopRecording && !stopped && session && ((fresh.identity ?? null) !== (session.identity ?? null) || Date.now() - session.lastActivity > fresh.idleTimeout)) {
             restart(fresh);
 
@@ -1252,7 +1252,36 @@ async function sweepPending({ all = false, recording = null } = {}) {
     }
 }
 
+/** The id sessionId() returns, as last announced with the session-replay:session event. */
+let announced = null;
+
+/**
+ * Tell the page when the recording id changes (a new recording, consent given or withdrawn, stopped), so a script
+ * that tags its own events with it (an error tracker) follows without polling: event.detail.id, null for none.
+ */
+function announce() {
+    const id = stopRecording && session ? session.id : null;
+
+    if (id === announced) return;
+
+    announced = id;
+
+    try {
+        window.dispatchEvent(new CustomEvent('session-replay:session', { detail: { id } }));
+    } catch {
+        // A listener that throws is the page's own business.
+    }
+}
+
 function start() {
+    const started = begin();
+
+    announce();
+
+    return started;
+}
+
+function begin() {
     if (stopRecording || !config) return false;
 
     if (!hasConsent()) {
@@ -1332,7 +1361,7 @@ function start() {
 
 /**
  * The page Livewire swapped in was signed for another person or workspace,
- * or the tab sat idle past idle_timeout. What this recording holds goes up
+ * or the tab sat idle past idle_minutes. What this recording holds goes up
  * under its own token, and the page starts a new recording, as a page load
  * would.
  */
@@ -1387,6 +1416,8 @@ function stop() {
     for (const batch of kept) deletePending(batch.session.id, batch.seq);
     kept = new Set();
     if (session) sweepPending({ recording: session.id }).catch(() => {});
+
+    announce();
 }
 
 if (config && !window.SessionReplay) {

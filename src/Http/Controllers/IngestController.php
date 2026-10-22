@@ -68,7 +68,7 @@ class IngestController
             $context = $context->withoutPerson();
         }
 
-        if ($session !== null && (! $context->sameUserAs($session->user_type, $session->user_id) || ! $context->sameImpersonatorAs($session->impersonator_id))) {
+        if ($session !== null && (! $context->sameUserAs($session->user_type, $session->user_id) || ! $context->sameImpersonatorAs($session->impersonator_id, $session->impersonator_type))) {
             return $this->refuse(403, 'This recording belongs to someone else.', stop: true);
         }
 
