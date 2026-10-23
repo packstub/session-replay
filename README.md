@@ -2,6 +2,8 @@
 
 <div class="filament-hidden">
 
+![Session Replay for Laravel — watch what happened, inside your own Laravel app](https://raw.githubusercontent.com/packstub/art/main/session-replay/banner.jpg)
+
 [![Latest Version on Packagist](https://img.shields.io/packagist/v/packstub/session-replay.svg?style=flat-square)](https://packagist.org/packages/packstub/session-replay)
 [![Tests](https://img.shields.io/github/actions/workflow/status/packstub/session-replay/tests.yml?branch=main&label=tests&style=flat-square)](https://github.com/packstub/session-replay/actions/workflows/tests.yml)
 [![Total Downloads](https://img.shields.io/packagist/dt/packstub/session-replay.svg?style=flat-square)](https://packagist.org/packages/packstub/session-replay)
@@ -13,6 +15,8 @@
 Record what a person did in the browser, keep the recording on your own disk and database, and watch it inside your own app, behind a gate you define. Built on [rrweb](https://github.com/rrweb-io/rrweb). Free and open source (MIT).
 
 "The form did nothing when I clicked save" becomes a 40-second replay with the console error and the failed Livewire request marked on the timeline.
+
+![A replay in the built-in viewer: the pointer clicks "Pay" again and again, the payment fails, and the server error's details open with its report id and "Open in logs"](https://raw.githubusercontent.com/packstub/art/main/session-replay/demo.gif)
 
 - Docs: [docs/](https://github.com/packstub/session-replay/tree/main/docs)
 - Support: [GitHub issues](https://github.com/packstub/session-replay/issues)
