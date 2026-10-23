@@ -5,6 +5,7 @@ Record what a person did in the browser with rrweb, keep the recording on your o
 - Repository: [github.com/packstub/session-replay](https://github.com/packstub/session-replay)
 - Packagist: [packstub/session-replay](https://packagist.org/packages/packstub/session-replay)
 - Support: [GitHub issues](https://github.com/packstub/session-replay/issues)
+- Demo app: [packstub/session-replay-demo](https://github.com/packstub/session-replay-demo), a small Laravel shop with recordings to watch, ready to run locally
 
 In a Filament panel, [Filament Session Replay](https://github.com/packstub/filament-session-replay/tree/main/docs) puts the sessions, the player and the masking macros on top of this package.
 

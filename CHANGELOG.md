@@ -7,6 +7,7 @@ All notable changes to `packstub/session-replay` are documented here.
 ### Changed
 
 - **Docs.** The README opens with a banner and an animation of a replay: a rage click, the server error's details and "Open in logs". Docs sync to packstub.dev on every change to `docs/` (`docs-sync.yml`).
+- **A demo app.** [packstub/session-replay-demo](https://github.com/packstub/session-replay-demo) is a small Laravel shop wired to the package (the gate, `recordWhen()`, `logUrlUsing()` with Log Viewer, `SessionReplay.send()` behind "Report a problem"), with a Playwright script that makes real recordings to watch. The README, the docs index and Installation link it.
 
 ## 1.0.0 — 2026-10-22
 

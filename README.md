@@ -20,6 +20,7 @@ Record what a person did in the browser, keep the recording on your own disk and
 
 - Docs: [docs/](https://github.com/packstub/session-replay/tree/main/docs)
 - Support: [GitHub issues](https://github.com/packstub/session-replay/issues)
+- Demo app: [packstub/session-replay-demo](https://github.com/packstub/session-replay-demo), a small Laravel shop with recordings to watch, ready to run locally
 
 ## Features
 

@@ -10,6 +10,8 @@
 
 The package has no front-end build step. The recorder and the player ship prebuilt and are served by a route.
 
+To see it working before you install it, the [demo app](https://github.com/packstub/session-replay-demo) is a small shop set up with everything on this page, plus the "Open in logs" link and a "Report a problem" button. `composer demo` there makes a few real recordings to watch.
+
 **In a Filament panel**, install [packstub/filament-session-replay](https://github.com/packstub/filament-session-replay/blob/main/docs/installation.md) instead. It requires this package and registers the recorder per panel. Everything below applies there too.
 
 ## Install
