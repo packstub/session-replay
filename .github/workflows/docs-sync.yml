@@ -1,0 +1,63 @@
+name: Sync docs to packstub.dev
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - "docs/**"
+      - ".github/workflows/docs-sync.yml"
+
+concurrency:
+  group: docs-sync
+  cancel-in-progress: false
+
+jobs:
+  storefront:
+    name: Push docs/ to packstub/store (public docs)
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout plugin repo
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up deploy key for store repo
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.STORE_DEPLOY_KEY }}" > ~/.ssh/id_ed25519
+          chmod 600 ~/.ssh/id_ed25519
+          ssh-keyscan github.com >> ~/.ssh/known_hosts
+
+      - name: Clone store repo
+        run: git clone --depth 1 git@github.com:packstub/store.git /tmp/store
+
+      - name: Sync docs/ into resources/docs/session-replay/1.x/
+        run: |
+          mkdir -p /tmp/store/resources/docs/session-replay/1.x
+          rsync -a --delete docs/ /tmp/store/resources/docs/session-replay/1.x/
+          # The screenshots also go where the store keeps published images, which packstub:art:publish mirrors
+          # to packstub/art (the URLs the README and the docs link).
+          if [ -d docs/images ]; then
+            mkdir -p /tmp/store/public/images/plugins/session-replay/docs
+            rsync -a --delete docs/images/ /tmp/store/public/images/plugins/session-replay/docs/
+          fi
+
+      - name: Commit and push if changed
+        working-directory: /tmp/store
+        run: |
+          git config user.name "packstub-bot"
+          git config user.email "support@packstub.dev"
+          git add -A resources/docs/session-replay
+          if [ -d public/images/plugins/session-replay/docs ]; then git add -A public/images/plugins/session-replay/docs; fi
+          if git diff --cached --quiet; then
+            echo "Storefront docs already up to date."
+          else
+            git commit -m "docs: sync session-replay from packstub/session-replay@${GITHUB_SHA::7}"
+            # Other plugins' docs-sync runs and the store's own workflows push to main too: replay on top and retry.
+            for attempt in 1 2 3 4 5; do
+              git push origin main && break
+              [ "$attempt" -lt 5 ] || exit 1
+              sleep $((attempt * 5))
+              git pull --rebase origin main
+            done
+          fi

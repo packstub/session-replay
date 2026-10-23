@@ -2,6 +2,12 @@
 
 All notable changes to `packstub/session-replay` are documented here.
 
+## Unreleased
+
+### Changed
+
+- **Docs.** The README opens with a banner and an animation of a replay: a rage click, the server error's details and "Open in logs". Docs sync to packstub.dev on every change to `docs/` (`docs-sync.yml`).
+
 ## 1.0.0 — 2026-10-22
 
 ### Added
