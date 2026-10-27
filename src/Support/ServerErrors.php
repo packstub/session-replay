@@ -34,11 +34,15 @@ class ServerErrors
 
     protected ?Request $request = null;
 
-    /** Called by AddReplayContext on every request: the recording it belongs to, or none. */
-    public function forRecording(?string $id, ?Request $request = null): void
+    /** The SHA-256 of the write key the cookie carried, compared with the recording's. */
+    protected ?string $keyHash = null;
+
+    /** Called by AddReplayContext on every request: the recording it belongs to (and the write key its cookie carried), or none. */
+    public function forRecording(?string $id, ?Request $request = null, ?string $key = null): void
     {
         $this->recording = $id;
         $this->request = $request;
+        $this->keyHash = $key === null ? null : hash('sha256', $key);
     }
 
     /** The reportable callback: never in the way of the app's own reporting. */
@@ -66,7 +70,7 @@ class ServerErrors
 
         $markers = array_values(array_map(
             fn (array $entry): array => $entry['marker'],
-            array_filter($pending, fn (mixed $entry): bool => is_array($entry) && is_array($entry['marker'] ?? null) && $this->sameOwner($session, $entry['user_type'] ?? null, $entry['user_id'] ?? null)),
+            array_filter($pending, fn (mixed $entry): bool => is_array($entry) && is_array($entry['marker'] ?? null) && $this->mayWrite($session, $entry['key'] ?? null, $entry['user_type'] ?? null, $entry['user_id'] ?? null)),
         ));
 
         $this->store($session, $markers);
@@ -90,7 +94,7 @@ class ServerErrors
             return;
         }
 
-        if ($this->sameOwner($session, $user?->getMorphClass(), $user === null ? null : (string) $user->getKey())) {
+        if ($this->mayWrite($session, $this->keyHash, $user?->getMorphClass(), $user === null ? null : (string) $user->getKey())) {
             $this->store($session, [$marker]);
         }
     }
@@ -151,23 +155,30 @@ class ServerErrors
         $pending = Cache::get($key);
         $pending = is_array($pending) ? array_slice($pending, -(self::MAX_PENDING - 1)) : [];
 
-        $pending[] = ['marker' => $marker, 'user_type' => $user?->getMorphClass(), 'user_id' => $user === null ? null : (string) $user->getKey()];
+        $pending[] = ['marker' => $marker, 'key' => $this->keyHash, 'user_type' => $user?->getMorphClass(), 'user_id' => $user === null ? null : (string) $user->getKey()];
 
         Cache::put($key, $pending, now()->addMinutes(SessionReplay::idleMinutes()));
     }
 
     /**
-     * The recording's person made the request. Recordings that name nobody (guests, privacy.anonymous) and requests
-     * whose person this app cannot tell (a guard userUsing() does not know) are taken on the recording's id alone:
-     * it is a random UUID only that browser and the logs know.
+     * The request came from the browser that makes the recording. The cookie's write key proves it: the recording's
+     * id is in every viewer URL and log line, and a recording that names nobody (a guest, privacy.anonymous) has no
+     * person to compare. With the key, a request whose person this app cannot tell (a guard userUsing() does not
+     * know) passes; a recording from before write keys takes only its own person's requests, nobody's included.
+     *
+     * @param  string|null  $keyHash  SHA-256 of the key the cookie carried
      */
-    protected function sameOwner(ReplaySession $session, ?string $userType, ?string $userId): bool
+    protected function mayWrite(ReplaySession $session, ?string $keyHash, ?string $userType, ?string $userId): bool
     {
-        if ($session->user_id === null || $userId === null) {
-            return true;
+        if ($session->write_key === null) {
+            return $session->user_id === null ? $userId === null : ($session->user_type === $userType && (string) $session->user_id === $userId);
         }
 
-        return $session->user_type === $userType && (string) $session->user_id === $userId;
+        if ($keyHash === null || ! hash_equals($session->write_key, $keyHash)) {
+            return false;
+        }
+
+        return $session->user_id === null || $userId === null || ($session->user_type === $userType && (string) $session->user_id === $userId);
     }
 
     protected function mode(): string|false

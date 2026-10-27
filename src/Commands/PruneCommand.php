@@ -6,6 +6,7 @@ use Illuminate\Console\Command;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Support\Carbon;
 use Packstub\SessionReplay\Models\ReplayAsset;
+use Packstub\SessionReplay\Models\ReplayAssetOwner;
 use Packstub\SessionReplay\Models\ReplaySession;
 use Packstub\SessionReplay\Models\ReplaySessionAsset;
 use Packstub\SessionReplay\Support\ReplayStorage;
@@ -77,6 +78,7 @@ class PruneCommand extends Command
             ->chunkById(200, function ($batch) use (&$deleted, $storage): void {
                 foreach ($batch as $asset) {
                     $storage->delete($asset->path);
+                    ReplayAssetOwner::query()->where('hash', $asset->hash)->delete();
                     $asset->delete();
                     $deleted++;
                 }

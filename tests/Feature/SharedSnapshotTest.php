@@ -6,6 +6,7 @@ use Illuminate\Support\Facades\Schema;
 use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Str;
 use Packstub\SessionReplay\Models\ReplayAsset;
+use Packstub\SessionReplay\Models\ReplayAssetOwner;
 use Packstub\SessionReplay\Models\ReplaySession;
 use Packstub\SessionReplay\Models\ReplaySessionAsset;
 use Packstub\SessionReplay\Support\ReplayStorage;
@@ -363,4 +364,70 @@ it('adds the kind column to an install from before shared snapshots, and only on
     $migration->up();
 
     expect(Schema::hasColumn('replay_assets', 'kind'))->toBeTrue();
+});
+
+it('lets a recording point only at stylesheets and snapshots its own workspace sent', function () {
+    $acme = $this->token($ada = $this->user(), $this->team('Acme'));
+    $globex = $this->token($grace = $this->user(), $globexTeam = $this->team('Globex'));
+    $tree = snapshotTree();
+    $snapshot = hash('sha256', $tree);
+    $css = str_repeat('.theme{color:teal}', 300);
+    $stylesheet = hash('sha256', $css);
+
+    // Acme sends both; its recording points at them.
+    $mine = (string) Str::uuid();
+    uploadSnapshot($this, $acme, $tree)->assertOk();
+    $this->ingest(['token' => $acme, 'session' => $mine, 'meta' => ['snapshots' => [$snapshot], 'assets' => [$stylesheet]]])->assertCreated()->assertJson(['missing_assets' => [$stylesheet]]);
+    $this->post(route('session-replay.ingest.asset'), ['token' => $acme, 'hash' => $stylesheet, 'content' => $css, 'session' => $mine])->assertCreated();
+
+    expect(ReplaySession::query()->findOrFail($mine)->snapshotReferences()->pluck('hash')->all())->toEqualCanonicalizing([$snapshot, $stylesheet]);
+
+    // Globex learned the hashes: a batch that lists them points at nothing, and the stylesheet is asked for as if unknown.
+    $theirs = (string) Str::uuid();
+    $this->ingest(['token' => $globex, 'session' => $theirs, 'meta' => ['snapshots' => [$snapshot], 'assets' => [$stylesheet]]])->assertCreated()->assertJson(['missing_assets' => [$stylesheet]]);
+
+    expect(ReplaySession::query()->findOrFail($theirs)->snapshotReferences()->count())->toBe(0);
+
+    // Nor does a stylesheet upload with the wrong content (the hash alone is checked like an unknown one, since Globex
+    // never sent it), or one for Acme's recording from Globex, point anything anywhere.
+    $this->post(route('session-replay.ingest.asset'), ['token' => $globex, 'hash' => $stylesheet, 'content' => 'x', 'session' => $theirs])->assertUnprocessable();
+    $this->post(route('session-replay.ingest.asset'), ['token' => $globex, 'hash' => $stylesheet, 'content' => $css, 'session' => $mine])->assertCreated();
+
+    expect(ReplaySession::query()->findOrFail($theirs)->snapshotReferences()->count())->toBe(0);
+
+    Gate::define('viewSessionReplay', fn ($viewer, ?ReplaySession $session = null) => $session === null || $session->tenant_id === (string) $globexTeam->id);
+
+    $this->actingAs($grace);
+
+    $this->get(route('session-replay.asset', [$theirs, $stylesheet]))->assertNotFound();
+    $this->get(route('session-replay.snapshot', [$theirs, $snapshot]))->assertNotFound();
+
+    // Once Globex sends the content itself (the upload above made it an owner too), its recordings point at it, stored once.
+    uploadSnapshot($this, $globex, $tree)->assertOk();
+    $this->post(route('session-replay.ingest.asset'), ['token' => $globex, 'hash' => $stylesheet, 'content' => $css, 'session' => $theirs])->assertOk()->assertJson(['duplicate' => true]);
+    $this->ingest(['token' => $globex, 'session' => $theirs, 'seq' => 1, 'meta' => ['snapshots' => [$snapshot], 'assets' => [$stylesheet]]])->assertOk()->assertJson(['missing_assets' => []]);
+
+    expect(gzdecode($this->get(route('session-replay.asset', [$theirs, $stylesheet]))->assertOk()->streamedContent()))->toBe($css)
+        ->and(gzdecode($this->get(route('session-replay.snapshot', [$theirs, $snapshot]))->assertOk()->streamedContent()))->toBe($tree)
+        ->and(ReplayAsset::query()->count())->toBe(2)
+        ->and(ReplayAssetOwner::query()->count())->toBe(4)
+        ->and($ada->exists)->toBeTrue();
+});
+
+it('points a recording at a stylesheet only when the upload carries its write key', function () {
+    $token = $this->token($this->user());
+    $css = str_repeat('.a{b:c}', 300);
+    $hash = hash('sha256', $css);
+    $id = (string) Str::uuid();
+
+    $this->ingest(['token' => $token, 'session' => $id, 'key' => 'the-key-00000000000000000000', 'meta' => ['assets' => [$hash]]])->assertCreated()->assertJson(['missing_assets' => [$hash]]);
+
+    $this->post(route('session-replay.ingest.asset'), ['token' => $token, 'hash' => $hash, 'content' => $css, 'session' => $id])->assertCreated();
+    $this->post(route('session-replay.ingest.asset'), ['token' => $token, 'hash' => $hash, 'content' => $css, 'session' => $id, 'key' => 'another'])->assertOk();
+
+    expect(ReplaySessionAsset::query()->count())->toBe(0);
+
+    $this->post(route('session-replay.ingest.asset'), ['token' => $token, 'hash' => $hash, 'content' => $css, 'session' => $id, 'key' => 'the-key-00000000000000000000'])->assertOk();
+
+    expect(ReplaySessionAsset::query()->pluck('replay_session_id')->all())->toBe([$id]);
 });

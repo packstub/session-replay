@@ -27,6 +27,7 @@ return new class extends Migration
             $table->string('tenant_id')->nullable();
             $table->string('impersonator_type')->nullable(); // null when impersonatorUsing() gave a key, not a model
             $table->string('impersonator_id')->nullable();
+            $table->char('write_key', 64)->nullable(); // SHA-256 of the secret the browser that made the recording holds
             $table->json('properties')->nullable(); // what the app attached when the page rendered (panel, plan…)
             $table->string('entry_url', 2048)->nullable();
             $table->string('user_agent', 512)->nullable();

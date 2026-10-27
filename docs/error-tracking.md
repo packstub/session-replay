@@ -4,9 +4,9 @@ While a recording runs, every log line and error report of that person's request
 
 ## How it works
 
-1. The recorder writes the recording's id into a plain cookie (`context.cookie`, default `session_replay_id`; `SameSite=Lax`, `Secure` on HTTPS, expires with `idle_minutes`). It holds a UUID and nothing else.
+1. The recorder writes the recording's id into a plain cookie (`context.cookie`, default `session_replay_id`; `SameSite=Lax`, `Secure` on HTTPS, expires with `idle_minutes`). It holds the UUID and, after a dot, the recording's write key: a random value the browser made with the id and sends with every upload, which is what proves to the server that a request or an upload comes from the browser that makes the recording (the id itself is in every viewer URL and log line). Nothing about the person.
 2. The browser sends the cookie with every request to your app: page loads, Livewire updates, `fetch` calls.
-3. `AddReplayContext`, a global middleware the package registers, reads it, checks that it is a UUID and adds these keys to Laravel's `Context`:
+3. `AddReplayContext`, a global middleware the package registers, reads it, checks that it starts with a UUID and adds these keys to Laravel's `Context`:
 
 | Key | Value |
 | --- | --- |
@@ -15,7 +15,7 @@ While a recording runs, every log line and error report of that person's request
 | `session_replay_moment` | The same page with `?at=` and the request's time, so it opens the replay a few seconds before this request. Left out with `session_replay_url`. |
 | `session_replay_report` | Added when an exception is reported during the request (`capture.server_errors`): the id of that report, the same the `error` marker on the replay carries in its payload as `report`. See [From the replay to the logs](#from-the-replay-to-the-logs). |
 
-The middleware runs no query.
+The middleware runs no query. The write key is only compared when an exception is reported (below): a server-error marker lands on the recording only when the cookie carried its key and the recording's person made the request (a recording that names nobody, a guest or `privacy.anonymous`, takes the key alone).
 
 ## From the replay to the logs
 
@@ -29,11 +29,11 @@ use Packstub\SessionReplay\Models\ReplayMarker;
 SessionReplay::logUrlUsing(function (ReplayMarker $marker): ?string {
     $report = $marker->payload['report'] ?? null;
 
-    return $report ? url('/log-viewer?query='.$report) : null;
+    return is_string($report) ? url('/log-viewer?'.http_build_query(['query' => $report])) : null;
 });
 ```
 
-The closure receives every marker the player shows and returns a URL or `null`. Three tools, by example: [Log Viewer](https://log-viewer.opcodes.io) searches the files for `?query=<report id>`; Telescope's exceptions page lists the exception by class and time (`url('/telescope/exceptions')`); Sentry and Flare take the id as a search on the `session_replay_report` context key in their own URLs. The button opens in a new tab and is only ever shown to someone the `viewSessionReplay` gate let in.
+The closure receives every marker the player shows and returns a URL or `null`. Encode what you put in the URL: a marker's payload is what the browser sent, except for the `source: server` and `report` of a marker the package added itself (a browser cannot claim those). Three tools, by example: [Log Viewer](https://log-viewer.opcodes.io) searches the files for `?query=<report id>`; Telescope's exceptions page lists the exception by class and time (`url('/telescope/exceptions')`); Sentry and Flare take the id as a search on the `session_replay_report` context key in their own URLs. The button opens in a new tab and is only ever shown to someone the `viewSessionReplay` gate let in.
 
 ## Where it shows up
 

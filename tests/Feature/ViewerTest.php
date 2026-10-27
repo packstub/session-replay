@@ -3,6 +3,7 @@
 use Illuminate\Support\Arr;
 use Illuminate\Support\Facades\Blade;
 use Illuminate\Support\Facades\Gate;
+use Illuminate\Support\Str;
 use Packstub\SessionReplay\Facades\SessionReplay;
 use Packstub\SessionReplay\Models\ReplayMarker;
 use Packstub\SessionReplay\Models\ReplaySession;
@@ -111,7 +112,7 @@ it('serves the manifest, chunks as stored gzip, and stylesheets', function () {
         ['type' => 'error', 'label' => 'Boom', 'at' => $now],
     ]]])->assertOk();
 
-    $this->post(route('session-replay.ingest.asset'), ['token' => $this->token($user), 'hash' => hash('sha256', $css), 'content' => $css])->assertCreated();
+    $this->post(route('session-replay.ingest.asset'), ['token' => $this->token($user), 'hash' => hash('sha256', $css), 'content' => $css, 'session' => $session->id])->assertCreated();
 
     $this->actingAs($user);
 
@@ -331,7 +332,7 @@ it('names the impersonator in the player page when impersonatorUsing() gave a mo
     $this->get(route('session-replay.show', $byKey))->assertSee('#42');
 });
 
-it('serves a stylesheet only to a recording that points at it, once the recording has references', function () {
+it('serves a stylesheet only to a recording that points at it; the hash alone opens nothing', function () {
     Gate::define('viewSessionReplay', fn ($user) => true);
 
     $user = $this->user();
@@ -339,21 +340,33 @@ it('serves a stylesheet only to a recording that points at it, once the recordin
     $other = str_repeat('d{e:f}', 1000);
     $session = $this->recording($user);
 
+    // Stored by an upload that names no recording (a recorder from before write keys): the workspace owns them.
     foreach ([$css, $other] as $sheet) {
         $this->post(route('session-replay.ingest.asset'), ['token' => $this->token($user), 'hash' => hash('sha256', $sheet), 'content' => $sheet])->assertCreated();
     }
 
     $this->actingAs($user);
 
-    // From before stylesheets were referenced: by hash, as it was.
-    $this->get(route('session-replay.asset', [$session, hash('sha256', $other)]))->assertOk();
+    // A recording that points at no stylesheet (from before 1.0.0-beta.5, or one whose CSS stayed inline) gets none.
+    $this->get(route('session-replay.asset', [$session, hash('sha256', $other)]))->assertNotFound();
 
-    // Also when the recording points at shared snapshots, which were referenced since 1.0.0-beta.3.
+    // Nor when it points at a shared snapshot.
     ReplaySessionAsset::query()->insert(['replay_session_id' => $session->id, 'hash' => hash('sha256', 'a shared snapshot'), 'created_at' => now()]);
-    $this->get(route('session-replay.asset', [$session, hash('sha256', $other)]))->assertOk();
+    $this->get(route('session-replay.asset', [$session, hash('sha256', $other)]))->assertNotFound();
 
-    $this->ingest(['token' => $this->token($user), 'session' => $session->id, 'seq' => 1, 'meta' => ['assets' => [hash('sha256', $css)]]])->assertOk();
+    $this->ingest(['token' => $this->token($user), 'session' => $session->id, 'seq' => 1, 'meta' => ['assets' => [hash('sha256', $css)]]])->assertOk()->assertJson(['missing_assets' => []]);
 
     $this->get(route('session-replay.asset', [$session, hash('sha256', $css)]))->assertOk();
     $this->get(route('session-replay.asset', [$session, hash('sha256', $other)]))->assertNotFound();
+});
+
+it('answers an id that is no recording like one the gate denies', function () {
+    Gate::define('viewSessionReplay', fn ($user) => true);
+
+    $this->actingAs($this->user());
+
+    $this->get(route('session-replay.show', (string) Str::uuid()))->assertForbidden();
+    $this->getJson(route('session-replay.manifest', (string) Str::uuid()))->assertForbidden();
+    $this->get(route('session-replay.chunk', [(string) Str::uuid(), 0]))->assertForbidden();
+    $this->get(route('session-replay.asset', [(string) Str::uuid(), str_repeat('a', 64)]))->assertForbidden();
 });

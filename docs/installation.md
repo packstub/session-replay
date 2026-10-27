@@ -29,7 +29,7 @@ The install command:
 2. offers to run the migrations (five tables: `replay_sessions`, `replay_chunks`, `replay_markers`, `replay_assets`, `replay_session_assets`),
 3. publishes `app/Providers/SessionReplayServiceProvider.php` with the `viewSessionReplay` gate in it and registers it in `bootstrap/providers.php`.
 
-Migrations also run with a plain `php artisan migrate`; set `run_migrations` to `false` to publish and run them yourself (see [Storage](storage.md#multi-tenant-apps)).
+Migrations also run with a plain `php artisan migrate` (upgrading from 1.0: the `replay_asset_owners` table and `replay_sessions.write_key` are new, run it); set `run_migrations` to `false` to publish and run them yourself (see [Storage](storage.md#multi-tenant-apps)).
 
 ## Record a page
 

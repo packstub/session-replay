@@ -136,6 +136,20 @@ function uuid() {
     return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
 }
 
+/**
+ * The recording's write key: made with its id, kept beside it, sent with
+ * every upload and in the log-context cookie. The id is in every viewer URL
+ * and log line; the key only this tab holds, and the server takes no upload
+ * (and no server error) for the recording without it.
+ */
+function secret() {
+    const bytes = new Uint8Array(16);
+
+    (window.crypto || { getRandomValues: (array) => array.forEach((_, i) => (array[i] = Math.floor(Math.random() * 256))) }).getRandomValues(bytes);
+
+    return [...bytes].map((byte) => byte.toString(16).padStart(2, '0')).join('');
+}
+
 /** One recording per tab, continued across page loads until the tab sits idle for idleTimeout. */
 function loadSession() {
     const now = Date.now();
@@ -151,8 +165,11 @@ function loadSession() {
     // the server keeps one person per recording and would refuse the rest of this one.
     if (!state || typeof state.id !== 'string' || now - state.lastActivity > config.idleTimeout || (state.identity ?? null) !== (config.identity ?? null)) {
         // The sampling decision is made once and kept with the session.
-        state = { id: uuid(), seq: 0, lastActivity: now, sampled: Math.random() < config.sampleRate, identity: config.identity ?? null };
+        state = { id: uuid(), key: secret(), seq: 0, lastActivity: now, sampled: Math.random() < config.sampleRate, identity: config.identity ?? null };
     }
+
+    // A recording from before write keys goes on without one (its row has none to compare); nothing to make up.
+    if (typeof state.key !== 'string') state.key = null;
 
     // A tab from before mode "on_error" was turned on keeps recording; one that was buffering when it was turned off records.
     // "stopped": the server said so (the size or daily limit, a recording that is someone else's); quiet until the session idles out.
@@ -173,7 +190,9 @@ function saveSession() {
     if (config.cookie && !['declined', 'stopped'].includes(session.phase) && session.sampled) {
         const secure = location.protocol === 'https:' ? '; Secure' : '';
 
-        document.cookie = `${config.cookie}=${session.id}; path=/; max-age=${Math.round(config.idleTimeout / 1000)}; SameSite=Lax${secure}`;
+        const value = session.key ? `${session.id}.${session.key}` : session.id;
+
+        document.cookie = `${config.cookie}=${value}; path=/; max-age=${Math.round(config.idleTimeout / 1000)}; SameSite=Lax${secure}`;
     }
 }
 
@@ -568,6 +587,7 @@ function form(batch, blob) {
 
     data.append('token', batch.token);
     data.append('session', batch.session.id);
+    if (batch.session.key) data.append('key', batch.session.key);
     data.append('seq', String(batch.seq));
 
     // The person chose to send this recording without their name: the server drops who they are from the token.
@@ -579,7 +599,8 @@ function form(batch, blob) {
 }
 
 /** Uploads the stylesheets the server is missing; returns the hashes whose upload failed and is worth trying again. */
-async function uploadAssets(hashes, token) {
+/** Stylesheets the server asked for, named for the recording: it points at a stylesheet only once its own upload went through. */
+async function uploadAssets(hashes, token, recording) {
     const failed = [];
 
     for (const hash of hashes) {
@@ -591,6 +612,8 @@ async function uploadAssets(hashes, token) {
 
         data.append('token', token);
         data.append('hash', hash);
+        data.append('session', recording.id);
+        if (recording.key) data.append('key', recording.key);
         data.append('content', await gzip(text), 'content');
 
         try {
@@ -726,7 +749,7 @@ async function send(batch) {
         flushInterval = config.flushInterval;
 
         // A stylesheet whose upload failed earlier goes again with the next batch; its text is kept until then.
-        assetRetry = new Set(await uploadAssets([...new Set([...(body.missing_assets || []), ...assetRetry])], batch.token));
+        assetRetry = new Set(await uploadAssets([...new Set([...(body.missing_assets || []), ...assetRetry])], batch.token, batch.session));
 
         for (const hash of batch.meta.assets) if (!assetRetry.has(hash)) pendingAssetText.delete(hash);
     }

@@ -42,6 +42,9 @@ class ReplaySession extends ReplayModel
 
     protected $table = 'replay_sessions';
 
+    /** The hash of the recording's write key: what the browser that made it presents with every later upload. */
+    protected $hidden = ['write_key'];
+
     protected function casts(): array
     {
         return [
@@ -86,6 +89,19 @@ class ReplaySession extends ReplayModel
     public function markers(): HasMany
     {
         return $this->hasMany(ReplayMarker::class)->orderBy('at_ms');
+    }
+
+    /**
+     * Whether an upload presenting this write key may add to the recording. A recording from before write keys
+     * (none stored) takes any upload its identity checks allow, as it did.
+     */
+    public function acceptsWriteKey(?string $key): bool
+    {
+        if ($this->write_key === null) {
+            return true;
+        }
+
+        return $key !== null && hash_equals($this->write_key, hash('sha256', $key));
     }
 
     /** The stylesheets and shared snapshots this recording points at (by hash); named when only snapshots were. */

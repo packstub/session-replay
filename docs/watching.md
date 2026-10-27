@@ -138,8 +138,8 @@ The controller plays at 1x, 2x, 4x and 8x, skips inactivity and goes full screen
 use Packstub\SessionReplay\Facades\SessionReplay;
 use Packstub\SessionReplay\Models\ReplayMarker;
 
-SessionReplay::logUrlUsing(fn (ReplayMarker $marker): ?string => isset($marker->payload['report'])
-    ? url('/log-viewer?query='.$marker->payload['report'])
+SessionReplay::logUrlUsing(fn (ReplayMarker $marker): ?string => is_string($marker->payload['report'] ?? null)
+    ? url('/log-viewer?'.http_build_query(['query' => $marker->payload['report']]))
     : null);
 ```
 

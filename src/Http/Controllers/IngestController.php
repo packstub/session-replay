@@ -9,6 +9,7 @@ use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Str;
 use Packstub\SessionReplay\Facades\SessionReplay;
 use Packstub\SessionReplay\Models\ReplayAsset;
+use Packstub\SessionReplay\Models\ReplayAssetOwner;
 use Packstub\SessionReplay\Models\ReplaySession;
 use Packstub\SessionReplay\Support\BatchIngester;
 use Packstub\SessionReplay\Support\ContextToken;
@@ -41,6 +42,7 @@ class IngestController
 
         $sessionId = $request->input('session');
         $seq = $request->input('seq');
+        $writeKey = $this->writeKey($request);
 
         if (! is_string($sessionId) || ! Str::isUuid($sessionId) || ! is_numeric($seq) || (int) $seq < 0 || (int) $seq > 100000) {
             return $this->refuse(422, 'A session id and a sequence number are required.');
@@ -70,7 +72,9 @@ class IngestController
             $context = $context->withoutPerson();
         }
 
-        if ($session !== null && (! $context->sameUserAs($session->user_type, $session->user_id) || ! $context->sameImpersonatorAs($session->impersonator_id, $session->impersonator_type))) {
+        // The write key the browser made with the recording's id: a recording that names nobody (a guest, privacy.anonymous)
+        // has no person to compare, and its id is in every viewer URL and log line. The key only its browser holds.
+        if ($session !== null && (! $session->acceptsWriteKey($writeKey) || ! $context->sameUserAs($session->user_type, $session->user_id) || ! $context->sameImpersonatorAs($session->impersonator_id, $session->impersonator_type))) {
             return $this->refuse(403, 'This recording belongs to someone else.', stop: true);
         }
 
@@ -96,7 +100,7 @@ class IngestController
         $meta = $request->input('meta', '{}');
         $meta = is_string($meta) ? json_decode($meta, true) : null;
 
-        $result = $this->ingester->ingest($sessionId, (int) $seq, $gzip, is_array($meta) ? $meta : [], $context, $request->userAgent());
+        $result = $this->ingester->ingest($sessionId, (int) $seq, $gzip, is_array($meta) ? $meta : [], $context, $request->userAgent(), $writeKey);
 
         if ($result['foreign']) {
             return $this->refuse(403, 'This recording belongs to someone else.', stop: true);
@@ -109,7 +113,15 @@ class IngestController
         ], $result['created'] ? 201 : 200);
     }
 
-    /** POST {path}/ingest/asset — multipart: token, hash (SHA-256 of the stylesheet), content (file; gzip or text). */
+    /**
+     * POST {path}/ingest/asset — multipart: token, hash (SHA-256 of the stylesheet), content (file; gzip or text),
+     * session and key (optional: the recording that points at it and its write key).
+     *
+     * The content is read and checked against the hash unless the token's
+     * workspace sent this stylesheet before: the recording may only point at
+     * what its workspace proved it has, and a hash alone says nothing about
+     * what another workspace stored.
+     */
     public function asset(Request $request): JsonResponse
     {
         $context = $this->context($request);
@@ -124,8 +136,13 @@ class IngestController
             return $this->refuse(422, 'A SHA-256 hash is required.');
         }
 
-        // Only stylesheets answer "duplicate"; a shared snapshot's hash is checked like an unknown one.
-        if (ReplayAsset::query()->where('hash', $hash)->where('kind', ReplayAsset::STYLESHEET)->exists()) {
+        $tenantKey = ReplayAssetOwner::tenantKey($context->tenantType, $context->tenantId);
+
+        // Only a stylesheet this workspace sent answers "duplicate"; another workspace's, or a shared snapshot's hash,
+        // is checked like an unknown one.
+        if (ReplayAssetOwner::ownedBy($tenantKey, [$hash]) !== [] && ReplayAsset::query()->where('hash', $hash)->where('kind', ReplayAsset::STYLESHEET)->exists()) {
+            $this->referenceFromUpload($request, $context, $hash);
+
             return response()->json(['ok' => true, 'duplicate' => true]);
         }
 
@@ -147,27 +164,56 @@ class IngestController
             return $this->refuse(422, 'The content does not match the hash.');
         }
 
-        // Stored already as a shared snapshot, the same bytes, checked against the hash when they arrived: from now on
-        // it is a stylesheet too, or the stylesheet would stay missing for good. A recording that points at it as a
-        // snapshot still gets it (the viewer serves a snapshot of either kind), prune keeps it while one does, and the
-        // answer is the one a new stylesheet gets.
+        // Stored already (by another workspace, or as a shared snapshot: the same bytes, checked against the hash when
+        // they arrived, and from now on a stylesheet too, or the stylesheet would stay missing for good; a recording
+        // that points at it as a snapshot still gets it, the viewer serves a snapshot of either kind). The workspace
+        // has proved it has the content: it owns the asset from here, and the answer is the one a new stylesheet gets.
         if (ReplayAsset::query()->where('hash', $hash)->exists()) {
             ReplayAsset::query()->where('hash', $hash)->update(['kind' => ReplayAsset::STYLESHEET, 'last_seen_at' => now()]);
+        } else {
+            $gzip = str_starts_with($body, "\x1f\x8b") ? $body : (string) gzencode($raw, 6);
+            $bytes = $this->storage->putAsset($hash, $gzip);
 
-            return response()->json(['ok' => true], 201);
+            ReplayAsset::query()->firstOrCreate(['hash' => $hash], [
+                'path' => $this->storage->assetPath($hash),
+                'bytes' => $bytes,
+                'raw_bytes' => strlen($raw),
+                'last_seen_at' => now(),
+            ]);
         }
 
-        $gzip = str_starts_with($body, "\x1f\x8b") ? $body : (string) gzencode($raw, 6);
-        $bytes = $this->storage->putAsset($hash, $gzip);
-
-        ReplayAsset::query()->firstOrCreate(['hash' => $hash], [
-            'path' => $this->storage->assetPath($hash),
-            'bytes' => $bytes,
-            'raw_bytes' => strlen($raw),
-            'last_seen_at' => now(),
-        ]);
+        ReplayAssetOwner::own($tenantKey, [$hash]);
+        $this->referenceFromUpload($request, $context, $hash);
 
         return response()->json(['ok' => true], 201);
+    }
+
+    /**
+     * The recording the upload names points at the stylesheet, when the upload may add to it: the same checks as a
+     * batch (the write key, the person, the workspace). An upload that names none (a recorder from before this)
+     * only makes the workspace an owner; the next batch that lists the hash points the recording at it.
+     */
+    protected function referenceFromUpload(Request $request, ContextToken $context, string $hash): void
+    {
+        $sessionId = $request->input('session');
+
+        if (! is_string($sessionId) || ! Str::isUuid($sessionId)) {
+            return;
+        }
+
+        /** @var ReplaySession|null $session */
+        $session = ReplaySession::query()->find(strtolower($sessionId));
+
+        if ($session === null || ! $session->acceptsWriteKey($this->writeKey($request)) || ! $context->sameTenantAs($session->tenant_type, $session->tenant_id)) {
+            return;
+        }
+
+        // An anonymous recording names nobody while the token names the person: the key and the workspace decide.
+        if ($session->user_id !== null && ! ($context->sameUserAs($session->user_type, $session->user_id) && $context->sameImpersonatorAs($session->impersonator_id, $session->impersonator_type))) {
+            return;
+        }
+
+        $this->ingester->reference($session->id, [$hash]);
     }
 
     /**
@@ -233,6 +279,9 @@ class IngestController
             ]);
         }
 
+        // The workspace sent the page itself: its recordings may point at the snapshot from here (the batch that follows).
+        ReplayAssetOwner::own(ReplayAssetOwner::tenantKey($context->tenantType, $context->tenantId), [$hash]);
+
         return response()->json(['ok' => true]);
     }
 
@@ -253,6 +302,14 @@ class IngestController
         }
 
         return $context;
+    }
+
+    /** The recording's write key as the browser sends it (32 hex characters; anything up to 128 is taken), or none. */
+    protected function writeKey(Request $request): ?string
+    {
+        $key = $request->input('key');
+
+        return is_string($key) && $key !== '' && strlen($key) <= 128 ? $key : null;
     }
 
     /** Counts the upload against the person's daily allowance (all guests share one) and says whether it is spent. */

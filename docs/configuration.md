@@ -138,7 +138,7 @@ Share pages that look the same for everyone who opens them: a pricing page, the 
 | Key | Default | Meaning |
 | --- | --- | --- |
 | `context.enabled` | `true` | Write the cookie and add `session_replay`, `session_replay_url`, `session_replay_moment` and `session_replay_report` to Laravel's `Context` (see [Error tracking](error-tracking.md#how-it-works)). Server-error markers need it. |
-| `context.cookie` | `session_replay_id` | The cookie's name. |
+| `context.cookie` | `session_replay_id` | The cookie's name. Its value is the recording's id and, after a dot, its write key (see [Error tracking](error-tracking.md#how-it-works)). |
 
 ## What is registered in code
 

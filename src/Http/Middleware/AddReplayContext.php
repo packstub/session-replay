@@ -26,8 +26,10 @@ class AddReplayContext
         app(ServerErrors::class)->forRecording(null);
 
         if (config('session-replay.enabled', true) && config('session-replay.context.enabled', true)) {
-            // Read before cookie decryption runs: the recorder writes it in the clear.
-            $id = $request->cookies->get((string) config('session-replay.context.cookie', 'session_replay_id'));
+            // Read before cookie decryption runs: the recorder writes it in the clear, as "<id>.<write key>" (the id
+            // alone from a recorder from before write keys).
+            $cookie = $request->cookies->get((string) config('session-replay.context.cookie', 'session_replay_id'));
+            [$id, $key] = is_string($cookie) ? array_pad(explode('.', $cookie, 2), 2, null) : [null, null];
 
             if (is_string($id) && Str::isUuid($id)) {
                 Context::add('session_replay', $id);
@@ -45,7 +47,7 @@ class AddReplayContext
                 $path = trim((string) config('session-replay.path', 'session-replay'), '/');
 
                 if (! $request->is($path, $path.'/*')) {
-                    app(ServerErrors::class)->forRecording(strtolower($id), $request);
+                    app(ServerErrors::class)->forRecording(strtolower($id), $request, is_string($key) && $key !== '' ? $key : null);
                 }
             }
         }

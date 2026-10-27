@@ -243,12 +243,13 @@ it('asks for stylesheets it does not have and stores them under the hash of thei
 
     $this->ingest(['token' => $token, 'session' => $first, 'meta' => ['assets' => [$hash, 'not-a-hash']]])->assertCreated()->assertJson(['missing_assets' => [$hash]]);
 
-    // The first recording to send a stylesheet points at it before the upload: the asset upload names no recording.
-    expect(ReplaySessionAsset::query()->pluck('hash')->all())->toBe([$hash]);
+    // The recording points at the stylesheet only once its own upload, which names it, went through.
+    expect(ReplaySessionAsset::query()->count())->toBe(0);
 
     $this->post(route('session-replay.ingest.asset'), [
         'token' => $token,
         'hash' => $hash,
+        'session' => $first,
         'content' => UploadedFile::fake()->createWithContent('content', gzencode($css)),
     ])->assertCreated();
 
@@ -256,6 +257,7 @@ it('asks for stylesheets it does not have and stores them under the hash of thei
 
     expect($asset->hash)->toBe($hash)->and($asset->raw_bytes)->toBe(strlen($css));
     expect(gzdecode(Storage::disk('replays')->get($asset->path)))->toBe($css);
+    expect(ReplaySessionAsset::query()->pluck('hash')->all())->toBe([$hash]);
 
     // The next recording that references it has nothing to upload, and is remembered as pointing at it.
     $session = (string) Str::uuid();
@@ -782,4 +784,60 @@ it('announces every problem the person reported once, with its recording', funct
 
     expect(ReplayMarker::query()->where('type', 'report')->count())->toBe(1)
         ->and(ReplaySession::query()->findOrFail($id)->error_count)->toBe(0);
+});
+
+it('takes an upload for a recording only with the write key its browser made', function () {
+    $token = $this->token($user = $this->user());
+    $id = (string) Str::uuid();
+
+    $this->ingest(['token' => $token, 'session' => $id, 'key' => 'k1'.str_repeat('a', 30)])->assertCreated();
+
+    expect(ReplaySession::query()->findOrFail($id)->write_key)->toBe(hash('sha256', 'k1'.str_repeat('a', 30)))
+        ->and(ReplaySession::query()->findOrFail($id)->toArray())->not->toHaveKey('write_key');
+
+    // The same person, without the key or with another: the recording's id is no secret, the key is.
+    $this->ingest(['token' => $token, 'session' => $id, 'seq' => 1])->assertForbidden()->assertJson(['stop' => true]);
+    $this->ingest(['token' => $token, 'session' => $id, 'seq' => 1, 'key' => 'k2'.str_repeat('a', 30)])->assertForbidden();
+    $this->ingest(['token' => $token, 'session' => $id, 'seq' => 1, 'key' => 'k1'.str_repeat('a', 30)])->assertOk();
+
+    expect(ReplaySession::query()->findOrFail($id)->chunk_count)->toBe(2);
+
+    // A recording from before write keys (none stored) goes on as it did.
+    $legacy = $this->recording($user);
+
+    $this->ingest(['token' => $token, 'session' => $legacy->id, 'seq' => 1])->assertOk();
+    $this->ingest(['token' => $token, 'session' => $legacy->id, 'seq' => 2, 'key' => 'whatever'])->assertOk();
+});
+
+it('keeps a recording that names nobody for the browser that made it', function () {
+    config()->set('session-replay.guests', true);
+
+    $guest = (string) Str::uuid();
+    $this->ingest(['token' => (new ContextToken(issuedAt: time(), nonce: 'page-1'))->encode(), 'session' => $guest, 'key' => 'guest-key-0000000000000000'])->assertCreated();
+
+    // Another guest, and a signed-in person who sends "anonymously", know the id (it is in every viewer URL): not the key.
+    $this->ingest(['token' => (new ContextToken(issuedAt: time(), nonce: 'page-2'))->encode(), 'session' => $guest, 'seq' => 1])->assertForbidden();
+    $this->ingest(['token' => $this->token($this->user()), 'session' => $guest, 'seq' => 1, 'anonymous' => '1'])->assertForbidden();
+    $this->ingest(['token' => (new ContextToken(issuedAt: time(), nonce: 'page-3'))->encode(), 'session' => $guest, 'seq' => 1, 'key' => 'guest-key-0000000000000000'])->assertOk();
+
+    $anonymous = (string) Str::uuid();
+    $this->ingest(['token' => $this->token($this->user()), 'session' => $anonymous, 'anonymous' => '1', 'key' => 'ada-key-00000000000000000000'])->assertCreated();
+
+    $this->ingest(['token' => $this->token($this->user()), 'session' => $anonymous, 'seq' => 1, 'anonymous' => '1'])->assertForbidden();
+    $this->ingest(['token' => $this->token($this->user()), 'session' => $anonymous, 'seq' => 1, 'anonymous' => '1', 'key' => 'ada-key-00000000000000000000'])->assertOk();
+
+    expect(ReplaySession::query()->findOrFail($guest)->chunk_count)->toBe(2)
+        ->and(ReplaySession::query()->findOrFail($anonymous)->chunk_count)->toBe(2);
+});
+
+it('lets no browser claim an error came from the server', function () {
+    $now = now()->getTimestampMs();
+
+    $this->ingest(['meta' => ['markers' => [
+        ['type' => 'error', 'label' => 'Server error: RuntimeException', 'payload' => ['source' => 'server', 'exception' => 'RuntimeException', 'report' => 'x'], 'at' => $now],
+        ['type' => 'error', 'label' => 'TypeError', 'payload' => ['source' => 'https://app.test/js/app.js', 'line' => 3], 'at' => $now],
+    ]]])->assertCreated();
+
+    expect(ReplayMarker::query()->where('label', 'Server error: RuntimeException')->sole()->payload)->toBe(['exception' => 'RuntimeException', 'report' => 'x'])
+        ->and(ReplayMarker::query()->where('label', 'TypeError')->sole()->payload)->toBe(['source' => 'https://app.test/js/app.js', 'line' => 3]);
 });

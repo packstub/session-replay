@@ -134,3 +134,62 @@ it('redacts the listed query parameters of every URL in a text', function () {
         ->toBe('GET https://app.test/a?Token=redacted&page=2 and http://x.test/b?code=redacted')
         ->and(ServerErrors::redactUrls('no url here', ['token']))->toBe('no url here');
 });
+
+it('takes a server error for a recording only from the browser that holds its write key', function () {
+    $user = $this->user();
+    $id = (string) Str::uuid();
+    $key = 'the-key-00000000000000000000';
+
+    $this->ingest(['token' => $this->token($user), 'session' => $id, 'key' => $key])->assertCreated();
+
+    $session = ReplaySession::query()->findOrFail($id);
+
+    // The id alone, or another key: the id is in every viewer URL and log line, the key only in that browser's cookie.
+    $this->actingAs($user)->withUnencryptedCookie('session_replay_id', $id)->post('orders')->assertServerError();
+    $this->actingAs($user)->withUnencryptedCookie('session_replay_id', $id.'.another')->post('orders')->assertServerError();
+
+    expect(serverMarker($session))->toBeNull();
+
+    // The key with the recording's own person, or with nobody signed in (a guard userUsing() does not know).
+    $this->actingAs($user)->withUnencryptedCookie('session_replay_id', $id.'.'.$key)->post('orders')->assertServerError();
+    $this->withUnencryptedCookie('session_replay_id', $id.'.'.$key)->post('orders')->assertServerError();
+
+    expect(serverMarker($session)['payload']['path'])->toBe('/orders')
+        ->and($session->fresh()->error_count)->toBe(2);
+
+    // Someone else with the key (a stolen cookie) is still someone else.
+    $this->actingAs($this->user())->withUnencryptedCookie('session_replay_id', $id.'.'.$key)->post('orders')->assertServerError();
+
+    expect($session->fresh()->error_count)->toBe(2);
+
+    // A recording from before write keys takes its own person's requests only: nobody signed in is not its person.
+    $legacy = $this->recording($user);
+
+    $this->withUnencryptedCookie('session_replay_id', $legacy->id)->post('orders')->assertServerError();
+
+    expect(serverMarker($legacy))->toBeNull();
+});
+
+it('hands a kept error to the recording only when the cookie carried its write key (mode on_error)', function () {
+    $user = $this->user();
+    $id = (string) Str::uuid();
+    $key = 'the-key-00000000000000000000';
+
+    $this->actingAs($user)->withUnencryptedCookie('session_replay_id', $id.'.another')->post('orders')->assertServerError();
+    $this->actingAs($user)->withUnencryptedCookie('session_replay_id', $id.'.'.$key)->post('orders?which=mine')->assertServerError();
+
+    $this->ingest(['token' => $this->token($user), 'session' => $id, 'key' => $key])->assertCreated();
+
+    $session = ReplaySession::query()->findOrFail($id);
+
+    expect(ReplayMarker::query()->where('replay_session_id', $id)->where('label', 'like', 'Server error%')->count())->toBe(1)
+        ->and($session->error_count)->toBe(1);
+
+    // A recording that names nobody takes the kept error with the key alone.
+    $anonymous = (string) Str::uuid();
+
+    $this->actingAs($user)->withUnencryptedCookie('session_replay_id', $anonymous.'.'.$key)->post('orders')->assertServerError();
+    $this->ingest(['token' => $this->token($user), 'session' => $anonymous, 'key' => $key, 'anonymous' => '1'])->assertCreated();
+
+    expect(serverMarker(ReplaySession::query()->findOrFail($anonymous)))->not->toBeNull();
+});
