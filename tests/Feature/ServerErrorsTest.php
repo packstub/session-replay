@@ -168,6 +168,17 @@ it('takes a server error for a recording only from the browser that holds its wr
     $this->withUnencryptedCookie('session_replay_id', $legacy->id)->post('orders')->assertServerError();
 
     expect(serverMarker($legacy))->toBeNull();
+
+    $this->actingAs($user)->withUnencryptedCookie('session_replay_id', $legacy->id)->post('orders')->assertServerError();
+
+    expect($legacy->fresh()->error_count)->toBe(1);
+
+    // And only while its browser could still be making it: idle for twice idle_minutes, its id opens nothing.
+    $legacy->forceFill(['last_activity_at' => now()->subMinutes(61)])->save();
+
+    $this->actingAs($user)->withUnencryptedCookie('session_replay_id', $legacy->id)->post('orders')->assertServerError();
+
+    expect($legacy->fresh()->error_count)->toBe(1);
 });
 
 it('hands a kept error to the recording only when the cookie carried its write key (mode on_error)', function () {

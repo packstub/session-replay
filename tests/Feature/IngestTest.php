@@ -418,7 +418,7 @@ it('puts no web middleware on the upload routes, which carry no CSRF token', fun
  */
 function recordingMadeDuringTheRace(string $id, $user): void
 {
-    ReplaySession::query()->insert(['id' => $id, 'user_type' => $user->getMorphClass(), 'user_id' => (string) $user->id, 'started_at' => now(), 'created_at' => now(), 'updated_at' => now()]);
+    ReplaySession::query()->insert(['id' => $id, 'user_type' => $user->getMorphClass(), 'user_id' => (string) $user->id, 'started_at' => now(), 'last_activity_at' => now(), 'created_at' => now(), 'updated_at' => now()]);
 
     $hidden = true;
 
@@ -802,11 +802,18 @@ it('takes an upload for a recording only with the write key its browser made', f
 
     expect(ReplaySession::query()->findOrFail($id)->chunk_count)->toBe(2);
 
-    // A recording from before write keys (none stored) goes on as it did.
+    // A recording from before write keys (none stored) goes on as it did, while its browser could still be making it.
     $legacy = $this->recording($user);
 
     $this->ingest(['token' => $token, 'session' => $legacy->id, 'seq' => 1])->assertOk();
     $this->ingest(['token' => $token, 'session' => $legacy->id, 'seq' => 2, 'key' => 'whatever'])->assertOk();
+
+    // Idle for twice idle_minutes, the recorder would have started a new one: nobody with its id adds to it any more.
+    $legacy->forceFill(['last_activity_at' => now()->subMinutes(61)])->save();
+
+    $this->ingest(['token' => $token, 'session' => $legacy->id, 'seq' => 3])->assertForbidden()->assertJson(['stop' => true]);
+
+    expect($legacy->fresh()->chunk_count)->toBe(3);
 });
 
 it('keeps a recording that names nobody for the browser that made it', function () {

@@ -93,15 +93,26 @@ class ReplaySession extends ReplayModel
 
     /**
      * Whether an upload presenting this write key may add to the recording. A recording from before write keys
-     * (none stored) takes any upload its identity checks allow, as it did.
+     * (none stored) takes any upload its identity checks allow, as it did, but only while its browser could still be
+     * making it (openWithoutKey()).
      */
     public function acceptsWriteKey(?string $key): bool
     {
         if ($this->write_key === null) {
-            return true;
+            return $this->openWithoutKey();
         }
 
         return $key !== null && hash_equals($this->write_key, hash('sha256', $key));
+    }
+
+    /**
+     * A recording without a write key is still being made, as far as its browser is concerned: the recorder starts a
+     * new recording after idle_minutes without activity, so one idle twice that long (room for a slow browser clock
+     * and a retried upload) is finished, and no longer open to anyone who holds a token for its person and its id.
+     */
+    public function openWithoutKey(): bool
+    {
+        return $this->last_activity_at !== null && $this->last_activity_at->gt(now()->subMinutes(2 * SessionReplay::idleMinutes()));
     }
 
     /** The stylesheets and shared snapshots this recording points at (by hash); named when only snapshots were. */

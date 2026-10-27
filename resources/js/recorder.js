@@ -637,12 +637,20 @@ async function uploadAssets(hashes, token, recording) {
 const SHARED_KEY = 'sr:shared';
 const SHARED_TTL = 60 * 60 * 1000;
 
-/** Hashes this tab uploaded in the last hour (the server keeps a snapshot for a day after it was last sent). */
+/**
+ * Hashes this tab uploaded in the last hour as the person and workspace it is
+ * signed in as (the server keeps a snapshot for a day after it was last sent,
+ * for the workspace that sent it: a recording made in another one after a
+ * switch in this tab has to send the page again, or it could not point at it).
+ */
 function uploadedSnapshots() {
     try {
         const now = Date.now();
+        const shared = JSON.parse(read('sessionStorage', SHARED_KEY) || '{}');
 
-        return Object.fromEntries(Object.entries(JSON.parse(read('sessionStorage', SHARED_KEY) || '{}')).filter(([, at]) => now - at < SHARED_TTL));
+        if ((shared.identity ?? null) !== (config.identity ?? null)) return {};
+
+        return Object.fromEntries(Object.entries(shared.hashes || {}).filter(([, at]) => now - at < SHARED_TTL));
     } catch {
         return {};
     }
@@ -677,7 +685,7 @@ async function shareSnapshots(batch) {
                 if (!(await fetch(config.snapshots.url, { method: 'POST', body: data })).ok) continue;
 
                 uploaded[hash] = Date.now();
-                write('sessionStorage', SHARED_KEY, JSON.stringify(Object.fromEntries(Object.entries(uploaded).slice(-50))));
+                write('sessionStorage', SHARED_KEY, JSON.stringify({ identity: config.identity ?? null, hashes: Object.fromEntries(Object.entries(uploaded).slice(-50)) }));
             }
 
             shareSnapshot(event, hash);

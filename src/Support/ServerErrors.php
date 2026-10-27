@@ -164,13 +164,18 @@ class ServerErrors
      * The request came from the browser that makes the recording. The cookie's write key proves it: the recording's
      * id is in every viewer URL and log line, and a recording that names nobody (a guest, privacy.anonymous) has no
      * person to compare. With the key, a request whose person this app cannot tell (a guard userUsing() does not
-     * know) passes; a recording from before write keys takes only its own person's requests, nobody's included.
+     * know) passes; a recording from before write keys takes only its own person's requests, nobody's included, and
+     * only while its browser could still be making it.
      *
      * @param  string|null  $keyHash  SHA-256 of the key the cookie carried
      */
     protected function mayWrite(ReplaySession $session, ?string $keyHash, ?string $userType, ?string $userId): bool
     {
         if ($session->write_key === null) {
+            if (! $session->openWithoutKey()) {
+                return false;
+            }
+
             return $session->user_id === null ? $userId === null : ($session->user_type === $userType && (string) $session->user_id === $userId);
         }
 
