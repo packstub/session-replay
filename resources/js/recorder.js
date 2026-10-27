@@ -598,8 +598,10 @@ function form(batch, blob) {
     return data;
 }
 
-/** Uploads the stylesheets the server is missing; returns the hashes whose upload failed and is worth trying again. */
-/** Stylesheets the server asked for, named for the recording: it points at a stylesheet only once its own upload went through. */
+/**
+ * Uploads the stylesheets the server asked for, named for the recording (it points at a stylesheet only once its
+ * own upload went through); returns the hashes whose upload failed and is worth trying again.
+ */
 async function uploadAssets(hashes, token, recording) {
     const failed = [];
 

@@ -78,10 +78,12 @@ class PruneCommand extends Command
             ->chunkById(200, function ($batch) use (&$deleted, $storage): void {
                 foreach ($batch as $asset) {
                     $storage->delete($asset->path);
-                    ReplayAssetOwner::query()->where('hash', $asset->hash)->delete();
                     $asset->delete();
                     $deleted++;
                 }
+
+                // Who sent them goes with them: a workspace that meets the content again uploads it and owns it anew.
+                ReplayAssetOwner::query()->whereIn('hash', $batch->pluck('hash'))->delete();
             });
 
         return $deleted;

@@ -20,7 +20,7 @@ return new class extends Migration
     {
         Schema::connection($this->connection)->create('replay_asset_owners', function (Blueprint $table) {
             $table->char('hash', 64);
-            $table->char('tenant_key', 64); // ReplayAssetOwner::tenantKey(): the workspace, or "none"
+            $table->char('tenant_key', 64); // ReplayAssetOwner::tenantKey(): SHA-256 of the workspace's morph class and key, or of none
             $table->timestamp('created_at')->nullable();
 
             $table->primary(['hash', 'tenant_key']);

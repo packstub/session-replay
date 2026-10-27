@@ -336,7 +336,7 @@ class BatchIngester
     protected function missingAssets(array $hashes, array $owned): array
     {
         if ($owned !== []) {
-            ReplayAsset::query()->whereIn('hash', $owned)->where('kind', ReplayAsset::STYLESHEET)->where(fn ($query) => $query->whereNull('last_seen_at')->orWhere('last_seen_at', '<', now()->subDay()))->update(['last_seen_at' => now()]);
+            ReplayAsset::query()->whereIn('hash', $owned)->where(fn ($query) => $query->whereNull('last_seen_at')->orWhere('last_seen_at', '<', now()->subDay()))->update(['last_seen_at' => now()]);
         }
 
         return array_values(array_diff($hashes, $owned));

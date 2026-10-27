@@ -197,8 +197,9 @@ class SessionReplayServiceProvider extends PackageServiceProvider
             });
 
             Route::middleware([...$this->viewerMiddleware(), AuthorizeViewer::class])->group(function () use ($uuid): void {
-                // An id that is no recording answers like one the gate denies (403, not 404): a viewer of one workspace
-                // must not learn whether an id they came by is a recording of another.
+                // An id that is no recording answers 403, like one the gate denies (see AuthorizeViewer, which does the same
+                // when the binding has not run yet): a viewer of one workspace must not learn whether an id they came by
+                // is a recording of another.
                 $missing = fn () => abort(403);
 
                 // The data routes stay when the pages are turned off: the player component needs them.
