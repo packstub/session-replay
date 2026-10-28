@@ -241,7 +241,8 @@ class Assist
     public function accept(AssistRequest $request, ?string $tab = null): void
     {
         $proposal = $request->status === AssistRequest::OPEN && $request->openedByAgent();
-        $claim = $request->status === AssistRequest::CLAIMED && ! $request->openedByAgent() && $this->watchConsent();
+        // A rejoin is not a consent question: the call waits for the agent's stage, never for an accept.
+        $claim = $request->status === AssistRequest::CLAIMED && ! $request->rejoining() && ! $request->openedByAgent() && $this->watchConsent();
 
         if (! $proposal && ! $claim) {
             throw new AssistRefused(409, 'There is nothing to accept.', 'state');
@@ -664,6 +665,12 @@ class Assist
 
         if ($request->status === AssistRequest::CLAIMED) {
             if (! $this->acknowledged($request) && $request->claimed_at?->lt($now->copy()->subSeconds($this->seconds('claim_timeout_seconds', 30)))) {
+                // An agent's own offer whose agent left the live view and did not come back ends here: there is
+                // nobody to hand it to, and it was never the visitor's request to put back in the list.
+                if ($request->rejoining() && $request->openedByAgent()) {
+                    return $this->finish($request, [AssistRequest::CLAIMED], AssistRequest::ENDED, 'agent_left');
+                }
+
                 // The page never heard of the claim, or the agent who left the live view did not come back in time:
                 // someone else may take it.
                 $request->transition([AssistRequest::CLAIMED], AssistRequest::OPEN, AssistRequest::UNCLAIMED);

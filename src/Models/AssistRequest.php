@@ -146,13 +146,13 @@ class AssistRequest extends ReplayModel
         return $this->opened_by === self::BY_AGENT;
     }
 
-    /** The id the visitor has on the Calls call: always this, also for a signed-in visitor. */
     /** Claimed again after a live assist: the agent left the live view and the visitor's page waits for them. */
     public function rejoining(): bool
     {
         return $this->status === self::CLAIMED && $this->started_at !== null;
     }
 
+    /** The id the visitor has on the Calls call: always this, also for a signed-in visitor. */
     public function guestId(): string
     {
         return 'guest:'.$this->id;

@@ -225,6 +225,7 @@ return [
             'identity_changed' => 'vizitatorul s-a autentificat ca altcineva',
             'proposal_timeout' => 'nimeni nu a răspuns la ofertă',
             'visitor_timeout' => 'pagina vizitatorului nu mai răspunde',
+            'agent_left' => 'ai părăsit vizualizarea live și nu te-ai întors la timp',
             'max_duration' => 's-a atins limita de timp',
             'call_failed' => 'apelul nu a putut fi stabilit',
             'other' => 'încheiat',

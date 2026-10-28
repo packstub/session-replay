@@ -416,3 +416,29 @@ test('when the agent leaves the live view the page says they are reconnecting, a
     assert.equal(FakeClient.last.callId, 'c2');
     assert.equal(page.ui.shown.text, 'sees');
 });
+
+test('what the visitor allowed one agent is not carried over to the next one', async () => {
+    const page = await live();
+
+    await page.send({ t: 'media.request', kind: 'audio' });
+    await page.answer(true);
+    assert.equal(JSON.parse(page.store.get('sr:assist')).grants.audio, true);
+
+    // Ana leaves, the claim lapses back to the list, and Ion takes it.
+    page.server.poll = { id: 'r1', status: 'open', opened_by: 'visitor', agent: null, call: null, signals: [], cursor: 0 };
+    await page.client.options.signaling.poll({ after: 0, tab: 'x', hold: true });
+    await settle();
+
+    assert.deepEqual(JSON.parse(page.store.get('sr:assist')).grants, {});
+    assert.deepEqual(page.grants.filter(([kind]) => kind === 'audio'), [['audio', true], ['audio', false]]);
+
+    page.server.poll = { id: 'r1', status: 'active', opened_by: 'visitor', agent: { id: '9', name: 'Ion' }, call: { id: 'c3', peer: { id: '9' } }, signals: [], cursor: 0 };
+    await page.timers.run();
+    await settle();
+
+    // Nothing starts by itself for Ion: no microphone until the visitor is asked.
+    assert.equal(page.client.destroyed, true);
+    assert.notEqual(FakeClient.last, page.client);
+    assert.equal(FakeClient.last.callId, 'c3');
+    assert.equal(FakeClient.last.cameraStream, null);
+});

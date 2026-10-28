@@ -225,6 +225,7 @@ return [
             'identity_changed' => 'the visitor signed in as someone else',
             'proposal_timeout' => 'nobody answered the offer',
             'visitor_timeout' => 'the visitor’s page went quiet',
+            'agent_left' => 'you left the live view and did not come back in time',
             'max_duration' => 'the time limit was reached',
             'call_failed' => 'the call could not be set up',
             'other' => 'ended',

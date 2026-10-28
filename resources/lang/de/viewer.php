@@ -225,6 +225,7 @@ return [
             'identity_changed' => 'der Besucher ist jetzt als jemand anderes angemeldet',
             'proposal_timeout' => 'niemand hat auf das Angebot geantwortet',
             'visitor_timeout' => 'die Seite des Besuchers meldet sich nicht mehr',
+            'agent_left' => 'Sie haben die Live-Ansicht verlassen und sind nicht rechtzeitig zurückgekehrt',
             'max_duration' => 'die Zeitgrenze ist erreicht',
             'call_failed' => 'der Anruf konnte nicht aufgebaut werden',
             'other' => 'beendet',

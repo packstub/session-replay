@@ -184,6 +184,24 @@ export function installAssist(recorder, env) {
         recorder.touch();
 
         const changed = state.status !== data.status || state.agent?.id !== data.agent?.id;
+        const nextAgent = data.agent ? String(data.agent.id) : null;
+
+        // Consent is given to a person: when the request has no agent any more, or another one,
+        // what was allowed before is gone (and the log says so), and the next agent asks again.
+        if (state.agent && state.agent.id !== nextAgent) {
+            forgetGrants();
+
+            // Nothing of the call with the agent who left goes on: the channel and the client go too.
+            if (client) {
+                Promise.resolve().then(() => {
+                    if (!client) return;
+
+                    closeChannel('reconnect');
+                    dropClient();
+                    schedulePoll(0);
+                });
+            }
+        }
 
         state.status = data.status;
         state.agent = data.agent ? { id: String(data.agent.id), name: data.agent.name, avatar: data.agent.avatar } : null;
@@ -394,6 +412,16 @@ export function installAssist(recorder, env) {
 
     function grant(kind, granted) {
         signaling.grant(kind, granted).catch(() => {});
+    }
+
+    /** Audio, video and watching were allowed for the agent who just left the request: revoked. */
+    function forgetGrants() {
+        for (const kind of ['audio', 'video']) {
+            if (state.grants?.[kind]) grant(kind, false);
+        }
+
+        state.grants = {};
+        agentMuted = false;
     }
 
     // ---- the call -------------------------------------------------------------

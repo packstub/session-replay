@@ -474,3 +474,22 @@ it('still ends the request when it is the visitor\'s page that Calls drops', fun
 
     expect(AssistRequest::query()->sole())->status->toBe('ended')->end_reason->toBe('dropped');
 });
+
+it('ends an agent\'s offer whose agent left the live view and did not come back, rather than putting it in the list', function () {
+    [$browser, $asked] = $this->agentLeavesTheLiveView();
+    AssistRequest::query()->update(['opened_by' => AssistRequest::BY_AGENT]);
+
+    $this->travel(31)->seconds();
+    $this->poll($asked['id'], $asked['secret'], $browser['token'], ['tab' => 'tab-1'])->assertJson(['status' => 'ended', 'end_reason' => 'agent_left']);
+});
+
+it('takes no accept while the request waits for its agent to come back, consent or not', function () {
+    [$browser, $asked] = $this->agentLeavesTheLiveView();
+    config()->set('session-replay.assist.watch_consent', true);
+    $calls = Call::query()->count();
+
+    $this->visitorPost('accept', $asked['id'], $asked['secret'], $browser['token'], ['tab' => 'tab-1'])->assertStatus(409);
+
+    expect(Call::query()->count())->toBe($calls)
+        ->and(AssistRequest::query()->sole()->status)->toBe('claimed');
+});

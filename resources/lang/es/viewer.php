@@ -225,6 +225,7 @@ return [
             'identity_changed' => 'el visitante inició sesión como otra persona',
             'proposal_timeout' => 'nadie respondió a la oferta',
             'visitor_timeout' => 'la página del visitante dejó de responder',
+            'agent_left' => 'saliste de la vista en directo y no volviste a tiempo',
             'max_duration' => 'se alcanzó el límite de tiempo',
             'call_failed' => 'no se pudo establecer la llamada',
             'other' => 'terminada',
