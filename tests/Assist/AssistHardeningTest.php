@@ -163,3 +163,40 @@ it('tells the agent who holds a request apart by type and guard, not only by key
     expect($this->getJson(route('session-replay.assist.status', $id))->json('mine'))->toBeTrue();
     expect(collect($this->getJson(route('session-replay.assist.queue'))->json('requests'))->firstWhere('id', $id)['mine'])->toBeTrue();
 });
+
+it('treats a recording from before write keys as no recording: the heartbeat keeps nothing open, attaches nothing and knocks for nobody', function () {
+    $browser = $this->browser();
+    $session = $browser['session'];
+    $seen = now()->subMinutes(5)->startOfSecond();
+    // A recording made before write keys: no key stored, still inside ingest's grace window (twice idle_minutes).
+    $session->forceFill(['write_key' => null, 'last_activity_at' => $seen])->save();
+
+    $this->travel(30)->seconds();
+
+    // The heartbeat answers, but moves nothing: otherwise anyone with a token for this person keeps it open forever.
+    $this->postJson(route('session-replay.assist.heartbeat'), ['token' => $browser['token'], 'session' => $session->id, 'key' => 'anything'])
+        ->assertOk()
+        ->assertExactJson(['ok' => true, 'assist' => null]);
+
+    expect($session->fresh()->last_activity_at->equalTo($seen))->toBeTrue();
+
+    // A request from that tab is made without the recording.
+    $asked = $this->ask($browser, ['key' => null, 'tab' => 'tab-1'])->assertCreated();
+
+    expect(AssistRequest::query()->sole()->replay_session_id)->toBeNull();
+
+    // A request going elsewhere is not re-bound to it.
+    $other = $this->browser($session->user);
+    $mine = $this->asked($other);
+    $this->poll($mine['id'], $mine['secret'], $other['token'], ['session' => $session->id, 'key' => null])->assertOk();
+
+    expect(AssistRequest::query()->find($mine['id'])->replay_session_id)->toBe($other['session']->id)
+        ->and($session->fresh()->last_activity_at->equalTo($seen))->toBeTrue();
+
+    // An agent's offer on it is never knocked on, and its secret is never issued.
+    $offer = AssistRequest::query()->find($asked->json('id'));
+    $offer->forceFill(['replay_session_id' => $session->id, 'opened_by' => 'agent', 'lock_key' => 'offer-'.$session->id])->save();
+
+    expect(app(\Packstub\SessionReplay\Support\Assist::class)->knock($session->id))->toBeNull();
+    $this->poll($offer->id, null, $browser['token'], ['session' => $session->id])->assertForbidden();
+});

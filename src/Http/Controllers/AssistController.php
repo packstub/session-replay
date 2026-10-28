@@ -229,7 +229,7 @@ class AssistController
 
     /**
      * The recording the triple names, false when it names none (or one not stored yet: a tab in on_error mode, the
-     * first batch on its way), or a refusal when it belongs to another browser.
+     * first batch on its way; or one from before write keys), or a refusal when it belongs to another browser.
      */
     protected function recording(Request $request, ContextToken $context): ReplaySession|false|JsonResponse
     {
@@ -247,6 +247,13 @@ class AssistController
         $session = ReplaySession::query()->find(strtolower($id));
 
         if ($session === null) {
+            return false;
+        }
+
+        // A recording from before write keys is nobody's to prove for Assist: ingest keeps it open for twice
+        // idle_minutes after its last activity, and a heartbeat that moved that time, attached a request or answered a
+        // knock would keep it open forever to anyone holding a token for its person. Assist treats it as no recording.
+        if ($session->write_key === null) {
             return false;
         }
 

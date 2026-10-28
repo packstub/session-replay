@@ -350,6 +350,11 @@ class Assist
             return null;
         }
 
+        // A recording from before write keys cannot answer (the visitor routes take it as no recording): no knock.
+        if (! ReplaySession::query()->whereKey($sessionId)->whereNotNull('write_key')->exists()) {
+            return null;
+        }
+
         return ['id' => $request->id, 'agent' => $this->agentOf($request)];
     }
 
