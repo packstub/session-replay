@@ -173,6 +173,27 @@ class SessionReplayManager
     }
 
     /**
+     * Whether a request without a recording may be shown to agents at all: nothing there for visibleUsing() to look at,
+     * so while that rule narrows the list, only a canAssistUsing() rule decides (fail closed).
+     */
+    public function assistsWithoutRecording(): bool
+    {
+        return $this->visibleUsing === null || $this->canAssistUsing !== null;
+    }
+
+    /** The workspace the app's tenantUsing() names for this request, or null (no rule, or none). */
+    public function tenantFor(?Request $request = null): ?Model
+    {
+        if ($this->tenantUsing === null) {
+            return null;
+        }
+
+        $tenant = ($this->tenantUsing)($request ?? request());
+
+        return $tenant instanceof Model ? $tenant : null;
+    }
+
+    /**
      * Whether this agent may help with this request. Nobody assists their own visit: a request of the agent's own
      * recording is refused whatever the rule says.
      */
@@ -516,6 +537,9 @@ class SessionReplayManager
 
         return [
             'routes' => $routes,
+            // The rest of Assist (the calls engine, the visitor's UI): an ES module the recorder imports the first time
+            // it is needed, from the same origin as the recorder, with the package's version.
+            'module' => $this->scriptUrl('assist.js'),
             'calls' => $calls,
             'video' => $calls && $assist->videoAllowed(),
             'button' => (bool) config('session-replay.assist.button', false),

@@ -66,6 +66,7 @@ return [
         'not_allowed' => 'Вы не можете помогать с этим запросом.',
         'not_yours' => 'Это чужой запрос.',
         'guard_mismatch' => 'Вы вошли в просмотрщик и в Calls как разные люди. Укажите в packstub-calls.guard guard просмотрщика (session-replay.viewer.guard).',
+        'connection_mismatch' => 'Session Replay и Calls используют разные базы данных. Укажите в packstub-calls.connection значение session-replay.storage.connection.',
         'statuses' => [
             'open' => 'ждёт',
             'claimed' => 'взят',

@@ -380,9 +380,10 @@ test('the adapter creates a request and answers a knock with the triple, and tur
     const credentials = { id: null, secret: null, token: 't', session: 'rec-1', key: 'k' };
     const signaling = new AssistSignaling({ routes, fetch, credentials: () => credentials });
 
-    await signaling.create('Help', 'https://shop.test/');
+    // The tab's own id goes with it: one request per tab without a recording, whatever nonce a cached page carries.
+    await signaling.create('Help', 'https://shop.test/', 'tab-a1b2c3d4');
     assert.equal(calls[0].url, '/sr/assist/requests');
-    assert.deepEqual(calls[0].body, { token: 't', message: 'Help', url: 'https://shop.test/', session: 'rec-1', key: 'k' });
+    assert.deepEqual(calls[0].body, { token: 't', message: 'Help', url: 'https://shop.test/', tab: 'tab-a1b2c3d4', session: 'rec-1', key: 'k' });
 
     await signaling.answerKnock('r3');
     assert.equal(calls[1].url, '/sr/assist/requests/r3');

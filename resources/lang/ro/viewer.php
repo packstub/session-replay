@@ -66,6 +66,7 @@ return [
         'not_allowed' => 'Nu poți ajuta la această cerere.',
         'not_yours' => 'Cererea aparține altcuiva.',
         'guard_mismatch' => 'Ești autentificat în vizualizator și în Calls ca persoane diferite. Setează packstub-calls.guard la guardul vizualizatorului (session-replay.viewer.guard).',
+        'connection_mismatch' => 'Session Replay și Calls folosesc baze de date diferite. Setează packstub-calls.connection la session-replay.storage.connection.',
         'statuses' => [
             'open' => 'așteaptă',
             'claimed' => 'preluată',

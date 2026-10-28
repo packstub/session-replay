@@ -9,7 +9,7 @@ import { hasHeader, observe, requestMarker } from './lib/requests.js';
 import { MAX_RETRIES, pendingFate, retryDelay } from './lib/pending.js';
 import { ask, dismiss, notice } from './ask.js';
 import { deletePending, listPending, pendingStoreExists, savePending } from './pending.js';
-import { installAssist } from './assist.js';
+import { createAssistHook } from './lib/assist-hook.js';
 
 /**
  * The recorder. Reads window.__sessionReplay (written by @sessionReplay),
@@ -89,7 +89,8 @@ let generation = 0;
 let startOnNextPage = false;
 // rrweb ids of the elements carrying data-replay-skip on this page (see skipNodes).
 const skipped = new Set();
-// Assist (assist.enabled): the live view taps emit(), the upload answer and the heartbeat carry an agent's offer.
+// Assist (assist.enabled): a small hook here (the heartbeat, the knock in the upload answer, the emit tap,
+// SessionReplay.assist); the rest is assist.js, loaded with import() the first time it is needed.
 let assist = null;
 
 const onError = config?.mode === 'on_error';
@@ -1587,34 +1588,44 @@ if (config && !window.SessionReplay) {
 
     if (config.assist) {
         try {
-            assist = installAssist({
-                config: () => config,
-                recording: () => (stopRecording && !stopped && session && session.phase === 'recording' ? { id: session.id, key: session.key } : null),
-                snapshot() {
-                    try {
-                        if (!stopRrweb) return false;
+            const recording = () => (stopRecording && !stopped && session && session.phase === 'recording' ? { id: session.id, key: session.key } : null);
 
-                        record.takeFullSnapshot();
-
-                        return true;
-                    } catch {
-                        return false;
-                    }
-                },
-                node: (id) => {
-                    try {
-                        return stopRrweb ? record.mirror.getNode(id) : null;
-                    } catch {
-                        return null;
-                    }
-                },
-                goLive,
-                touch: () => saveSession(),
-                redacted,
+            assist = createAssistHook({
+                settings: () => config.assist || {},
+                token: () => config.token,
+                recording,
                 read: (key) => read('sessionStorage', key),
                 write: (key, value) => write('sessionStorage', key, value),
+                lend: {
+                    config: () => config,
+                    recording,
+                    snapshot() {
+                        try {
+                            if (!stopRrweb) return false;
+
+                            record.takeFullSnapshot();
+
+                            return true;
+                        } catch {
+                            return false;
+                        }
+                    },
+                    node: (id) => {
+                        try {
+                            return stopRrweb ? record.mirror.getNode(id) : null;
+                        } catch {
+                            return null;
+                        }
+                    },
+                    goLive,
+                    touch: () => saveSession(),
+                    redacted,
+                    read: (key) => read('sessionStorage', key),
+                    write: (key, value) => write('sessionStorage', key, value),
+                },
             });
             window.SessionReplay.assist = assist.api;
+            assist.start();
         } catch {
             // No Assist on this page; the recording goes on.
             assist = null;

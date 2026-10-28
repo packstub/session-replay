@@ -7,6 +7,7 @@ use Illuminate\Contracts\Auth\UserProvider;
 use Illuminate\Database\Connection;
 use Illuminate\Database\Eloquent\Collection;
 use Illuminate\Database\Eloquent\Model;
+use Illuminate\Database\Eloquent\Relations\Relation;
 use Illuminate\Database\UniqueConstraintViolationException;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\Cache;
@@ -71,13 +72,19 @@ class Assist
      * A visitor asks for help. Returns the request, the secret when this call issued it (once), and whether the
      * request is new: a recording (or a tab without one) with a request going gets that one back.
      *
+     *
+     * @param  ?string  $tab  the tab's own id (the recorder keeps one in sessionStorage): with the token's nonce, what
+     *                        keeps one request per tab without a recording
      * @return array{0: AssistRequest, 1: ?string, 2: bool}
      *
-     * @throws AssistRefused 429 over requests_per_hour or max_open_requests
+     * @throws AssistRefused 403 for a guest Assist does not take, 429 over requests_per_hour, max_open_requests or
+     *                       guest_requests_per_hour
      */
-    public function request(ContextToken $context, ?ReplaySession $session, ?string $message, ?string $url): array
+    public function request(ContextToken $context, ?ReplaySession $session, ?string $message, ?string $url, ?string $tab = null): array
     {
-        $lockKey = AssistRequest::lockKeyFor($session?->getKey(), $context->nonce);
+        $this->assertGuestMayAsk($context, $session);
+
+        $lockKey = AssistRequest::lockKeyFor($session?->getKey(), $context->nonce, $tab);
         $existing = $lockKey === null ? null : AssistRequest::query()->pending()->where('lock_key', $lockKey)->first();
 
         if ($existing !== null) {
@@ -194,6 +201,8 @@ class Assist
         if ($request->status === AssistRequest::CLAIMED && $this->callsAvailable() && ! $this->watchConsent()) {
             $this->startCall($request, [AssistRequest::CLAIMED], $tab);
         }
+
+        $this->reconcile($request);
 
         return $this->presentForVisitor($request, $after, $tab, $hold);
     }
@@ -364,24 +373,43 @@ class Assist
         return AssistRequest::query()
             ->pending()
             ->where(fn ($query) => $query->whereIn('status', [AssistRequest::OPEN, AssistRequest::CLAIMED])->orWhere('agent_id', $me))
-            ->where(fn ($query) => $query
-                ->whereNull('replay_session_id')
-                ->orWhereIn('replay_session_id', SessionReplay::visibleTo(ReplaySession::query(), $agent)->select('id')))
+            ->when($this->agentTenant(), fn ($query, Model $tenant) => $query->where('tenant_type', $tenant->getMorphClass())->where('tenant_id', (string) $tenant->getKey()))
+            ->where(function ($query) use ($agent): void {
+                // A request without a recording has nothing for visibleUsing() to look at: with a rule there, it is
+                // shown only when canAssistUsing() decides (fail closed), or a viewer of one workspace would see another's.
+                if (SessionReplay::assistsWithoutRecording()) {
+                    $query->whereNull('replay_session_id');
+                }
+
+                $query->orWhereIn('replay_session_id', SessionReplay::visibleTo(ReplaySession::query(), $agent)->select('id'));
+            })
             ->with(['session', 'user'])
             ->oldest()
-            ->limit(max(1, (int) config('session-replay.assist.max_open_requests', 100)) + 50)
+            ->limit(max(200, (int) config('session-replay.assist.max_open_requests', 100) + 50))
             ->get()
             ->filter(fn (AssistRequest $request) => SessionReplay::canAssist($agent, $request->session, $request))
             ->values();
     }
 
     /**
-     * Whether this agent may see and act on this request: the recording is in their list (visibleUsing()) and
-     * canAssist() says yes. Asked on every agent endpoint.
+     * Whether this agent may see and act on this request: the workspace the app's tenantUsing() gives for the agent's
+     * request (when it gives one), the recording in their list (visibleUsing()), and canAssist(). A request without a
+     * recording, while visibleUsing() narrows the list and no canAssistUsing() decides, is nobody's. Asked on every
+     * agent endpoint.
      */
     public function visibleTo(AssistRequest $request, mixed $agent): bool
     {
         if (! $agent instanceof Authenticatable) {
+            return false;
+        }
+
+        $tenant = $this->agentTenant();
+
+        if ($tenant !== null && ($request->tenant_type !== $tenant->getMorphClass() || $request->tenant_id !== (string) $tenant->getKey())) {
+            return false;
+        }
+
+        if ($request->replay_session_id === null && ! SessionReplay::assistsWithoutRecording()) {
             return false;
         }
 
@@ -410,6 +438,7 @@ class Assist
         }
 
         $this->assertSamePersonInCalls($agent);
+        $this->assertSameDatabaseAsCalls();
 
         $claimed = $request->transition([AssistRequest::OPEN], AssistRequest::CLAIMED, [
             ...$this->agentAttributes($agent),
@@ -467,11 +496,12 @@ class Assist
         ]);
         $request->setRelation('session', $session);
 
-        if (! SessionReplay::canAssist($agent, $session, $request)) {
+        if (! $this->visibleTo($request, $agent)) {
             throw new AssistRefused(403, __('session-replay::viewer.assist.not_allowed'), 'not_allowed');
         }
 
         $this->assertSamePersonInCalls($agent);
+        $this->assertSameDatabaseAsCalls();
 
         try {
             $request->save();
@@ -609,6 +639,23 @@ class Assist
             && $this->finish($request, [AssistRequest::ACTIVE], AssistRequest::ENDED, 'visitor_timeout');
     }
 
+    /**
+     * A live request whose Calls call is over (or gone) ends too, with Calls' reason: the CallEnded listener does this
+     * as it happens, this catches what it missed (a call ended on another connection, a listener that failed).
+     */
+    public function reconcile(AssistRequest $request): void
+    {
+        if ($request->status !== AssistRequest::ACTIVE || $request->call_id === null || ! $this->callsAvailable()) {
+            return;
+        }
+
+        $call = Call::query()->find($request->call_id);
+
+        if ($call === null || $call->isEnded()) {
+            $this->finish($request, [AssistRequest::ACTIVE], AssistRequest::ENDED, (string) ($call?->end_reason ?? 'ended'), hangUp: false);
+        }
+    }
+
     /** The CallEnded listener: the assist on that call ends with Calls' reason (hung_up, dropped…). */
     public function callEnded(Call $call): void
     {
@@ -730,36 +777,55 @@ class Assist
 
     /**
      * Put the visitor and the agent on a Calls call and mark the request active, once: the status moves first (one
-     * UPDATE from $from), and only the poll that moved it creates the call. The guest answers at once (the visitor
-     * asked, or just accepted).
+     * UPDATE from $from), and only the poll that moved it creates the call, outside any transaction (Calls may sit on
+     * another connection, where a rollback here would leave its call behind). A call that cannot be created, or that
+     * the request no longer wants, is ended again. The guest answers at once (the visitor asked, or just accepted).
+     *
+     * This runs in the visitor's request, where no panel is active: the agent is loaded from what the claim or the
+     * proposal stored (their type, guard and Calls scope), never through the default guard.
      *
      * @param  array<int, string>  $from
      */
     protected function startCall(AssistRequest $request, array $from, ?string $tab): bool
     {
+        if (! $request->transition($from, AssistRequest::ACTIVE, ['started_at' => now()])) {
+            return false;
+        }
+
+        $calls = app(Calls::class);
+        $call = null;
+
         try {
-            $started = $this->connection()->transaction(function () use ($request, $from, $tab): bool {
-                if (! $request->transition($from, AssistRequest::ACTIVE, ['started_at' => now()])) {
-                    return false;
-                }
+            $agent = $this->agentModel($request);
 
-                $calls = app(Calls::class);
-                $agent = $request->agent_id === null ? null : $calls->findUser($request->agent_id);
+            if ($agent === null) {
+                throw new AssistRefused(409, 'The agent is not there any more.', 'state');
+            }
 
-                if ($agent === null) {
-                    throw new AssistRefused(409, 'The agent is not there any more.', 'state');
-                }
+            $call = $calls->start($agent, new Participant($request->guestId(), __('session-replay::viewer.assist.visitor')), kind: self::KIND, scope: $request->agent_scope ?? $calls->scope());
+            $calls->answer($call, $request->guestId(), $tab);
 
-                $call = $calls->start($agent, new Participant($request->guestId(), __('session-replay::viewer.assist.visitor')), kind: self::KIND);
-                $calls->answer($call, $request->guestId(), $tab);
+            $attached = AssistRequest::query()->whereKey($request->getKey())->where('status', AssistRequest::ACTIVE)->whereNull('call_id')
+                ->update(['call_id' => $call->getKey(), 'updated_at' => now()]) === 1;
 
-                AssistRequest::query()->whereKey($request->getKey())->update(['call_id' => $call->getKey()]);
+            if (! $attached) {
+                // The request finished while the call was being made (the visitor hung up, a timeout): nobody wants it.
+                $calls->end($call, 'cancelled');
+                $request->refresh();
 
-                return true;
-            });
+                return false;
+            }
         } catch (Throwable $exception) {
+            if ($call !== null) {
+                try {
+                    $calls->end($call, 'call_failed');
+                } catch (Throwable) {
+                    // Calls' own timeouts end it.
+                }
+            }
+
             $request->refresh();
-            $this->finish($request, [AssistRequest::OPEN, AssistRequest::CLAIMED, AssistRequest::ACTIVE], AssistRequest::ENDED, 'call_failed');
+            $this->finish($request, [AssistRequest::ACTIVE], AssistRequest::ENDED, 'call_failed');
             report($exception);
 
             return false;
@@ -767,11 +833,9 @@ class Assist
 
         $request->refresh();
 
-        if ($started) {
-            AssistStarted::dispatch($request);
-        }
+        AssistStarted::dispatch($request);
 
-        return $started;
+        return true;
     }
 
     /** @throws AssistRefused */
@@ -813,28 +877,92 @@ class Assist
         return (bool) config('session-replay.assist.watch_consent', false);
     }
 
-    /** @throws AssistRefused */
+    /**
+     * Who may ask at all: a guest (nobody signed in) only with assist.guests on, and while guests have a budget of
+     * their own (assist.guest_requests_per_hour), only from a recording that has events on the server: a script that
+     * mints a token per page render must at least upload a recording first.
+     *
+     * @throws AssistRefused
+     */
+    protected function assertGuestMayAsk(ContextToken $context, ?ReplaySession $session): void
+    {
+        if (! $context->isVisitor()) {
+            return;
+        }
+
+        if (! config('session-replay.assist.guests', true)) {
+            throw new AssistRefused(403, 'Help requests need you to be signed in.', 'guests');
+        }
+
+        if (config('session-replay.assist.guest_requests_per_hour', 20) && ($session === null || (int) $session->event_count < 1)) {
+            throw new AssistRefused(403, 'Help requests from guests need a recording.', 'no_recording');
+        }
+    }
+
+    /**
+     * The caps, per workspace (tenant_type / tenant_id of the token; no workspace is one of its own), so one
+     * workspace's visitors cannot fill another's list: requests going at once (max_open_requests), new ones per
+     * person or guest page (requests_per_hour), and all guests of the workspace together (guest_requests_per_hour).
+     *
+     * @throws AssistRefused
+     */
     protected function assertUnderLimits(ContextToken $context): void
     {
         $max = config('session-replay.assist.max_open_requests', 100);
 
-        if ($max && AssistRequest::query()->pending()->count() >= (int) $max) {
+        if ($max && AssistRequest::query()->pending()->where('tenant_type', $context->tenantType)->where('tenant_id', $context->tenantId)->count() >= (int) $max) {
             throw new AssistRefused(429, 'Too many people are waiting for help right now.', 'full');
         }
 
+        $hour = now()->format('Y-m-d-H');
         $perHour = config('session-replay.assist.requests_per_hour', 6);
 
-        if (! $perHour) {
+        if ($perHour && $this->countUp('session-replay|assist|'.$hour.'|'.$context->throttleKey()) > (int) $perHour) {
+            throw new AssistRefused(429, 'Too many requests for help; try again later.', 'too_many');
+        }
+
+        $guests = config('session-replay.assist.guest_requests_per_hour', 20);
+
+        if ($context->isVisitor() && $guests && $this->countUp('session-replay|assist-guests|'.$hour.'|'.$context->tenantType.':'.$context->tenantId) > (int) $guests) {
+            throw new AssistRefused(429, 'Too many requests for help; try again later.', 'too_many');
+        }
+    }
+
+    /** One more in this hour's counter; the new count. */
+    protected function countUp(string $key): int
+    {
+        Cache::add($key, 0, now()->addHour());
+
+        return (int) Cache::increment($key);
+    }
+
+    /**
+     * Under a database per tenant the visitor's request and the agent's panel run on different default connections:
+     * Session Replay's storage.connection points both at the central database, and Calls must sit on the same one,
+     * or the agent's panel polls a calls table the visitor's call never reaches.
+     *
+     * @throws AssistRefused
+     */
+    protected function assertSameDatabaseAsCalls(): void
+    {
+        $storage = config('session-replay.storage.connection');
+
+        if (! $this->callsAvailable() || $storage === null || $storage === '') {
             return;
         }
 
-        $key = 'session-replay|assist|'.now()->format('Y-m-d-H').'|'.$context->throttleKey();
-
-        Cache::add($key, 0, now()->addHour());
-
-        if ((int) Cache::increment($key) > (int) $perHour) {
-            throw new AssistRefused(429, 'Too many requests for help; try again later.', 'too_many');
+        if (config('packstub-calls.connection') !== $storage) {
+            throw new AssistRefused(409, __('session-replay::viewer.assist.connection_mismatch'), 'connection_mismatch');
         }
+    }
+
+    /**
+     * The workspace of the agent's request as the app's tenantUsing() names it, or null (no rule, or the agent is in
+     * no workspace): requests of other workspaces are out of their reach.
+     */
+    protected function agentTenant(): ?Model
+    {
+        return SessionReplay::tenantFor(request());
     }
 
     /**
@@ -878,7 +1006,10 @@ class Assist
      * The agent as the visitor sees them, stored on the request when it is claimed or proposed: Calls' name and
      * avatar for them when Calls is there, so both say the same, or else the model's name.
      *
-     * @return array{agent_id: string, agent_name: string, agent_avatar: ?string}
+     * Also who they are to the place they acted from: the morph class of the viewer guard's user, that guard's name
+     * and Calls' scope there, which the visitor's request (no panel, the default guard) uses to load and ring them.
+     *
+     * @return array{agent_id: string, agent_type: string, agent_guard: ?string, agent_scope: ?string, agent_name: string, agent_avatar: ?string}
      */
     protected function agentAttributes(Authenticatable $agent): array
     {
@@ -897,27 +1028,55 @@ class Assist
         // The visitor's widget shows an avatar only as an http(s) image.
         $avatar = is_string($avatar) && preg_match('~^https?://~i', $avatar) === 1 && strlen($avatar) <= 2000 ? $avatar : null;
 
-        return ['agent_id' => (string) $agent->getAuthIdentifier(), 'agent_name' => $name, 'agent_avatar' => $avatar];
+        $guard = config('session-replay.viewer.guard') ?? Auth::getDefaultDriver();
+
+        return [
+            'agent_id' => (string) $agent->getAuthIdentifier(),
+            'agent_type' => self::typeOf($agent),
+            'agent_guard' => is_string($guard) ? Str::limit($guard, 64, '') : null,
+            'agent_scope' => $this->callsAvailable() ? app(Calls::class)->scope() : null,
+            'agent_name' => $name,
+            'agent_avatar' => $avatar,
+        ];
     }
 
     /**
-     * The agent of a request as the viewer guard knows them (agent_id is that guard's key), or Calls' user for the
-     * id when the guard has no user provider.
+     * The agent of a request, from what the claim or the proposal stored: the provider of the guard they acted through,
+     * else their model by its morph class, and only someone of the stored type with the stored key. Never the default
+     * guard of the request at hand (the visitor's, where no panel is active).
      */
     protected function agentModel(AssistRequest $request): ?Authenticatable
     {
-        if ($request->agent_id === null) {
+        if ($request->agent_id === null || $request->agent_type === null) {
             return null;
         }
 
-        $guard = Auth::guard(config('session-replay.viewer.guard'));
-        $provider = method_exists($guard, 'getProvider') ? $guard->getProvider() : null;
+        $agent = null;
 
-        if ($provider instanceof UserProvider) {
-            return $provider->retrieveById($request->agent_id);
+        if ($request->agent_guard !== null && is_array(config('auth.guards.'.$request->agent_guard))) {
+            try {
+                $guard = Auth::guard($request->agent_guard);
+                $provider = method_exists($guard, 'getProvider') ? $guard->getProvider() : null;
+                $agent = $provider instanceof UserProvider ? $provider->retrieveById($request->agent_id) : null;
+            } catch (Throwable) {
+                $agent = null;
+            }
         }
 
-        return $this->callsAvailable() ? app(Calls::class)->findUser($request->agent_id) : null;
+        if (! $agent instanceof Authenticatable || self::typeOf($agent) !== $request->agent_type) {
+            $class = Relation::getMorphedModel($request->agent_type) ?? $request->agent_type;
+            $agent = is_a($class, Model::class, true) && is_a($class, Authenticatable::class, true) ? $class::query()->find($request->agent_id) : null;
+        }
+
+        return $agent instanceof Authenticatable && self::typeOf($agent) === $request->agent_type && (string) $agent->getAuthIdentifier() === $request->agent_id
+            ? $agent
+            : null;
+    }
+
+    /** The morph class of a model, the class of anything else. */
+    protected static function typeOf(Authenticatable $user): string
+    {
+        return $user instanceof Model ? $user->getMorphClass() : $user::class;
     }
 
     /** @return array{id: ?string, name: ?string, avatar: ?string} */

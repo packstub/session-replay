@@ -68,6 +68,8 @@ it('turns guests away while guests are not recorded', function () {
     $this->postJson(route('session-replay.assist.store'), ['token' => $guest])->assertForbidden();
 
     config()->set('session-replay.guests', true);
+    // Guests without a budget of their own may ask from a tab that records nothing.
+    config()->set('session-replay.assist.guest_requests_per_hour', null);
 
     $this->postJson(route('session-replay.assist.store'), ['token' => $guest])->assertCreated();
 });
@@ -167,6 +169,7 @@ it('ends the request when the token names someone else', function () {
 
 it('ends a guest\'s request when they sign in', function () {
     config()->set('session-replay.guests', true);
+    config()->set('session-replay.assist.guest_requests_per_hour', null);
 
     $guest = $this->token();
     $asked = $this->postJson(route('session-replay.assist.store'), ['token' => $guest])->assertCreated();

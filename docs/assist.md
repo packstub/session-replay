@@ -22,11 +22,21 @@ use Packstub\SessionReplay\Models\ReplaySession;
 SessionReplay::canAssistUsing(fn ($agent, ?ReplaySession $session, AssistRequest $request): bool => $agent->hasRole('support'));
 ```
 
-`canAssist` is asked on every agent endpoint, not only when the list is drawn. `$session` is null for a request from a tab that records nothing; in a multi-tenant app, check `$request->tenant_id` there. Nobody assists their own visit: a request of the agent's own recording is refused whatever the rule says. The list also follows `SessionReplay::visibleUsing()`, like the recordings list.
+`canAssist` is asked on every agent endpoint, not only when the list is drawn. Nobody assists their own visit: a request of the agent's own recording is refused whatever the rule says. The list also follows `SessionReplay::visibleUsing()`, like the recordings list.
+
+### Several workspaces
+
+- **Requests without a recording.** `$session` is null for a request from a tab that records nothing, so `visibleUsing()` has nothing to look at. While you have a `visibleUsing()` rule and no `canAssistUsing()` rule, those requests are shown to nobody and cannot be claimed: one workspace's agents never see another's visitors by accident. To take them, register `canAssistUsing()` and check `$request->tenant_type` and `$request->tenant_id` there.
+- **The agent's workspace.** When the app registered `SessionReplay::tenantUsing()`, it is asked for the agent's own request too: if it names a workspace (the team in the URL, the panel's tenant), the agent sees and acts on that workspace's requests only, with or without a recording. When it names none (an operator console), the other rules decide alone.
+- **Limits.** `assist.max_open_requests` counts per workspace, so a flood in one workspace never fills another's list.
 
 ### With Calls
 
-Install [`packstub/calls`](https://github.com/packstub/calls) and Assist uses it on its own (`assist.calls` turns that off). The agent is the viewer guard's user, and Calls rings them by the same id, so in a plain Laravel app `session-replay.viewer.guard` and `packstub-calls.guard` must name the same guard (in Filament both are the panel's). Claiming a request refuses with a clear message when the two see different people, instead of creating a call the agent's browser never sees.
+Install [`packstub/calls`](https://github.com/packstub/calls) and Assist uses it on its own (`assist.calls` turns that off). The agent is the viewer guard's user, and Calls rings them by the same id, so in a plain Laravel app `session-replay.viewer.guard` and `packstub-calls.guard` must name the same guard (in Filament both are the panel's). Claiming a request refuses with a clear message when the two see different people (`guard_mismatch`), instead of creating a call the agent's browser never sees.
+
+The call itself is created later, in the visitor's request, where no panel is active. So the claim (or the offer) stores who the agent is to the place they acted from: their model's morph class, the guard's name and Calls' scope there. The visitor's request loads the agent from those and starts the call in that scope, never through the app's default guard: an agent on a panel's `admin` guard is rung as that admin, and their panel's Calls poll sees the call.
+
+With a database per tenant, `session-replay.storage.connection` points at the central database; set `packstub-calls.connection` to the same connection. The visitor's request and the agent's panel run on different default connections, and a call on either one's would never reach the other. While `storage.connection` is set and `packstub-calls.connection` differs, claiming and offering refuse (`connection_mismatch`).
 
 An assist call has the kind `assist`: the Calls widget, which polls for `kind=call`, never sees it. An agent helps one visitor at a time: starting another call ends the assist.
 
@@ -48,13 +58,17 @@ A request goes `open`, then `claimed` by an agent, then `ended` by the agent. `A
 | `open` → `withdrawn` | agent | the agent takes the offer back, or may no longer help (`canAssist` is asked again when the visitor accepts; `end_reason` `not_allowed`) |
 | `claimed`, `active` → `ended` | agent, Calls, timeout | the agent ends it, the call ended (Calls' reason: `hung_up`, `dropped`…), the visitor hung up, the page went quiet, or `assist.max_duration_minutes` (120) passed |
 
-A recording has at most one request going at a time (a tab without a recording, one per rendered page): asking again returns the one that is going. The timeouts run inside the visitor's poll and the agent's list, the way Calls expires calls inside its poll: no scheduler needed.
+A recording has at most one request going at a time (a tab without a recording, one per tab: the recorder keeps an id per tab in `sessionStorage` and sends it with the request, so pages served from a full-page cache, which share a nonce, still get one each): asking again returns the one that is going. The timeouts run inside the visitor's poll and the agent's list, the way Calls expires calls inside its poll: no scheduler needed.
 
 When a request finishes, the server puts an `assist` marker on the recording: how it was opened, how it ended, how long it ran and what the visitor allowed, never who the agent is. A browser cannot send an `assist` marker itself.
 
 ## On the visitor's page
 
-With Assist on, the recorder carries everything the visitor sees; nothing to add to your pages.
+With Assist on, the recorder brings everything the visitor sees; nothing to add to your pages.
+
+The recorder itself only carries a small hook (about 4 KB): the heartbeat, the offer in the upload answer and `SessionReplay.assist`. The rest, the calls engine and the visitor's panel, is a separate script (`{path}/scripts/assist.js`, about 55 KB, 18 KB gzipped) that the recorder loads with a dynamic `import()` the first time it is needed: an agent's offer arrives, the tab has a request going (after a reload), the "Get help" button is on, or the page calls `SessionReplay.assist.request()`. A page where nobody asks for help never downloads it.
+
+**Content Security Policy.** The module comes from the same origin and route as the recorder, with the package's version in the URL. A policy that allows the recorder by host (`script-src 'self'`) allows it too. A policy that allows scripts by nonce only needs `'strict-dynamic'` (a script with the nonce may then import), or `'self'` next to the nonce. The poll timer runs in a Web Worker made from a `blob:` URL (`worker-src blob:`); without it, plain timers take over.
 
 ### Asking for help
 
@@ -69,9 +83,13 @@ SessionReplay.assist.end()      // end a live assist (or stop waiting)
 window.addEventListener('session-replay:assist', ({ detail }) => updateMyButton(detail.status))
 ```
 
-Or turn on the floating "Get help" button (`assist.button`, off by default; most apps have a place for it already), which opens a small form with an optional message.
+Or turn on the floating "Get help" button (`assist.button`, off by default; most apps have a place for it already), which opens a small form with an optional message. With the button on, every recorded page loads the Assist module up front, since the button is part of it.
 
 While the request waits, a panel in the corner says so, with Cancel. A tab in mode `on_error` starts uploading when it asks (as `SessionReplay.send()` does), so the agent has a recording to look at. A tab that records nothing (not sampled, no consent) can still ask: the request is queue-only, the agent sees no live page.
+
+### Guests
+
+Guests (nobody signed in, recorded with `session-replay.guests`) may ask while `assist.guests` is on (the default). Anyone can get a guest token by loading a page, so guests have a budget of their own: `assist.guest_requests_per_hour` (20) new requests per hour for all guests of a workspace together, on top of the per-page limit. While that budget is set, a guest asks only from a recording that has events on the server; a request from a tab that records nothing, or before the first upload, is refused (`no_recording`). Set `assist.guests` to `false` to take requests from signed-in people only (`guests`).
 
 ### An offer of help
 
@@ -129,7 +147,7 @@ Stateless, like the upload endpoints: no session, cookie or CSRF token, throttle
 
 | Method | Route | Does |
 | --- | --- | --- |
-| `POST` | `assist/requests` `{token, session?, key?, message?, url?}` | create; 201 with `secret`, or 200 and `secret: null` for the request that is going; 429 past `requests_per_hour` or `max_open_requests` |
+| `POST` | `assist/requests` `{token, session?, key?, message?, url?, tab?}` | create; 201 with `secret`, or 200 and `secret: null` for the request that is going (`tab`, the tab's own id, keeps one per tab without a recording); 403 `guests` or `no_recording` for a guest Assist does not take; 429 past `requests_per_hour`, `max_open_requests` or `guest_requests_per_hour` |
 | `POST` | `assist/requests/{id}` `{secret, token, after, tab, hold}` | the poll: `visitor_seen_at`, the timeouts, the call created on acknowledgement, and Calls' poll for the guest once a call exists. With `session` and `key` of the tab's new recording, the request moves to it (same person, same workspace). |
 | `POST` | `assist/requests/{id}` `{token, session, key}` | the first answer to an agent's offer, with the triple instead of a secret: the secret is issued in it, once (409 after) |
 | `POST` | `assist/requests/{id}/accept` `{secret, token, tab}` | yes to an offer (or, with `watch_consent`, to the agent who claimed); creates the call |
@@ -175,12 +193,13 @@ Behind `viewer.middleware` and the `viewSessionReplay` gate; every request-bound
 | `POST` | `assist/requests/{id}/asks` `{what}` | log that you asked the visitor for `control`, `audio`, `video`, `screen` or `control_masked`, so the grants log shows what was asked next to what was allowed |
 | `POST` | `assist/requests/{id}/end` | end it (and the call) |
 
-A request as the agent sees it: `id`, `status`, `opened_by`, `session`, `session_url`, `user` (`id`, `label`), `message`, `page_url`, `agent` (`id`, `name`), `mine`, `call`, `visitor_here`, `visitor_seen_ago`, `waiting` (seconds), `grants`, `claimed_at`, `started_at`, `ended_at`, `end_reason`, `created_at`. Refusals are `{message, reason}`, `reason` one of `taken`, `exists`, `not_allowed`, `guard_mismatch`, `not_live`, `no_calls`, `state`.
+A request as the agent sees it: `id`, `status`, `opened_by`, `session`, `session_url`, `user` (`id`, `label`), `message`, `page_url`, `agent` (`id`, `name`), `mine`, `call`, `visitor_here`, `visitor_seen_ago`, `waiting` (seconds), `grants`, `claimed_at`, `started_at`, `ended_at`, `end_reason`, `created_at`. Refusals are `{message, reason}`, `reason` one of `taken`, `exists`, `not_allowed`, `guard_mismatch`, `connection_mismatch`, `not_live`, `no_calls`, `state`.
 
 ## Privacy
 
 - Nothing of the live view is stored beyond the recording that exists anyway (plus one full snapshot per live-view start). The mirror and the media go peer to peer, encrypted by WebRTC; a TURN relay forwards ciphertext. ICE candidates show each side's addresses to the other; `packstub-calls.ice_transport_policy` `relay` hides them behind your TURN server.
 - The visitor's routes take no identity but the signed token and the request's secret; the agent sees the page's URL with `privacy.redact_query` applied, and the message as text.
+- No credential is read from a URL: the token, the write key and the secret come from the request body on every visitor route (the leave beacon sends a form body), and the rate limiter reads the token from the body too. Nothing in the package logs them.
 - The grants log is the compliance trail: what the agent asked for (`{kind, asked: true, by: "agent", at}`) and what the visitor allowed or took back (`{kind, granted, by: "visitor", at}`), and when. `AssistEnded` carries it; the `assist` marker summarises what was allowed on the recording.
 - Calls deletes a call's signals when it ends; the package never logs a session description or a candidate.
 - A request is deleted with its recording by `session-replay:prune`; one that never had a recording, after `retention.days`.
@@ -193,7 +212,9 @@ A request as the agent sees it: `id`, `status`, `opened_by`, `session`, `session
 | `assist.calls` | `true` | Use `packstub/calls` when it is installed. `false` keeps the queue alone. |
 | `assist.watch_consent` | `false` | The visitor accepts before the agent joins, also for a request they opened. Accepting an offer always counts. |
 | `assist.requests_per_hour` | `6` | New requests per person per hour (guests: per rendered page); `null` turns it off. |
-| `assist.max_open_requests` | `100` | Requests going at once, everyone together; past it, 429. `null` turns it off. |
+| `assist.max_open_requests` | `100` | Requests going at once per workspace (no workspace counts as one); past it, 429. `null` turns it off. |
+| `assist.guests` | `true` (`SESSION_REPLAY_ASSIST_GUESTS`) | Guests (recorded with `session-replay.guests`) may ask. `false`: signed-in people only. |
+| `assist.guest_requests_per_hour` | `20` | New requests per hour from all guests of a workspace together; while set, a guest asks only from a recording with events. `null` turns both off. |
 | `assist.claim_timeout_seconds` | `30` | A claim the page has not acknowledged goes back to the list. |
 | `assist.proposal_timeout_seconds` | `60` | An offer nobody answered expires. |
 | `assist.visitor_timeout_seconds` | `60` | A request whose page stopped polling expires; a live one ends. |

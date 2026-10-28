@@ -7,6 +7,7 @@ use Illuminate\Support\Str;
 use Illuminate\Testing\TestResponse;
 use Packstub\Calls\CallsServiceProvider;
 use Packstub\SessionReplay\Models\ReplaySession;
+use Packstub\SessionReplay\Tests\Fixtures\Models\Team;
 use Packstub\SessionReplay\Tests\Fixtures\Models\User;
 
 /**
@@ -74,6 +75,22 @@ abstract class AssistTestCase extends TestCase
         }
 
         return ['session' => $session, 'token' => $token, 'key' => $key];
+    }
+
+    /**
+     * A recording of a person (or a guest) of this workspace, as the body of a request from it.
+     *
+     * @return array{token: string, session: string, key: string}
+     */
+    protected function triple(?Team $team = null, bool $guest = false): array
+    {
+        $token = $this->token($guest ? null : $this->user(), $team);
+        $key = bin2hex(random_bytes(16));
+        $id = (string) Str::uuid();
+
+        $this->ingest(['token' => $token, 'session' => $id, 'key' => $key])->assertCreated();
+
+        return ['token' => $token, 'session' => $id, 'key' => $key];
     }
 
     /** @param  array{session: ReplaySession, token: string, key: string}  $browser */

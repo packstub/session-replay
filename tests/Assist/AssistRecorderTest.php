@@ -18,6 +18,8 @@ it('hands the recorder the visitor routes, the timings and the strings while Ass
         ->and($assist['routes']['poll'])->toBe(str_replace('00000000-0000-0000-0000-000000000000', '__ID__', route('session-replay.assist.poll', ['id' => '00000000-0000-0000-0000-000000000000'])))
         ->and(array_keys($assist['routes']))->toEqualCanonicalizing(['store', 'heartbeat', 'poll', 'accept', 'decline', 'cancel', 'hangup', 'leave', 'signal', 'grants'])
         ->and($assist['routes']['signal'])->toEndWith('/assist/requests/__ID__/signals')
+        // The rest of Assist loads from the package's own script route, versioned like the recorder.
+        ->and($assist['module'])->toBe(SessionReplay::scriptUrl('assist.js'))
         ->and($assist['button'])->toBeFalse()
         ->and($assist['controlMasked'])->toBeFalse()
         ->and($assist['heartbeatMs'])->toBe(15000)
@@ -42,4 +44,13 @@ it('puts nothing of Assist on the page while it is off', function () {
     config()->set('session-replay.assist.enabled', false);
 
     expect(assistConfig((string) SessionReplay::recorder(['user' => $this->user()])))->toBeNull();
+});
+
+it('serves the Assist module next to the recorder, as JavaScript the browser may import', function () {
+    $response = $this->get(SessionReplay::scriptUrl('assist.js'))->assertOk();
+
+    expect($response->headers->get('Content-Type'))->toStartWith('application/javascript')
+        ->and(file_get_contents(SessionReplay::scriptPath('assist.js')))->toContain('export')->toContain('createDataChannel')
+        // The recorder itself carries only the hook: no calls engine, no visitor UI.
+        ->and(file_get_contents(SessionReplay::scriptPath('recorder.js')))->not->toContain('createDataChannel')->not->toContain('border: 3px dashed');
 });

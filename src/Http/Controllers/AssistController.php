@@ -29,7 +29,7 @@ class AssistController
 
     public function __construct(protected Assist $assist) {}
 
-    /** POST {path}/assist/requests — token, session and key (optional: the recording), message, url. */
+    /** POST {path}/assist/requests — token, session and key (optional: the recording), message, url, tab (the tab's own id). */
     public function store(Request $request): JsonResponse
     {
         $context = $this->context($request);
@@ -53,7 +53,7 @@ class AssistController
         $url = $request->input('url');
 
         try {
-            [$assist, $secret, $created] = $this->assist->request($context, $session === false ? null : $session, is_string($message) && trim($message) !== '' ? trim($message) : null, is_string($url) ? $url : null);
+            [$assist, $secret, $created] = $this->assist->request($context, $session === false ? null : $session, is_string($message) && trim($message) !== '' ? trim($message) : null, is_string($url) ? $url : null, $this->tab($request));
         } catch (AssistRefused $refused) {
             return $this->refused($refused);
         }

@@ -345,9 +345,15 @@ return [
         'watch_consent' => (bool) env('SESSION_REPLAY_ASSIST_WATCH_CONSENT', false),
         // New requests per hour per person (for guests: per rendered page); null turns it off.
         'requests_per_hour' => env('SESSION_REPLAY_ASSIST_REQUESTS_PER_HOUR', 6),
-        // Requests that may be going at once, all visitors together: past it a new one is refused (429), so a
-        // script cannot flood the list. null turns it off.
+        // Requests that may be going at once per workspace (tenant; no workspace counts as one): past it a new one
+        // is refused (429), so a script cannot flood the list. null turns it off.
         'max_open_requests' => env('SESSION_REPLAY_ASSIST_MAX_OPEN_REQUESTS', 100),
+        // Guests (nobody signed in, recorded with session-replay.guests) may ask for help. false: signed-in people only.
+        'guests' => (bool) env('SESSION_REPLAY_ASSIST_GUESTS', true),
+        // New requests per hour from all guests of a workspace together, on top of requests_per_hour (which counts
+        // per rendered page for guests, a nonce anyone can mint). While set, a guest asks only from a recording
+        // that has events on the server. null turns both off.
+        'guest_requests_per_hour' => env('SESSION_REPLAY_ASSIST_GUEST_REQUESTS_PER_HOUR', 20),
         // A claim the visitor's page has not acknowledged by then goes back to the list.
         'claim_timeout_seconds' => 30,
         // An agent's offer nobody answered expires.

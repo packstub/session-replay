@@ -1,6 +1,7 @@
 <?php
 
 use Illuminate\Support\Facades\Event;
+use Packstub\Calls\Calls as CallsService;
 use Packstub\Calls\Facades\Calls;
 use Packstub\Calls\Models\Call;
 use Packstub\SessionReplay\Events\AssistEnded;
@@ -8,6 +9,7 @@ use Packstub\SessionReplay\Events\AssistStarted;
 use Packstub\SessionReplay\Facades\SessionReplay;
 use Packstub\SessionReplay\Models\AssistRequest;
 use Packstub\SessionReplay\Models\ReplayMarker;
+use Packstub\SessionReplay\Tests\Fixtures\Models\Admin;
 
 beforeEach(function () {
     $this->needsCalls();
@@ -298,4 +300,90 @@ it('ends the assist when the agent starts another call, since an agent helps one
     Calls::start($agent, $this->user());
 
     expect(AssistRequest::query()->sole()->status)->toBe('ended');
+});
+
+it('rings the agent on the guard they claimed through, not the default guard of the visitor\'s request', function () {
+    // A panel on an "admin" guard with a table of its own: admin 1 and user 1 are two people.
+    config()->set('auth.providers.admins', ['driver' => 'eloquent', 'model' => Admin::class]);
+    config()->set('auth.guards.admin', ['driver' => 'session', 'provider' => 'admins']);
+
+    $browser = $this->browser();
+    $asked = $this->asked($browser);
+    $customer = $browser['session']->user;
+    $admin = Admin::query()->create(['name' => 'Ana Admin', 'email' => 'ana@admin.test', 'password' => 'secret', 'is_staff' => true]);
+
+    expect((string) $admin->id)->toBe((string) $customer->id);
+
+    // The agent's request: the panel made its guard the default (Filament does), the viewer and Calls follow it.
+    $this->actingAs($admin, 'admin')->postJson(route('session-replay.assist.claim', $asked['id']))->assertOk();
+
+    expect(AssistRequest::query()->sole())
+        ->agent_type->toBe($admin->getMorphClass())
+        ->agent_guard->toBe('admin')
+        ->agent_scope->toBe('admin');
+
+    // The visitor's request: no panel, the app's default guard.
+    auth()->shouldUse('web');
+
+    $poll = $this->poll($asked['id'], $asked['secret'], $browser['token'], ['tab' => 'tab-1'])->assertOk()->assertJson(['status' => 'active']);
+
+    $call = Call::query()->sole();
+
+    expect($call->caller_id)->toBe((string) $admin->id)
+        ->and($call->scope)->toBe('admin')
+        ->and($poll->json('call.peer.name'))->toBe('Ana Admin');
+
+    // The panel's poll (its scope) sees the call; the visitor's own default guard never named anyone in it.
+    auth()->shouldUse('admin');
+
+    expect(Calls::poll((string) $admin->id, kind: 'assist')['call']['id'])->toBe($call->id);
+});
+
+it('refuses claims and offers while Calls sits on another database than Session Replay', function () {
+    config()->set('session-replay.storage.connection', 'sqlite');
+    config()->set('packstub-calls.connection', null);
+
+    $live = $this->browser();
+    $asked = $this->asked($this->browser());
+    $agent = $this->staff();
+
+    $this->actingAs($agent)->postJson(route('session-replay.assist.claim', $asked['id']))->assertStatus(409)->assertJson(['reason' => 'connection_mismatch']);
+    $this->postJson(route('session-replay.assist.propose', $live['session']))->assertStatus(409)->assertJson(['reason' => 'connection_mismatch']);
+
+    expect(AssistRequest::query()->sole()->status)->toBe('open');
+
+    config()->set('packstub-calls.connection', 'sqlite');
+
+    $this->postJson(route('session-replay.assist.claim', $asked['id']))->assertOk();
+});
+
+it('ends a call it made when starting the assist fails after it, and the request with it', function () {
+    [$browser, $asked] = $this->claimed();
+
+    app()->instance(CallsService::class, new class extends CallsService
+    {
+        public function answer(Call $call, string $userId, ?string $tab = null): Call
+        {
+            throw new RuntimeException('The database went away.');
+        }
+    });
+
+    $this->withoutExceptionHandling();
+
+    $this->poll($asked['id'], $asked['secret'], $browser['token'], ['tab' => 'tab-1'])->assertOk()->assertJson(['status' => 'ended', 'end_reason' => 'call_failed']);
+
+    expect(Call::query()->sole()->status)->toBe('ended');
+});
+
+it('ends a live request whose call ended without telling it', function () {
+    [$browser, $asked] = $this->claimed();
+
+    $this->poll($asked['id'], $asked['secret'], $browser['token'], ['tab' => 'tab-1'])->assertJson(['status' => 'active']);
+
+    // Ended where no CallEnded listener heard it (another connection's process, a listener that failed).
+    Call::query()->update(['status' => 'ended', 'end_reason' => 'dropped', 'ended_at' => now()]);
+
+    $this->poll($asked['id'], $asked['secret'], $browser['token'], ['tab' => 'tab-1'])->assertJson(['status' => 'ended', 'end_reason' => 'dropped']);
+
+    expect(ReplayMarker::query()->where('type', 'assist')->count())->toBe(1);
 });

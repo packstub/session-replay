@@ -36,6 +36,9 @@ use Packstub\SessionReplay\Support\ContextToken;
  * @property string|null $nonce
  * @property string|null $lock_key
  * @property string|null $agent_id
+ * @property string|null $agent_type
+ * @property string|null $agent_guard
+ * @property string|null $agent_scope
  * @property string|null $agent_name
  * @property string|null $agent_avatar
  * @property int|null $call_id
@@ -87,7 +90,7 @@ class AssistRequest extends ReplayModel
     public const ASKS = ['control', 'audio', 'video', 'screen', 'control_masked'];
 
     /** The agent's fields, cleared when a claim goes back to the list. */
-    public const UNCLAIMED = ['agent_id' => null, 'agent_name' => null, 'agent_avatar' => null, 'claimed_at' => null, 'agent_seen_at' => null];
+    public const UNCLAIMED = ['agent_id' => null, 'agent_type' => null, 'agent_guard' => null, 'agent_scope' => null, 'agent_name' => null, 'agent_avatar' => null, 'claimed_at' => null, 'agent_seen_at' => null];
 
     /** The most entries the grants log keeps: a page reporting in a loop must not grow the row for ever. */
     public const MAX_GRANTS = 200;
@@ -98,7 +101,7 @@ class AssistRequest extends ReplayModel
     protected $table = 'replay_assist_requests';
 
     /** Proof of the tab, the identity hash and the keys: never in any JSON. */
-    protected $hidden = ['secret_hash', 'identity', 'nonce', 'lock_key'];
+    protected $hidden = ['secret_hash', 'identity', 'nonce', 'lock_key', 'agent_guard', 'agent_scope'];
 
     protected function casts(): array
     {
@@ -182,10 +185,22 @@ class AssistRequest extends ReplayModel
         return $context->sameTenantAs($this->tenant_type, $this->tenant_id);
     }
 
-    /** What keeps a second pending request of the same recording (or tab) out. */
-    public static function lockKeyFor(?string $sessionId, ?string $nonce): ?string
+    /**
+     * What keeps a second pending request of the same recording (or tab) out. Without a recording: the token's nonce
+     * and the tab's own id (sessionStorage), since a page served from a full-page cache hands every visitor the same
+     * nonce; the nonce alone only for a client that sends no tab.
+     */
+    public static function lockKeyFor(?string $sessionId, ?string $nonce, ?string $tab = null): ?string
     {
-        return $sessionId !== null ? $sessionId : ($nonce !== null ? 'nonce:'.$nonce : null);
+        if ($sessionId !== null) {
+            return $sessionId;
+        }
+
+        if ($tab !== null) {
+            return 'tab:'.hash('sha256', ($nonce ?? '').'|'.$tab);
+        }
+
+        return $nonce !== null ? 'nonce:'.$nonce : null;
     }
 
     /**

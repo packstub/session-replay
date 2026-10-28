@@ -66,6 +66,7 @@ return [
         'not_allowed' => 'You may not help with this request.',
         'not_yours' => 'This request is someone else\'s.',
         'guard_mismatch' => 'You are signed in to the viewer and to Calls as different people. Set packstub-calls.guard to the viewer\'s guard (session-replay.viewer.guard).',
+        'connection_mismatch' => 'Session Replay and Calls use different databases. Set packstub-calls.connection to session-replay.storage.connection.',
         'statuses' => [
             'open' => 'waiting',
             'claimed' => 'claimed',

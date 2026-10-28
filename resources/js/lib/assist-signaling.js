@@ -76,9 +76,12 @@ export class AssistSignaling {
 
     // ---- the request -------------------------------------------------------
 
-    /** Ask for help: the recording's triple when the tab has one. Answers the request, with `secret` once. */
-    create(message, url) {
-        return this.request(this.routes.store, this.body({ message: message || null, url: url || null }, { recording: true, secret: false }));
+    /**
+     * Ask for help: the recording's triple when the tab has one, and the tab's own id (one request per tab without
+     * a recording). Answers the request, with `secret` once.
+     */
+    create(message, url, tab = null) {
+        return this.request(this.routes.store, this.body({ message: message || null, url: url || null, ...(tab ? { tab } : {}) }, { recording: true, secret: false }));
     }
 
     /** The first answer to an agent's knock: the triple instead of a secret, which this answer issues. */

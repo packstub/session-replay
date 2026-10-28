@@ -4,9 +4,12 @@ import { CHANNEL_LABEL, Endpoint, FROM_AGENT, LiveStyles, encodeEvent } from './
 import { RemoteControl, maskedField } from './lib/assist-control.js';
 import { isPointerSample } from './lib/process.js';
 import { createUi, label } from './assist-ui.js';
+import { STATE_KEY, randomId, storedRequest } from './lib/assist-hook.js';
 
 /**
- * Assist on the visitor's page, bundled into the recorder: asking for help
+ * Assist on the visitor's page, a module of its own that the recorder loads
+ * with import() the first time it is needed (lib/assist-hook.js keeps the
+ * heartbeat, the knock and the tab id in the recorder): asking for help
  * (SessionReplay.assist.request(), an optional "Get help" button), answering
  * an agent's offer (the knock in the upload answer and the heartbeat), and
  * once an agent is with the visitor, the live stage's visitor half: the DOM
@@ -25,7 +28,6 @@ import { createUi, label } from './assist-ui.js';
  * routes, never Calls' own (they sit behind auth).
  */
 
-const STATE_KEY = 'sr:assist';
 const TERMINAL = ['cancelled', 'declined', 'expired', 'withdrawn', 'ended'];
 const PENDING = ['open', 'claimed', 'active'];
 const GRANT_TIMEOUT_MS = 30_000;
@@ -119,14 +121,6 @@ class AssistClient extends CallClient {
     }
 }
 
-function tabId() {
-    const bytes = new Uint8Array(12);
-
-    (window.crypto || { getRandomValues: (array) => array.forEach((_, i) => (array[i] = Math.floor(Math.random() * 256))) }).getRandomValues(bytes);
-
-    return [...bytes].map((byte) => byte.toString(16).padStart(2, '0')).join('');
-}
-
 /**
  * @param {object} recorder  what the recorder lends Assist
  * @param {() => object} recorder.config  the page's config (window.__sessionReplay)
@@ -138,19 +132,20 @@ function tabId() {
  * @param {(url: string) => string} recorder.redacted
  * @param {(key: string) => string|null} recorder.read  sessionStorage
  * @param {(key: string, value: string) => void} recorder.write
+ * @param {string} recorder.tab  the tab's own id (sessionStorage), sent with a new request
  */
 export function installAssist(recorder) {
     const settings = () => recorder.config().assist || {};
     const labels = settings().labels || {};
     const timers = workerTimers();
-    const tab = tabId();
+    // This page's window on the call (Calls holds a side per window); a reload is a new one.
+    const tab = randomId();
     const ui = createUi({ labels });
     // Offers this tab answered or declined: the knock repeats with every upload while one is open.
     const declined = new Set();
 
     let state = load();
     let pollTimer = null;
-    let heartbeatTimer = null;
     let client = null;
     let endpoint = null;
     let streaming = false;
@@ -181,13 +176,7 @@ export function installAssist(recorder) {
     });
 
     function load() {
-        try {
-            const saved = JSON.parse(recorder.read(STATE_KEY) || 'null');
-
-            return saved && typeof saved.id === 'string' && typeof saved.secret === 'string' ? saved : null;
-        } catch {
-            return null;
-        }
+        return storedRequest(recorder.read);
     }
 
     function save() {
@@ -317,7 +306,7 @@ export function installAssist(recorder) {
         let data;
 
         try {
-            data = await signaling.create(String(message || '').slice(0, 500), recorder.redacted(location.href));
+            data = await signaling.create(String(message || '').slice(0, 500), recorder.redacted(location.href), recorder.tab);
         } catch (error) {
             ui.notice(label(labels, 'failed'));
             throw error;
@@ -834,22 +823,9 @@ export function installAssist(recorder) {
         });
     }
 
-    /** A visible tab's sign of life, which also brings an agent's offer. */
-    function heartbeat() {
-        clearTimeout(heartbeatTimer);
-        heartbeatTimer = setTimeout(heartbeat, settings().heartbeatMs || 15_000);
-
-        if (document.visibilityState !== 'visible' || !recorder.recording()) return;
-
-        signaling
-            .heartbeat()
-            .then((data) => knock(data?.assist))
-            .catch(() => {});
-    }
-
     function visibility() {
+        // The heartbeat on coming back is the recorder's (lib/assist-hook.js).
         if (document.visibilityState === 'hidden') endControl('hidden');
-        else heartbeat();
 
         sendState();
     }
@@ -881,7 +857,6 @@ export function installAssist(recorder) {
     ui.mount();
     mountedListeners();
     launcher();
-    heartbeat();
 
     // A reload in the middle of a request: the request goes on from where it was.
     if (state) schedulePoll(0);

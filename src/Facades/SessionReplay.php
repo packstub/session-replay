@@ -16,6 +16,8 @@ use Packstub\SessionReplay\SessionReplayManager;
  * @method static \Packstub\SessionReplay\SessionReplayManager visibleUsing(\Closure $callback)
  * @method static \Packstub\SessionReplay\SessionReplayManager canAssistUsing(\Closure $callback)
  * @method static bool canAssist(mixed $agent, \Packstub\SessionReplay\Models\ReplaySession|null $session, \Packstub\SessionReplay\Models\AssistRequest $request)
+ * @method static bool assistsWithoutRecording()
+ * @method static \Illuminate\Database\Eloquent\Model|null tenantFor(\Illuminate\Http\Request|null $request = null)
  * @method static \Illuminate\Database\Eloquent\Builder visibleTo(\Illuminate\Database\Eloquent\Builder $query, mixed $viewer = null)
  * @method static bool enabled()
  * @method static \Illuminate\Database\Eloquent\Model|null user(\Illuminate\Http\Request|null $request = null)

@@ -35,10 +35,17 @@ return new class extends Migration
             // for a visitor nobody signed in as. A token that names someone else ends the request.
             $table->char('identity', 64)->nullable();
             $table->string('nonce', 64)->nullable(); // the token's page nonce, for a tab without a recording
-            // Set while the request is not finished (the recording's id, or "nonce:" and the nonce): unique, so a
+            // Set while the request is not finished (the recording's id, or for a tab without one "tab:" and a hash of the
+            // token's nonce and the tab's own id, so pages served from a full-page cache do not share it): unique, so a
             // recording (or a tab without one) never has two requests going at once, however the requests race.
             $table->string('lock_key', 80)->nullable()->unique();
+            // The agent as the request they claimed or proposed from saw them: the viewer guard's key, the morph class of
+            // that guard's user, the guard's name and Calls' scope there. The call is created later in the visitor's
+            // request, where no panel is active: the agent is loaded and rung from these, never from the default guard.
             $table->string('agent_id', 64)->nullable();
+            $table->string('agent_type')->nullable();
+            $table->string('agent_guard', 64)->nullable();
+            $table->string('agent_scope', 64)->nullable();
             $table->string('agent_name')->nullable();
             $table->string('agent_avatar', 2000)->nullable();
             $table->unsignedBigInteger('call_id')->nullable()->index();
