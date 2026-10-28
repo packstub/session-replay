@@ -3,8 +3,8 @@ import '@rrweb/replay/dist/style.css';
 import './stage.css';
 import { HttpSignaling, drain } from '@packstub/calls';
 import { AssistClient, workerTimers } from './lib/assist-client.js';
-import { CHANNEL_LABEL, Endpoint, FROM_VISITOR } from './lib/assist-protocol.js';
-import { AgentState, FINISHED, Gesture, LiveFeed, ago, editable, handleVisitorMessage, reasonKey, stageDelta, stagePhase, stagePoint } from './lib/assist-stage.js';
+import { AGENT_RATE, CHANNEL_LABEL, Endpoint, FROM_VISITOR } from './lib/assist-protocol.js';
+import { AgentState, FINISHED, Gesture, LiveFeed, ago, editable, handleVisitorMessage, reasonKey, stageDelta, stagePhase, stagePoint, stageStop } from './lib/assist-stage.js';
 
 /**
  * The agent's live stage in the built-in viewer ({path}/assist/requests/{id}/stage):
@@ -340,10 +340,13 @@ function mountStage(root) {
         if (destroyed) return;
 
         const before = request.status;
+        const stop = stageStop(data);
 
         request = data;
 
-        if (FINISHED.includes(data.status)) return finish();
+        // Over, or no longer this agent's (released, taken by someone else): the stage stops, without hanging up.
+        if (stop === 'not_mine') note('not_allowed');
+        if (stop) return finish();
 
         if (data.status === 'active' && data.call && state.calls && state.routes) startClient(data.call);
         if (before !== data.status && data.status === 'active') note('started');
@@ -454,6 +457,8 @@ function mountStage(root) {
             role: 'agent',
             schema: FROM_VISITOR,
             drain,
+            // A page that sends more than the replay can take is let go (the visitor's side reconnects).
+            rate: AGENT_RATE,
             onReady() {
                 state.open();
                 note('connected');
@@ -465,7 +470,8 @@ function mountStage(root) {
                 note('version');
                 render();
             },
-            onClose() {
+            onClose(why) {
+                if (why === 'too_fast') note('too_fast');
                 if (endpoint?.channel !== channel) return;
 
                 endpoint = null;

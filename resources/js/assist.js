@@ -33,6 +33,8 @@ import { STATE_KEY, randomId, storedRequest } from './lib/assist-hook.js';
 const TERMINAL = ['cancelled', 'declined', 'expired', 'withdrawn', 'ended'];
 const PENDING = ['open', 'claimed', 'active'];
 const GRANT_TIMEOUT_MS = 30_000;
+// After a no, the agent cannot ask for the same thing again this soon (refused with reason `cooldown`).
+export const ASK_COOLDOWN_MS = 10_000;
 
 /**
  * @param {object} recorder  what the recorder lends Assist
@@ -46,14 +48,17 @@ const GRANT_TIMEOUT_MS = 30_000;
  * @param {(key: string) => string|null} recorder.read  sessionStorage
  * @param {(key: string, value: string) => void} recorder.write
  * @param {string} recorder.tab  the tab's own id (sessionStorage), sent with a new request
+ * @param {object} [env]  the tests' fakes: `ui`, `timers`, `Client`, `fetch`, `now`
  */
-export function installAssist(recorder) {
+export function installAssist(recorder, env = {}) {
     const settings = () => recorder.config().assist || {};
     const labels = settings().labels || {};
-    const timers = workerTimers();
+    const timers = env.timers || workerTimers();
+    const Client = env.Client || AssistClient;
+    const now = env.now || (() => Date.now());
     // This page's window on the call (Calls holds a side per window); a reload is a new one.
     const tab = randomId();
-    const ui = createUi({ labels });
+    const ui = env.ui || createUi({ labels });
     // Offers this tab answered or declined: the knock repeats with every upload while one is open.
     const declined = new Set();
 
@@ -68,6 +73,15 @@ export function installAssist(recorder) {
     let maskedGranted = false;
     let lastPoll = null;
     let busy = false;
+    // The microphone: muted by the visitor's own button (only that button unmutes; a reload keeps it), or by the
+    // agent ending the audio (media.stop: only a fresh Allow of the visitor's lifts it). Never unmuted on a grant
+    // remembered from earlier.
+    let visitorMuted = !!state?.muted;
+    let agentMuted = false;
+    // Consent prompts: one at a time per kind (control, media, screen, masked), and none of a kind for
+    // ASK_COOLDOWN_MS after the visitor said no to it.
+    const asking = new Set();
+    const saidNoAt = new Map();
 
     const signaling = new AssistSignaling({
         routes: settings().routes,
@@ -86,6 +100,7 @@ export function installAssist(recorder) {
             };
         },
         onPoll: (data) => handle(data),
+        ...(env.fetch ? { fetch: env.fetch } : {}),
     });
 
     function load() {
@@ -372,7 +387,7 @@ export function installAssist(recorder) {
         timers.clear(pollTimer);
         pollTimer = null;
 
-        client = new AssistClient(
+        client = new Client(
             {
                 signaling,
                 media: 'none',
@@ -492,11 +507,13 @@ export function installAssist(recorder) {
             case 'media.request':
                 return askMedia(message.kind);
             case 'media.stop':
-                return client?.setMuted(true);
+                agentMuted = true;
+
+                return applyMute();
             case 'screen.request':
                 return askScreen();
             case 'screen.stop':
-                return client?.stopSharing().then(() => endpoint?.send({ t: 'screen.stopped' }));
+                return stopScreen();
             case 'annot.start':
             case 'annot.move':
             case 'annot.stop':
@@ -516,11 +533,37 @@ export function installAssist(recorder) {
 
     // ---- consent and grants -----------------------------------------------------
 
+    /**
+     * One consent question of a kind: `{ yes }`, or `{ refused }` without asking: 'pending' (one of that kind is up
+     * or queued: a repeat is dropped) or 'cooldown' (the visitor said no to that kind less than ASK_COOLDOWN_MS ago).
+     */
+    async function ask(kind, text, options = {}) {
+        if (asking.has(kind)) return { refused: 'pending' };
+        if (saidNoAt.has(kind) && now() - saidNoAt.get(kind) < ASK_COOLDOWN_MS) return { refused: 'cooldown' };
+
+        asking.add(kind);
+
+        let yes = false;
+
+        try {
+            yes = await ui.prompt(text, { agent: state?.agent, timeoutMs: GRANT_TIMEOUT_MS, tag: kind, ...options });
+        } finally {
+            asking.delete(kind);
+        }
+
+        if (yes) saidNoAt.delete(kind);
+        else saidNoAt.set(kind, now());
+
+        return { yes };
+    }
+
     async function askControl() {
         if (controlling || document.visibilityState === 'hidden') return;
 
-        const yes = await ui.prompt(label(labels, 'askControl', agentName()), { agent: state?.agent, timeoutMs: GRANT_TIMEOUT_MS, tag: 'control' });
+        const { yes, refused } = await ask('control', label(labels, 'askControl', agentName()));
 
+        if (refused === 'pending') return;
+        if (refused) return endpoint?.send({ t: 'control.refused', reason: refused });
         if (!endpoint || !state) return;
 
         grant('control', yes);
@@ -540,7 +583,8 @@ export function installAssist(recorder) {
             doc: document,
             isOwn: (element) => ui.contains(element),
             node: recorder.node,
-            isMasked: (element) => maskedField(element, { maskAllInputs: config.privacy?.maskAllInputs !== false, ignoreSelector: config.privacy?.ignoreSelector || null }),
+            isMasked: (element) => maskedField(element, { maskAllInputs: config.privacy?.maskAllInputs !== false, ignoreSelector: config.privacy?.ignoreSelector || null, blockSelector: config.privacy?.blockSelector || null }),
+            blockSelector: config.privacy?.blockSelector || null,
             maskedAllowed: () => maskedGranted,
             onCursor: (x, y) => ui.cursor.move(x, y),
         });
@@ -603,8 +647,10 @@ export function installAssist(recorder) {
         const result = run();
 
         if (result.refused === 'masked' && settings().controlMasked && !maskedGranted) {
-            const yes = await ui.prompt(label(labels, 'askMasked', agentName()), { agent: state?.agent, timeoutMs: GRANT_TIMEOUT_MS, tag: 'masked' });
+            const { yes, refused } = await ask('masked', label(labels, 'askMasked', agentName()));
 
+            if (refused === 'pending') return;
+            if (refused) return reply(result);
             if (!controlling) return;
 
             grant('control_masked', yes);
@@ -625,16 +671,30 @@ export function installAssist(recorder) {
 
         if (kind === 'video' && !settings().video) return endpoint?.send({ t: 'media.refused', kind });
 
-        const remembered = kind === 'video' ? state.grants?.video : state.grants?.audio || state.grants?.video;
-        const yes = remembered || (await ui.prompt(label(labels, kind === 'video' ? 'askVideo' : 'askAudio', agentName()), { agent: state.agent, timeoutMs: GRANT_TIMEOUT_MS, tag: 'media' }));
+        // Allowed earlier in this request (a reload keeps it): not asked again, unless the agent ended the audio
+        // since; then only a fresh Allow brings the microphone back.
+        const remembered = !agentMuted && (kind === 'video' ? state.grants?.video : state.grants?.audio || state.grants?.video);
+        let yes = !!remembered;
+
+        if (!remembered) {
+            const answer = await ask('media', label(labels, kind === 'video' ? 'askVideo' : 'askAudio', agentName()));
+
+            if (answer.refused === 'pending') return;
+            if (answer.refused) return endpoint?.send({ t: 'media.refused', kind, reason: answer.refused });
+
+            yes = answer.yes;
+        }
 
         if (!state) return;
         if (!remembered) grant(kind, yes);
-        if (!yes) return endpoint?.send({ t: 'media.refused', kind });
+        if (!yes) return endpoint?.send({ t: 'media.refused', kind, reason: 'declined' });
+
+        // The visitor's own Allow lifts the agent's mute; never their own (only their button does).
+        if (!remembered) agentMuted = false;
 
         state.grants = { ...state.grants, [kind]: true };
         save();
-        startMedia(kind, true);
+        startMedia(kind, !remembered);
     }
 
     async function startMedia(kind, announce) {
@@ -648,22 +708,44 @@ export function installAssist(recorder) {
             return;
         }
 
-        // Asked again after the agent ended the audio (media.stop mutes): the visitor said yes, so they are heard.
-        if (announce && client?.muted) client.setMuted(false);
+        applyMute();
         if (client?.remoteStream) ui.media(client.remoteStream, true);
         endpoint?.send({ t: 'media.granted', kind });
         activeView();
     }
 
-    function mute(muted) {
-        client?.setMuted(muted);
+    /** The microphone as the two flags say: muted while either the visitor or the agent muted it. */
+    function applyMute() {
+        if (!client) return;
+
+        const muted = visitorMuted || agentMuted;
+
+        if (client.muted !== muted) client.setMuted(muted);
+
         activeView();
+    }
+
+    /** The visitor's Mute / Unmute button: the only way their own mute is lifted. */
+    function mute(muted) {
+        visitorMuted = muted;
+
+        // Unmuting is the visitor's say: the agent's mute goes with it.
+        if (!muted) agentMuted = false;
+        if (state) {
+            state.muted = muted;
+            save();
+        }
+
+        applyMute();
     }
 
     async function askScreen() {
         if (!client || client.sharing) return;
 
-        const yes = await ui.prompt(label(labels, 'askScreen', agentName()), { agent: state?.agent, timeoutMs: GRANT_TIMEOUT_MS, tag: 'screen' });
+        const { yes, refused } = await ask('screen', label(labels, 'askScreen', agentName()));
+
+        if (refused === 'pending') return;
+        if (refused) return endpoint?.send({ t: 'screen.refused', reason: refused });
 
         if (!yes) {
             grant('screen', false);
@@ -697,6 +779,21 @@ export function installAssist(recorder) {
         });
     }
 
+    /** The agent stopped looking at the visitor's screen: the share ends and the grants log says so. */
+    async function stopScreen() {
+        if (!client?.sharing) return;
+
+        try {
+            await client.stopSharing();
+        } catch {
+            // Stopped already.
+        }
+
+        grant('screen', false);
+        endpoint?.send({ t: 'screen.stopped' });
+        activeView();
+    }
+
     // ---- the end --------------------------------------------------------------
 
     /** The request is over (status) or gone for this tab (null). */
@@ -715,6 +812,9 @@ export function installAssist(recorder) {
 
         state = null;
         lastPoll = null;
+        visitorMuted = false;
+        agentMuted = false;
+        saidNoAt.clear();
         save();
         emit();
 

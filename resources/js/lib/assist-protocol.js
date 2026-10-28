@@ -20,8 +20,8 @@
  * (`key`, `text`: a stylesheet the events point at with liveStylePlaceholder),
  * state (`hidden`, `url`, `width`, `height`), control.granted,
  * control.released (`reason`), control.refused (`reason`), media.granted /
- * media.refused / media.stopped (`kind`), screen.granted / screen.refused /
- * screen.stopped, annot.ack, bye.
+ * media.refused / media.stopped (`kind`; refused also `reason`),
+ * screen.granted / screen.refused (`reason`) / screen.stopped, annot.ack, bye.
  *
  * From the agent: hello, control.request, control.release, move / click /
  * drag.start / drag (`x`, `y` in the visitor's viewport pixels), scroll
@@ -43,6 +43,12 @@ export const MAX_ASSEMBLED_CHARS = 32 * 1024 * 1024;
 export const MAX_PARTS = 2048;
 // Stylesheets shorter than this stay inline in the events.
 export const LIVE_STYLE_MIN_CHARS = 2048;
+/**
+ * What the agent's stage takes from the visitor's page per channel: a token bucket over the characters received,
+ * refilled at `bytesPerSecond` up to `burstBytes` (room for a full snapshot of MAX_ASSEMBLED_CHARS and its
+ * stylesheets). A page past it is closed with reason `too_fast`; the replay would only grow without end.
+ */
+export const AGENT_RATE = { bytesPerSecond: 4 * 1024 * 1024, burstBytes: 48 * 1024 * 1024 };
 
 const LIVE_STYLE_PREFIX = '/*sr-live:';
 const LIVE_STYLE_SUFFIX = '*/';
@@ -321,10 +327,15 @@ export const FROM_VISITOR = {
     'control.released': (message) => ok({ t: message.t, reason: reason(message.reason) }),
     'control.refused': (message) => ok({ t: message.t, reason: reason(message.reason) }),
     'media.granted': mediaKind,
-    'media.refused': mediaKind,
+    // `reason`: 'declined', or 'cooldown' when the visitor said no to the same a moment ago (asked again too soon).
+    'media.refused': (message) => {
+        const result = mediaKind(message);
+
+        return result.ok ? ok({ ...result.message, reason: reason(message.reason) }) : result;
+    },
     'media.stopped': mediaKind,
     'screen.granted': bare,
-    'screen.refused': bare,
+    'screen.refused': (message) => ok({ t: message.t, reason: reason(message.reason) }),
     'screen.stopped': bare,
     'annot.ack': bare,
     bye: bare,
@@ -350,9 +361,12 @@ export function validate(message, schema, ctx = {}) {
  * Callbacks: onReady() once the peer's hello came, onMessage(message) for
  * every valid message after it, onVersion(v) for a peer on another major
  * version, onClose(reason) once.
+ *
+ * `rate` ({ bytesPerSecond, burstBytes }, see AGENT_RATE): a byte budget for
+ * what comes in; past it the channel is closed with reason `too_fast`.
  */
 export class Endpoint {
-    constructor({ channel, role, schema, context = {}, drain, onReady = () => {}, onMessage = () => {}, onVersion = () => {}, onClose = () => {}, budget = BAD_MESSAGE_BUDGET, maxBytes = MAX_MESSAGE_BYTES }) {
+    constructor({ channel, role, schema, context = {}, drain, onReady = () => {}, onMessage = () => {}, onVersion = () => {}, onClose = () => {}, budget = BAD_MESSAGE_BUDGET, maxBytes = MAX_MESSAGE_BYTES, rate = null, now = () => Date.now() }) {
         this.channel = channel;
         this.role = role;
         this.schema = schema;
@@ -373,6 +387,10 @@ export class Endpoint {
         this.closed = false;
         this.pumping = false;
         this.peerVersion = null;
+        this.rate = rate;
+        this.now = now;
+        this.allowance = rate ? rate.burstBytes : 0;
+        this.refilledAt = null;
         this.listeners = {
             message: (event) => this.receive(event.data),
             close: () => this.close('closed', false),
@@ -464,6 +482,7 @@ export class Endpoint {
 
         // Every frame is under maxBytes on the wire; a string longer than that in characters is longer in bytes too.
         if (typeof data !== 'string' || data.length > this.maxBytes + 256) return this.count();
+        if (this.rate && !this.spend(data.length)) return this.close('too_fast');
 
         let message;
 
@@ -528,6 +547,18 @@ export class Endpoint {
 
     count() {
         if (++this.bad > this.budget) this.close('bad_messages');
+    }
+
+    /** The rate budget: false once the peer sent more than it allows. */
+    spend(size) {
+        const now = this.now();
+
+        if (this.refilledAt !== null) this.allowance = Math.min(this.rate.burstBytes, this.allowance + ((now - this.refilledAt) / 1000) * this.rate.bytesPerSecond);
+
+        this.refilledAt = now;
+        this.allowance -= size;
+
+        return this.allowance >= 0;
     }
 
     close(why = 'closed', closeChannel = true) {

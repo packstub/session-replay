@@ -5,7 +5,7 @@
 @if ($assist && $session->isLive())
     @php($pending = $assist['requests']->get($session->getKey()))
     @if ($pending)
-        @if ($pending->agent_id !== null && $pending->agent_id === $assist['agent'] && $assist['stage'] && $assist['offer'])
+        @if ($assist['holds']($pending) && $assist['stage'] && $assist['offer'])
             <a class="button primary" href="{{ route('session-replay.assist.stage', $pending->id) }}">{{ __('session-replay::viewer.assist.open_stage') }}</a>
         @elseif (\Illuminate\Support\Facades\Route::has('session-replay.assist.index'))
             <a class="badge warn" href="{{ route('session-replay.assist.index') }}">{{ $pending->openedByAgent() ? __('session-replay::viewer.assist.offered_by', ['name' => $pending->agent_name]) : __('session-replay::viewer.assist.asked') }}</a>

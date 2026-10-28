@@ -15,7 +15,7 @@ function fakeDocument(visibilityState = 'visible') {
 }
 
 /** A hook with a fake module: counts the imports, records what the module was asked. */
-function hook({ store = storage(), settings = {}, fetch, recording = { id: 'rec-1', key: 'k1' }, fail = false } = {}) {
+function hook({ store = storage(), settings = {}, fetch, recording = { id: 'rec-1', key: 'k1' }, fail = false, location = { href: 'https://shop.test/checkout', origin: 'https://shop.test' } } = {}) {
     const imports = [];
     const asked = [];
     const module = {
@@ -44,6 +44,7 @@ function hook({ store = storage(), settings = {}, fetch, recording = { id: 'rec-
         lend: {},
         fetch: fetch || (async () => ({ ok: true, json: async () => ({ ok: true, assist: null }) })),
         document: fakeDocument(),
+        location,
     });
 
     return { instance, imports, asked, store };
@@ -167,4 +168,25 @@ test('the stored request is read only with an id and a secret', () => {
     assert.equal(storedRequest(() => 'not json'), null);
     assert.equal(storedRequest(() => JSON.stringify({ id: 'r1' })), null);
     assert.deepEqual(storedRequest(() => JSON.stringify({ id: 'r1', secret: 's' })), { id: 'r1', secret: 's' });
+});
+
+test('the module is imported only from the page\'s own origin', async () => {
+    for (const module of ['https://evil.test/assist.js', '//evil.test/assist.js', 'data:text/javascript,alert(1)', 'blob:https://shop.test/1', 'javascript:alert(1)']) {
+        const foreign = hook({ settings: { module } });
+
+        await assert.rejects(foreign.instance.api.request({}), /own origin/);
+        assert.deepEqual(foreign.imports, [], module);
+    }
+
+    // A relative URL is resolved against the page.
+    const relative = hook({ settings: { module: '/session-replay/scripts/assist.js?v=2' } });
+
+    await relative.instance.api.request({});
+    assert.deepEqual(relative.imports, ['https://shop.test/session-replay/scripts/assist.js?v=2']);
+
+    // No page to compare with: nothing is loaded.
+    const nowhere = hook({ location: null });
+
+    await assert.rejects(nowhere.instance.api.request({}));
+    assert.deepEqual(nowhere.imports, []);
 });

@@ -55,6 +55,26 @@ export function storedRequest(read) {
 const TERMINAL = ['cancelled', 'declined', 'expired', 'withdrawn', 'ended'];
 
 /**
+ * The module's URL, resolved against the page, when it is on the page's own origin (the package serves it from
+ * the app); anything else throws before import(): a config that names another host never loads code from it.
+ */
+export function sameOrigin(url, loc) {
+    let resolved;
+
+    try {
+        resolved = new URL(String(url ?? ''), loc?.href);
+    } catch {
+        throw new Error('The Assist module URL is not a URL.');
+    }
+
+    if (!loc?.origin || resolved.origin !== loc.origin || !['http:', 'https:'].includes(resolved.protocol)) {
+        throw new Error('The Assist module must come from the page\'s own origin.');
+    }
+
+    return resolved.href;
+}
+
+/**
  * @param {object} options
  * @param {() => object} options.settings  config.assist
  * @param {() => string} options.token  the page's signed token
@@ -65,8 +85,9 @@ const TERMINAL = ['cancelled', 'declined', 'expired', 'withdrawn', 'ended'];
  * @param {(lend: object) => object} options.lend  what the recorder lends the module's installAssist()
  * @param {typeof fetch} [options.fetch]
  * @param {Document} [options.document]
+ * @param {Location} [options.location]  the page's: the module must come from its origin
  */
-export function createAssistHook({ settings, token, recording, read, write, load, lend, fetch: fetchFn, document: doc = globalThis.document }) {
+export function createAssistHook({ settings, token, recording, read, write, load, lend, fetch: fetchFn, document: doc = globalThis.document, location: loc = globalThis.location }) {
     const tab = tabId(read, write);
     const fetcher = fetchFn || ((...args) => globalThis.fetch(...args));
     const importer = load || ((url) => import(/* webpackIgnore: true */ url));
@@ -80,7 +101,7 @@ export function createAssistHook({ settings, token, recording, read, write, load
         if (instance) return Promise.resolve(instance);
 
         loading ||= Promise.resolve()
-            .then(() => importer(settings().module))
+            .then(() => importer(sameOrigin(settings().module, loc)))
             .then((module) => {
                 instance = module.installAssist({ ...lend, tab });
 

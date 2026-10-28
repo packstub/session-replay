@@ -131,3 +131,35 @@ it('throttles by the token in the body only, never one in the query string', fun
     expect($limiter($inUrl)->key)->toBe('session-replay|invalid')
         ->and($limiter($inBody)->key)->not->toBe('session-replay|invalid');
 });
+
+it('tells the agent who holds a request apart by type and guard, not only by key', function () {
+    [, $asked, $agent] = $this->claimed();
+    $id = $asked['id'];
+
+    $this->actingAs($agent);
+    expect($this->getJson(route('session-replay.assist.status', $id))->json('mine'))->toBeTrue();
+
+    // Admin #12 is not User #12: the same key under another type holds nothing.
+    AssistRequest::query()->whereKey($id)->update(['agent_type' => 'App\\Models\\Admin', 'agent_seen_at' => now()->subMinute()]);
+
+    $status = $this->getJson(route('session-replay.assist.status', $id))->assertOk();
+
+    expect($status->json('mine'))->toBeFalse()
+        ->and(AssistRequest::query()->find($id)->agent_seen_at->lt(now()->subSeconds(30)))->toBeTrue();
+    $this->get(route('session-replay.assist.stage', $id))->assertForbidden();
+    $this->postJson(route('session-replay.assist.end', $id))->assertForbidden();
+    $this->postJson(route('session-replay.assist.asks', $id), ['what' => 'control'])->assertForbidden();
+    $this->postJson(route('session-replay.assist.withdraw', $id))->assertForbidden();
+    expect(collect($this->getJson(route('session-replay.assist.queue'))->json('requests'))->firstWhere('id', $id)['mine'])->toBeFalse();
+
+    // Nor the same person claimed through another guard.
+    AssistRequest::query()->whereKey($id)->update(['agent_type' => $agent->getMorphClass(), 'agent_guard' => 'admin']);
+
+    expect($this->getJson(route('session-replay.assist.status', $id))->json('mine'))->toBeFalse();
+    $this->postJson(route('session-replay.assist.end', $id))->assertForbidden();
+
+    AssistRequest::query()->whereKey($id)->update(['agent_guard' => config('auth.defaults.guard')]);
+
+    expect($this->getJson(route('session-replay.assist.status', $id))->json('mine'))->toBeTrue();
+    expect(collect($this->getJson(route('session-replay.assist.queue'))->json('requests'))->firstWhere('id', $id)['mine'])->toBeTrue();
+});

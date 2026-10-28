@@ -412,6 +412,9 @@ class FakeElement {
         this.events = [];
         this.parentElement = null;
         this.style = {};
+        this.attributes = {};
+        this.classes = [];
+        this.rect = { left: 0, top: 0, right: 20, bottom: 20, width: 20, height: 20 };
         this.scrollHeight = 0;
         this.clientHeight = 0;
         this.scrollWidth = 0;
@@ -424,8 +427,34 @@ class FakeElement {
         this.events.push(event);
     }
 
+    hasAttribute(name) {
+        return Object.prototype.hasOwnProperty.call(this.attributes, name);
+    }
+
+    getAttribute(name) {
+        return this.hasAttribute(name) ? this.attributes[name] : null;
+    }
+
+    /** Enough of a selector engine for the control: tags, `a[href]`, `[attr]`, `.class`, comma lists, up the parents. */
+    matches(selector) {
+        return selector.split(',').some((part) => {
+            const one = part.trim();
+
+            if (one.startsWith('[')) return this.hasAttribute(one.slice(1, -1));
+            if (one.startsWith('.')) return this.classes.includes(one.slice(1));
+
+            return one.replace(/\[.*\]$/, '') === this.tagName.toLowerCase();
+        });
+    }
+
     closest(selector) {
-        return selector.includes(this.tagName.toLowerCase()) ? this : null;
+        for (let element = this; element; element = element.parentElement) if (element.matches(selector)) return element;
+
+        return null;
+    }
+
+    getBoundingClientRect() {
+        return this.rect;
     }
 
     focus() {
@@ -451,7 +480,7 @@ Object.defineProperty(FakeInput.prototype, 'value', {
     },
 });
 
-function controlEnv({ at = null, nodes = {}, masked = () => false, maskedAllowed = () => false, now = () => 1000 } = {}) {
+function controlEnv({ at = null, nodes = {}, masked = () => false, maskedAllowed = () => false, blockSelector = '[data-replay-block]', now = () => 1000 } = {}) {
     const own = new FakeElement('div');
     const body = new FakeElement('body');
     const html = new FakeElement('html');
@@ -464,9 +493,11 @@ function controlEnv({ at = null, nodes = {}, masked = () => false, maskedAllowed
         HTMLTextAreaElement: FakeInput,
         HTMLSelectElement: FakeInput,
         getComputedStyle: (element) => element.style,
+        innerWidth: 1280,
+        innerHeight: 800,
     };
     const cursor = [];
-    const control = new RemoteControl({ win, doc, isOwn: (element) => element === own, node: (id) => nodes[id] ?? null, isMasked: masked, maskedAllowed, onCursor: (x, y) => cursor.push([x, y]), now });
+    const control = new RemoteControl({ win, doc, isOwn: (element) => element === own, node: (id) => nodes[id] ?? null, isMasked: masked, blockSelector, maskedAllowed, onCursor: (x, y) => cursor.push([x, y]), now });
 
     return { control, own, body, html, doc, cursor };
 }
@@ -592,4 +623,100 @@ test('maskedField follows the recorder: every field with mask_all_inputs, passwo
     assert.equal(maskedField(input('password'), { maskAllInputs: false }), true);
     assert.equal(maskedField(input('text', true), { maskAllInputs: false, ignoreSelector: '[data-replay-ignore]' }), true);
     assert.equal(maskedField({ tagName: 'TEXTAREA', type: '' }), true);
+});
+
+test('a password field stays one after a show-password toggle: never filled, always masked', () => {
+    const toggled = new FakeInput('input', { type: 'text', attributes: { 'data-rr-is-password': '' } });
+    const login = new FakeInput('input', { type: 'text', attributes: { autocomplete: 'current-password' } });
+    const signup = new FakeInput('input', { type: 'text', attributes: { autocomplete: 'section-signup new-password' } });
+    const email = new FakeInput('input', { type: 'text', attributes: { autocomplete: 'email' } });
+    // The visitor allowed typing into masked fields and the field is not masked: a password is still refused.
+    const { control } = controlEnv({ nodes: { 1: toggled, 2: login, 3: signup, 4: email }, masked: () => false, maskedAllowed: () => true });
+
+    assert.deepEqual(control.input(1, 'hunter2'), { refused: 'password' });
+    assert.deepEqual(control.input(2, 'hunter2'), { refused: 'password' });
+    assert.deepEqual(control.input(3, 'hunter2'), { refused: 'password' });
+    assert.deepEqual(control.input(4, 'ana@shop.test'), { ok: true });
+
+    for (const field of [toggled, login, signup]) assert.equal(maskedField(field, { maskAllInputs: false }), true);
+    assert.equal(maskedField(email, { maskAllInputs: false }), false);
+});
+
+test('nothing the agent cannot see is acted on: off-screen, hidden, skipped or blocked', () => {
+    const offscreen = new FakeInput('input', { type: 'text', rect: { left: 0, top: 900, right: 100, bottom: 920, width: 100, height: 20 } });
+    const empty = new FakeInput('input', { type: 'text', rect: { left: 0, top: 0, right: 0, bottom: 0, width: 0, height: 0 } });
+    const invisible = new FakeInput('input', { type: 'text', checkVisibility: () => false });
+    const skipRegion = new FakeElement('div', { attributes: { 'data-replay-skip': '' } });
+    const blockRegion = new FakeElement('section', { attributes: { 'data-replay-block': '' } });
+    const rrBlock = new FakeElement('div', { classes: ['rr-block'] });
+    const skipped = new FakeInput('input', { type: 'text', parentElement: skipRegion });
+    const blocked = new FakeInput('input', { type: 'text', parentElement: blockRegion });
+    const rrBlocked = new FakeInput('input', { type: 'text', parentElement: rrBlock });
+    const visible = new FakeInput('input', { type: 'text', checkVisibility: () => true });
+    const { control, doc } = controlEnv({ nodes: { 1: offscreen, 2: empty, 3: invisible, 4: skipped, 5: blocked, 6: rrBlocked, 7: visible } });
+
+    assert.deepEqual(control.focus(1), { refused: 'not_visible' });
+    assert.deepEqual(control.input(2, 'x'), { refused: 'not_visible' });
+    assert.deepEqual(control.select(3, 'x'), { refused: 'not_visible' });
+    assert.deepEqual(control.input(4, 'x'), { refused: 'blocked' });
+    assert.deepEqual(control.focus(5), { refused: 'blocked' });
+    assert.deepEqual(control.input(6, 'x'), { refused: 'blocked' });
+    assert.deepEqual(control.input(7, 'x'), { ok: true });
+    assert.equal(offscreen.focused, undefined);
+    assert.equal(skipped.value, '');
+
+    // The pointer too: a click on a blocked box does nothing; hovering over it is quiet.
+    const button = new FakeElement('button', { parentElement: blockRegion });
+
+    doc.elementFromPoint = () => button;
+    assert.deepEqual(control.click(5, 5), { refused: 'blocked' });
+    assert.deepEqual(control.move(5, 5), { ok: true });
+    assert.equal(button.events.length, 0);
+
+    // Fields the agent never sees count as masked, whatever mask_all_inputs says.
+    assert.equal(maskedField(skipped, { maskAllInputs: false }), true);
+    assert.equal(maskedField(blocked, { maskAllInputs: false, blockSelector: '[data-replay-block]' }), true);
+    assert.equal(maskedField(rrBlocked, { maskAllInputs: false }), true);
+    assert.equal(maskedField(visible, { maskAllInputs: false, blockSelector: '[data-replay-block]' }), false);
+});
+
+test('the agent\'s side closes a channel that sends more than its byte budget', async () => {
+    const [a, b] = pair();
+    let now = 0;
+    const closed = [];
+    const g = new Endpoint({ channel: b, role: 'agent', schema: FROM_VISITOR, drain: () => Promise.resolve(), rate: { bytesPerSecond: 1000, burstBytes: 3000 }, now: () => now, onClose: (why) => closed.push(why) });
+
+    g.start();
+    a.send(JSON.stringify({ t: 'hello', v: 1, role: 'visitor' }));
+
+    const css = (n) => JSON.stringify({ t: 'css', key: 'k' + n, text: 'x'.repeat(900) });
+
+    // A burst within the budget, then the budget refills with time.
+    a.send(css(1));
+    a.send(css(2));
+    a.send(css(3));
+    now += 1000;
+    a.send(css(4));
+    assert.deepEqual(closed, []);
+
+    // Faster than it refills: let go.
+    a.send(css(5));
+    assert.deepEqual(closed, ['too_fast']);
+    assert.equal(g.closed, true);
+
+    // The visitor's side and validation alone keep no budget.
+    const [c, d] = pair();
+    const v = new Endpoint({ channel: c, role: 'visitor', schema: FROM_AGENT, context: viewport, drain: () => Promise.resolve() });
+
+    v.start();
+    d.send(JSON.stringify({ t: 'hello', v: 1, role: 'agent' }));
+    for (let i = 0; i < 100; i++) d.send(JSON.stringify({ t: 'move', x: 1, y: 1 }));
+    assert.equal(v.closed, false);
+});
+
+test('a refusal carries its reason to the agent', () => {
+    assert.deepEqual(validate({ t: 'media.refused', kind: 'audio', reason: 'cooldown' }, FROM_VISITOR).message, { t: 'media.refused', kind: 'audio', reason: 'cooldown' });
+    assert.deepEqual(validate({ t: 'screen.refused', reason: 'cooldown' }, FROM_VISITOR).message, { t: 'screen.refused', reason: 'cooldown' });
+    assert.deepEqual(validate({ t: 'screen.refused' }, FROM_VISITOR).message, { t: 'screen.refused', reason: null });
+    assert.equal(validate({ t: 'media.refused', kind: 'screen', reason: 'cooldown' }, FROM_VISITOR).ok, false);
 });

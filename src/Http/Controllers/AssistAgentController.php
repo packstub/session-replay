@@ -36,7 +36,7 @@ class AssistAgentController
 
         return view('session-replay::viewer.assist', [
             'requests' => $this->assist->queue($agent),
-            'agentId' => (string) $agent->getAuthIdentifier(),
+            'agent' => $agent,
             'assist' => $this->assist,
             'visitorTimeout' => (int) config('session-replay.assist.visitor_timeout_seconds', 60),
         ]);
@@ -71,7 +71,7 @@ class AssistAgentController
         $agent = $this->agent();
         $request = $this->find($id, $agent);
 
-        abort_unless($request->agent_id === (string) $agent->getAuthIdentifier(), 403);
+        abort_unless($this->assist->holds($agent, $request), 403);
 
         if (! $request->isPending()) {
             return redirect()->route('session-replay.assist.index')->with('session-replay.assist-error', __('session-replay::viewer.assist.not_open'));
@@ -200,7 +200,7 @@ class AssistAgentController
                 'routes' => $routes,
                 'iceTransportPolicy' => $policy,
                 'reconnectTimeout' => (int) config('packstub-calls.reconnect_timeout', 15) * 1000,
-                'pollMs' => 1000,
+                'pollMs' => $this->assist->callsPollMs(),
             ],
             'video' => $this->assist->videoAllowed(),
             'csrf' => csrf_token(),

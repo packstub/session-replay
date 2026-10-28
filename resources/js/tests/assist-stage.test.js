@@ -499,3 +499,59 @@ test('stagePhase: one word for the host\'s status badge', async () => {
     assert.equal(stagePhase({ status: 'active', client: 'active', connected: true }), 'live');
     assert.equal(stagePhase({ status: 'active', client: 'active', connected: true, hidden: true }), 'hidden');
 });
+
+// ---- limits and holding the request ------------------------------------------------
+
+test('keeps a bounded number of stylesheets per channel, in keys and in characters', async () => {
+    const { MAX_LIVE_CSS_KEYS, MAX_LIVE_CSS_CHARS } = await import('../lib/assist-stage.js');
+    const live = new LiveFeed({ createReplayer: () => new FakeReplayer(), maxCssKeys: 3, maxCssChars: 100 });
+
+    assert.equal(live.css('1', 'a'.repeat(40)), true);
+    assert.equal(live.css('2', 'b'.repeat(40)), true);
+    // Past the characters: dropped, the sheet stays out.
+    assert.equal(live.css('3', 'c'.repeat(40)), false);
+    assert.equal(live.texts.has('3'), false);
+    // The same key again replaces its text and its size.
+    assert.equal(live.css('2', 'b'.repeat(10)), true);
+    assert.equal(live.css('3', 'c'.repeat(40)), true);
+    // Past the keys.
+    assert.equal(live.css('4', 'd'), false);
+    assert.equal(live.texts.size, 3);
+
+    // A new channel starts from nothing.
+    live.reset();
+    assert.equal(live.css('4', 'd'.repeat(90)), true);
+
+    assert.ok(MAX_LIVE_CSS_KEYS > 0 && MAX_LIVE_CSS_CHARS > 0);
+    assert.ok(new LiveFeed({ createReplayer: () => new FakeReplayer() }).maxCssChars === MAX_LIVE_CSS_CHARS);
+});
+
+test('the stage stops when the request is over or no longer the agent\'s', async () => {
+    const { stageStop } = await import('../lib/assist-stage.js');
+
+    assert.equal(stageStop({ status: 'active', mine: true }), null);
+    assert.equal(stageStop({ status: 'claimed', mine: true }), null);
+    assert.equal(stageStop({ status: 'ended', mine: true }), 'finished');
+    // Released back to the queue, taken by another agent, or another person under the same id.
+    assert.equal(stageStop({ status: 'open', mine: false }), 'not_mine');
+    assert.equal(stageStop({ status: 'active', mine: false }), 'not_mine');
+    assert.equal(stageStop({ status: 'active' }), 'not_mine');
+    assert.equal(stageStop(null), 'finished');
+});
+
+test('a question asked again too soon after a no says so', () => {
+    const state = new AgentState({ video: true });
+
+    state.open();
+    state.askControl();
+    assert.deepEqual(state.receive({ t: 'control.refused', reason: 'cooldown' }), [{ stopControl: true }, { note: 'cooldown' }]);
+    state.askMedia('audio');
+    assert.deepEqual(state.receive({ t: 'media.refused', kind: 'audio', reason: 'cooldown' }), [{ note: 'cooldown' }]);
+    assert.equal(state.audio, 'off');
+    state.askScreen();
+    assert.deepEqual(state.receive({ t: 'screen.refused', reason: 'cooldown' }), [{ mode: 'mirror' }, { note: 'cooldown' }]);
+    assert.deepEqual(state.receive({ t: 'screen.refused', reason: 'declined' }), [{ mode: 'mirror' }, { note: 'screen_refused' }]);
+    assert.equal(reasonKey('cooldown'), 'cooldown');
+    assert.equal(reasonKey('blocked'), 'blocked');
+    assert.equal(reasonKey('not_visible'), 'not_visible');
+});

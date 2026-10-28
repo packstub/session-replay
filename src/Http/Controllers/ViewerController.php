@@ -71,7 +71,7 @@ class ViewerController
      * (Calls installed), the request going for each recording, and who is looking (their own requests open the stage).
      *
      * @param  array<int, ReplaySession>  $sessions
-     * @return array{offer: bool, stage: bool, agent: ?string, requests: Collection<string, AssistRequest>}|null
+     * @return array{offer: bool, stage: bool, agent: ?string, holds: \Closure(AssistRequest): bool, requests: Collection<string, AssistRequest>}|null
      */
     protected function assist(array $sessions): ?array
     {
@@ -88,6 +88,8 @@ class ViewerController
             'offer' => $assist->callsAvailable(),
             'stage' => Route::has('session-replay.assist.stage'),
             'agent' => $viewer instanceof Authenticatable ? (string) $viewer->getAuthIdentifier() : null,
+            // The same check as the agent routes: key, type and guard.
+            'holds' => fn (AssistRequest $request): bool => $assist->holds($viewer, $request),
             'requests' => $ids === [] ? collect() : AssistRequest::query()->pending()->whereIn('replay_session_id', $ids)->get()->keyBy('replay_session_id'),
         ];
     }

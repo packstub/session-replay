@@ -15,6 +15,10 @@ const META = 4;
 /** How far behind the visitor the mirror plays, so a burst arriving late still plays in order. */
 export const LIVE_BUFFER_MS = 300;
 
+/** Stylesheets kept per channel: at most this many keys and characters in all; past either, a new one is dropped. */
+export const MAX_LIVE_CSS_KEYS = 1000;
+export const MAX_LIVE_CSS_CHARS = 32 * 1024 * 1024;
+
 /**
  * The live feed of one data channel into a Replayer made for it.
  *
@@ -29,6 +33,8 @@ export const LIVE_BUFFER_MS = 300;
  *   snapshot when the channel opens).
  * - reset() for a new channel: the visitor's page may have reloaded, its node
  *   ids start again, so the Replayer starts again too.
+ * - Stylesheets are capped per channel (MAX_LIVE_CSS_KEYS, MAX_LIVE_CSS_CHARS):
+ *   past the cap a new one is dropped (its events show an empty sheet).
  */
 export class LiveFeed {
     /**
@@ -38,8 +44,11 @@ export class LiveFeed {
      * @param {number} [options.bufferMs]
      * @param {() => void} [options.onStart]  the first full snapshot is in the Replayer
      */
-    constructor({ createReplayer, now = () => Date.now(), bufferMs = LIVE_BUFFER_MS, onStart = () => {} }) {
+    constructor({ createReplayer, now = () => Date.now(), bufferMs = LIVE_BUFFER_MS, onStart = () => {}, maxCssKeys = MAX_LIVE_CSS_KEYS, maxCssChars = MAX_LIVE_CSS_CHARS }) {
         this.createReplayer = createReplayer;
+        this.maxCssKeys = maxCssKeys;
+        this.maxCssChars = maxCssChars;
+        this.cssChars = 0;
         this.now = now;
         this.bufferMs = bufferMs;
         this.onStart = onStart;
@@ -54,9 +63,17 @@ export class LiveFeed {
         return this.replayer !== null;
     }
 
-    /** A `css` message: the text the events point at by this key. */
+    /** A `css` message: the text the events point at by this key. False when it is past the caps (dropped). */
     css(key, text) {
+        const previous = this.texts.get(key);
+        const chars = this.cssChars - (previous?.length ?? 0) + text.length;
+
+        if ((previous === undefined && this.texts.size >= this.maxCssKeys) || chars > this.maxCssChars) return false;
+
         this.texts.set(key, text);
+        this.cssChars = chars;
+
+        return true;
     }
 
     /** An `rr` message's event (validated already, a fresh object: it is mutated). */
@@ -103,6 +120,7 @@ export class LiveFeed {
 
         this.replayer = null;
         this.texts = new Map();
+        this.cssChars = 0;
         this.offset = null;
         this.meta = null;
         this.events = 0;
@@ -392,7 +410,7 @@ export class AgentState {
                 if (this.control === 'asking') {
                     this.control = 'off';
 
-                    return [{ stopControl: true }, { note: 'control_refused', reason: message.reason }];
+                    return [{ stopControl: true }, message.reason === 'cooldown' ? { note: 'cooldown' } : { note: 'control_refused', reason: message.reason }];
                 }
 
                 // Control stays: the visitor's page refused one action (a masked field, a password).
@@ -404,7 +422,7 @@ export class AgentState {
             case 'media.refused':
                 this[message.kind] = 'off';
 
-                return [{ note: message.kind === 'video' ? 'video_refused' : 'audio_refused' }];
+                return [{ note: message.reason === 'cooldown' ? 'cooldown' : message.kind === 'video' ? 'video_refused' : 'audio_refused' }];
             case 'media.stopped':
                 this[message.kind] = 'off';
 
@@ -419,7 +437,7 @@ export class AgentState {
                 this.screen = 'off';
                 this.mode = 'mirror';
 
-                return [{ mode: 'mirror' }, { note: message.t === 'screen.refused' ? 'screen_refused' : 'screen_stopped' }];
+                return [{ mode: 'mirror' }, { note: message.t === 'screen.stopped' ? 'screen_stopped' : message.reason === 'cooldown' ? 'cooldown' : 'screen_refused' }];
             case 'bye':
                 return [{ note: 'visitor_left' }];
             default:
@@ -450,7 +468,7 @@ export function handleVisitorMessage(message, { feed, state }) {
 }
 
 /** The label key for a reason the visitor's page gave, or 'other'. */
-export const REASONS = ['declined', 'password', 'masked', 'readonly', 'unsupported', 'own_ui', 'unknown_node', 'unknown_option', 'visitor', 'agent', 'hidden', 'navigation', 'reconnect', 'replaced', 'ended', 'unload'];
+export const REASONS = ['declined', 'cooldown', 'password', 'masked', 'blocked', 'not_visible', 'readonly', 'unsupported', 'own_ui', 'unknown_node', 'unknown_option', 'visitor', 'agent', 'hidden', 'navigation', 'reconnect', 'replaced', 'ended', 'unload'];
 
 export function reasonKey(reason) {
     return REASONS.includes(reason) ? reason : 'other';
@@ -467,6 +485,17 @@ export function ago(seconds) {
 
 /** A request that can no longer be helped with. */
 export const FINISHED = ['cancelled', 'declined', 'expired', 'withdrawn', 'ended'];
+
+/**
+ * Why the stage stops after a status poll, or null while it goes on: `finished` (the request is over) or `not_mine`
+ * (the agent no longer holds it: released, claimed by someone else, or another person under the same id).
+ */
+export function stageStop(data) {
+    if (!data || FINISHED.includes(data.status)) return 'finished';
+    if (data.mine !== true) return 'not_mine';
+
+    return null;
+}
 
 /**
  * One word for where the stage is, for a host that colours its own status badge (the

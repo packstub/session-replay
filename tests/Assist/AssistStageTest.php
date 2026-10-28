@@ -222,3 +222,17 @@ it('serves the stage script and stylesheet', function () {
     $this->get(SessionReplay::scriptUrl('stage.js'))->assertOk()->assertHeader('Content-Type', 'application/javascript; charset=utf-8');
     $this->get(SessionReplay::scriptUrl('stage.css'))->assertOk()->assertHeader('Content-Type', 'text/css; charset=utf-8');
 });
+
+it('polls Calls from the stage as often as Calls says', function () {
+    $this->needsCalls();
+
+    [, $asked, $agent] = $this->claimed();
+    $stage = route('session-replay.assist.stage', $asked['id']);
+
+    config()->set('packstub-calls.poll.active', 1500);
+    expect(stageConfig($this->actingAs($agent)->get($stage))['calls']['pollMs'])->toBe(1500);
+
+    // Kept in a sane range.
+    config()->set('packstub-calls.poll.active', 5);
+    expect(stageConfig($this->get($stage))['calls']['pollMs'])->toBe(250);
+});

@@ -6,9 +6,14 @@
  * no user activation, so the browser itself refuses popups, file pickers, the
  * clipboard and fullscreen; nothing here works around that.
  *
- * Refused always: password fields, the Assist UI itself, file inputs. Refused
- * unless the visitor allowed it separately: typing into a field the agent sees
- * masked (`maskedAllowed()`). The visitor always wins: any real pointer or key
+ * Refused always: password fields (also one a show-password toggle switched to
+ * text: rrweb's data-rr-is-password, or autocomplete current-password /
+ * new-password), the Assist UI itself, file inputs, and anything the agent
+ * cannot see: an element off-screen or hidden, or inside a region left out of
+ * the recording (data-replay-skip) or recorded as an empty box
+ * (privacy.block_selector, rrweb's .rr-block). Refused unless the visitor
+ * allowed it separately: typing into a field the agent sees masked
+ * (`maskedAllowed()`). The visitor always wins: any real pointer or key
  * activity pauses the agent for a second (`visitorActivity()`).
  *
  * Everything the DOM offers is passed in (`win`, `doc`), so it runs in Node
@@ -18,6 +23,47 @@
 const PAUSE_MS = 1000;
 const NOT_TYPABLE = new Set(['button', 'checkbox', 'radio', 'file', 'submit', 'image', 'reset', 'hidden', 'range', 'color']);
 const FOCUSABLE = 'input, textarea, select, button, a[href], [tabindex], [contenteditable]';
+const PASSWORD_AUTOCOMPLETE = ['current-password', 'new-password'];
+// Always out of the agent's sight: the recorder drops these subtrees (skip) or keeps an empty box (rrweb's own block class).
+const ALWAYS_HIDDEN = '[data-replay-skip], .rr-block';
+
+/**
+ * A password field, also once a show-password toggle made it `type="text"`: rrweb marks a field it saw as a
+ * password with data-rr-is-password, and a login or sign-up form names it in autocomplete.
+ */
+export function isPasswordField(element) {
+    if (String(element?.tagName || '').toLowerCase() !== 'input') return false;
+    if (String(element.type || '').toLowerCase() === 'password') return true;
+    if (element.hasAttribute?.('data-rr-is-password')) return true;
+
+    const autocomplete = String(element.getAttribute?.('autocomplete') ?? element.autocomplete ?? '').toLowerCase();
+
+    return autocomplete.split(/\s+/).some((token) => PASSWORD_AUTOCOMPLETE.includes(token));
+}
+
+/** closest() across open shadow roots; a selector the browser refuses counts as a match (fail closed). */
+function insideSelector(element, selector) {
+    let current = element;
+
+    try {
+        while (current) {
+            if (current.closest?.(selector)) return true;
+
+            const root = current.getRootNode?.();
+
+            current = root && root !== current && root.host ? root.host : null;
+        }
+    } catch {
+        return true;
+    }
+
+    return false;
+}
+
+/** Inside a region the agent never sees: data-replay-skip, rrweb's .rr-block or privacy.block_selector. */
+export function hiddenRegion(element, blockSelector = null) {
+    return insideSelector(element, ALWAYS_HIDDEN) || (!!blockSelector && insideSelector(element, blockSelector));
+}
 
 export class RemoteControl {
     /**
@@ -27,12 +73,14 @@ export class RemoteControl {
      * @param {(element: Element) => boolean} options.isOwn  inside the Assist UI
      * @param {(id: number) => Node|null} options.node  rrweb's mirror
      * @param {(element: Element) => boolean} options.isMasked  the agent sees this field's value masked
+     * @param {string|null} [options.blockSelector]  privacy.block_selector: recorded as empty boxes, never acted on
      * @param {() => boolean} [options.maskedAllowed]  the visitor allowed typing into masked fields
      * @param {(x: number, y: number) => void} [options.onCursor]
      * @param {() => number} [options.now]
      */
-    constructor({ win, doc, isOwn, node, isMasked, maskedAllowed = () => false, onCursor = () => {}, now = () => Date.now() }) {
+    constructor({ win, doc, isOwn, node, isMasked, blockSelector = null, maskedAllowed = () => false, onCursor = () => {}, now = () => Date.now() }) {
         this.win = win;
+        this.blockSelector = blockSelector;
         this.doc = doc;
         this.isOwn = isOwn;
         this.node = node;
@@ -105,13 +153,36 @@ export class RemoteControl {
         if (!element) return { refused: 'nothing' };
         if (this.isOwn(element)) return { refused: 'own_ui' };
 
-        return { element };
+        const unseen = this.unseen(element);
+
+        return unseen ? { refused: unseen } : { element };
+    }
+
+    /**
+     * Why the agent cannot see this element, or null: inside a skipped or blocked region ('blocked'), or not on
+     * the visitor's screen ('not_visible': no box inside the viewport, or hidden by CSS).
+     */
+    unseen(element) {
+        if (hiddenRegion(element, this.blockSelector)) return 'blocked';
+        if (typeof element.getBoundingClientRect !== 'function') return 'not_visible';
+
+        const rect = element.getBoundingClientRect();
+        const width = this.win.innerWidth ?? this.doc.documentElement?.clientWidth ?? 0;
+        const height = this.win.innerHeight ?? this.doc.documentElement?.clientHeight ?? 0;
+
+        if (!(rect.width > 0 || rect.height > 0) || rect.right <= 0 || rect.bottom <= 0 || rect.left >= width || rect.top >= height) return 'not_visible';
+
+        // Opacity is left alone: a transparent input over a styled label is what the visitor clicks.
+        if (typeof element.checkVisibility === 'function' && !element.checkVisibility({ visibilityProperty: true, checkVisibilityCSS: true })) return 'not_visible';
+
+        return null;
     }
 
     move(x, y) {
         const { element, ...result } = this.target(x, y);
 
-        if (!element) return result.refused === 'own_ui' || result.refused === 'nothing' ? { ok: true } : result;
+        // Hovering over what the agent may not touch is quiet: only an action there is refused.
+        if (!element) return result.refused ? { ok: true } : result;
 
         if (element !== this.hovered) {
             if (this.hovered) {
@@ -169,7 +240,7 @@ export class RemoteControl {
         if (!this.dragging) return { refused: 'not_dragging' };
 
         const element = this.hit(this.x, this.y);
-        const target = element && !this.isOwn(element) ? element : this.dragging;
+        const target = element && !this.isOwn(element) && !this.unseen(element) ? element : this.dragging;
 
         this.dragging = null;
         this.fire(target, 'pointerup');
@@ -184,7 +255,7 @@ export class RemoteControl {
 
         let element = this.hit(this.x, this.y);
 
-        if (element && this.isOwn(element)) element = null;
+        if (element && (this.isOwn(element) || this.unseen(element))) element = null;
 
         while (element && element !== this.doc.body && element !== this.doc.documentElement) {
             if (this.scrolls(element, dx, dy)) {
@@ -217,7 +288,9 @@ export class RemoteControl {
         if (!node || node.nodeType !== 1) return { refused: 'unknown_node' };
         if (this.isOwn(node)) return { refused: 'own_ui' };
 
-        return { element: node };
+        const unseen = this.unseen(node);
+
+        return unseen ? { refused: unseen } : { element: node };
     }
 
     focus(id) {
@@ -233,7 +306,7 @@ export class RemoteControl {
 
     /** Whether the agent may type into this element: { refused } or null. */
     typable(element, tag) {
-        if (tag === 'input' && String(element.type || '').toLowerCase() === 'password') return { refused: 'password' };
+        if (isPasswordField(element)) return { refused: 'password' };
         if (tag === 'input' && NOT_TYPABLE.has(String(element.type || '').toLowerCase())) return { refused: 'unsupported' };
         if (tag !== 'input' && tag !== 'textarea' && tag !== 'select') return { refused: 'unsupported' };
         if (element.disabled || element.readOnly) return { refused: 'readonly' };
@@ -330,19 +403,19 @@ function scrollBy(element, dx, dy) {
 /**
  * Whether the agent sees this field's value masked: what rrweb masks with the
  * recorder's options (every input, textarea and select with
- * privacy.mask_all_inputs; passwords, hidden and file inputs always), and
- * fields inside privacy.ignore_selector, whose typing is never recorded.
+ * privacy.mask_all_inputs; passwords, also one shown as text, and hidden and
+ * file inputs always), fields inside privacy.ignore_selector, whose typing is
+ * never recorded, and fields inside a skipped or blocked region, which the
+ * agent does not see at all.
  */
-export function maskedField(element, { maskAllInputs = true, ignoreSelector = null } = {}) {
+export function maskedField(element, { maskAllInputs = true, ignoreSelector = null, blockSelector = null } = {}) {
     const tag = String(element.tagName || '').toLowerCase();
     const type = String(element.type || '').toLowerCase();
 
-    if (tag === 'input' && ['password', 'hidden', 'file'].includes(type)) return true;
+    if (isPasswordField(element)) return true;
+    if (tag === 'input' && ['hidden', 'file'].includes(type)) return true;
     if (maskAllInputs && ['input', 'textarea', 'select'].includes(tag)) return true;
+    if (hiddenRegion(element, blockSelector)) return true;
 
-    try {
-        return !!(ignoreSelector && element.closest?.(ignoreSelector));
-    } catch {
-        return true;
-    }
+    return !!ignoreSelector && insideSelector(element, ignoreSelector);
 }

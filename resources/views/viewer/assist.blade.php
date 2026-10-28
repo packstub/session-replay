@@ -35,7 +35,7 @@
                 </thead>
                 <tbody>
                     @foreach ($requests as $request)
-                        @php($mine = $request->agent_id === $agentId)
+                        @php($mine = $assist->holds($agent, $request))
                         <tr>
                             <td>{{ $assist->userLabel($request) }}</td>
                             {{-- The visitor's own words: escaped text, never markup. --}}

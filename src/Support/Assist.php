@@ -5,6 +5,7 @@ namespace Packstub\SessionReplay\Support;
 use Illuminate\Contracts\Auth\Authenticatable;
 use Illuminate\Contracts\Auth\UserProvider;
 use Illuminate\Database\Connection;
+use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Collection;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\Relation;
@@ -48,6 +49,14 @@ class Assist
     public function enabled(): bool
     {
         return (bool) config('session-replay.assist.enabled', false);
+    }
+
+    /** How often the agent's stage polls Calls during the call: Calls' own `poll.active` (ms), kept between 250 ms and 10 s. */
+    public function callsPollMs(): int
+    {
+        $ms = config('packstub-calls.poll.active');
+
+        return is_numeric($ms) ? (int) min(10_000, max(250, (int) $ms)) : 1000;
     }
 
     /** Whether Calls lets a call carry video (its `video` setting, through the context). */
@@ -368,11 +377,9 @@ class Assist
     {
         $this->sweep();
 
-        $me = (string) $agent->getAuthIdentifier();
-
         return AssistRequest::query()
             ->pending()
-            ->where(fn ($query) => $query->whereIn('status', [AssistRequest::OPEN, AssistRequest::CLAIMED])->orWhere('agent_id', $me))
+            ->where(fn ($query) => $query->whereIn('status', [AssistRequest::OPEN, AssistRequest::CLAIMED])->orWhere(fn ($mine) => $this->whereHolder($mine, $agent)))
             ->when($this->agentTenant(), fn ($query, Model $tenant) => $query->where('tenant_type', $tenant->getMorphClass())->where('tenant_id', (string) $tenant->getKey()))
             ->where(function ($query) use ($agent): void {
                 // A request without a recording has nothing for visibleUsing() to look at: with a rule there, it is
@@ -519,7 +526,7 @@ class Assist
     {
         $this->expire($request);
 
-        if ($request->isPending() && $request->agent_id === (string) $agent->getAuthIdentifier()) {
+        if ($request->isPending() && $this->holds($agent, $request)) {
             AssistRequest::query()->whereKey($request->getKey())->update(['agent_seen_at' => now()]);
             $request->refresh();
         }
@@ -735,8 +742,6 @@ class Assist
      */
     public function presentForAgent(AssistRequest $request, mixed $agent): array
     {
-        $me = $agent instanceof Authenticatable ? (string) $agent->getAuthIdentifier() : null;
-
         return [
             'id' => $request->id,
             'status' => $request->status,
@@ -747,7 +752,7 @@ class Assist
             'message' => $request->message,
             'page_url' => $request->page_url,
             'agent' => $request->agent_id === null ? null : ['id' => $request->agent_id, 'name' => $request->agent_name],
-            'mine' => $me !== null && $request->agent_id === $me,
+            'mine' => $this->holds($agent, $request),
             'call' => $request->call_id,
             'visitor_here' => $request->visitorIsHere(),
             'visitor_seen_ago' => $request->visitor_seen_at === null ? null : (int) max(0, $request->visitor_seen_at->diffInSeconds(now())),
@@ -987,10 +992,46 @@ class Assist
         }
     }
 
+    /**
+     * Whether this agent holds the request (claimed or proposed it): the same key, the same type (Admin #12 is not
+     * User #12) and the guard they claimed through, the one the viewer authenticates with now.
+     */
+    public function holds(mixed $agent, AssistRequest $request): bool
+    {
+        return $agent instanceof Authenticatable
+            && $request->agent_id !== null
+            && $request->agent_id === (string) $agent->getAuthIdentifier()
+            && $request->agent_type === self::typeOf($agent)
+            && $request->agent_guard === self::guardName();
+    }
+
+    /**
+     * The requests this agent holds, as holds() asks it, for a query.
+     *
+     * @param  Builder<AssistRequest>  $query
+     * @return Builder<AssistRequest>
+     */
+    public function whereHolder(Builder $query, Authenticatable $agent): Builder
+    {
+        $guard = self::guardName();
+
+        return $query->where('agent_id', (string) $agent->getAuthIdentifier())
+            ->where('agent_type', self::typeOf($agent))
+            ->when($guard === null, fn (Builder $query) => $query->whereNull('agent_guard'), fn (Builder $query) => $query->where('agent_guard', $guard));
+    }
+
+    /** The guard the viewer authenticates agents with (viewer.guard, or the default), as a claim stores it. */
+    protected static function guardName(): ?string
+    {
+        $guard = config('session-replay.viewer.guard') ?? Auth::getDefaultDriver();
+
+        return is_string($guard) ? Str::limit($guard, 64, '') : null;
+    }
+
     /** @throws AssistRefused */
     protected function assertHolder(Authenticatable $agent, AssistRequest $request): void
     {
-        if ($request->agent_id !== (string) $agent->getAuthIdentifier()) {
+        if (! $this->holds($agent, $request)) {
             throw new AssistRefused(403, __('session-replay::viewer.assist.not_yours'), 'not_allowed');
         }
     }
@@ -1028,12 +1069,10 @@ class Assist
         // The visitor's widget shows an avatar only as an http(s) image.
         $avatar = is_string($avatar) && preg_match('~^https?://~i', $avatar) === 1 && strlen($avatar) <= 2000 ? $avatar : null;
 
-        $guard = config('session-replay.viewer.guard') ?? Auth::getDefaultDriver();
-
         return [
             'agent_id' => (string) $agent->getAuthIdentifier(),
             'agent_type' => self::typeOf($agent),
-            'agent_guard' => is_string($guard) ? Str::limit($guard, 64, '') : null,
+            'agent_guard' => self::guardName(),
             'agent_scope' => $this->callsAvailable() ? app(Calls::class)->scope() : null,
             'agent_name' => $name,
             'agent_avatar' => $avatar,

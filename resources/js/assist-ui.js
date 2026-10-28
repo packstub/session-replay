@@ -28,6 +28,7 @@ button { font: inherit; font-weight: 500; padding: 7px 13px; border-radius: 8px;
 button.primary { border-color: #2563eb; background: #2563eb; color: #fff; }
 button.danger { border-color: #dc2626; background: #dc2626; color: #fff; }
 button:focus-visible, textarea:focus-visible { outline: 2px solid #2563eb; outline-offset: 2px; }
+button:disabled { opacity: 0.6; cursor: default; }
 .launcher { pointer-events: auto; border: 0; border-radius: 999px; padding: 10px 16px; background: #2563eb; color: #fff; font-weight: 600; box-shadow: 0 8px 24px rgba(37, 99, 235, 0.35); }
 label { display: block; margin: 10px 0 6px; font-size: 13px; color: #334155; }
 textarea { box-sizing: border-box; width: 100%; min-height: 72px; padding: 8px; border: 1px solid #cbd5e1; border-radius: 8px; font: inherit; color: inherit; background: transparent; resize: vertical; }
@@ -46,6 +47,8 @@ textarea { box-sizing: border-box; width: 100%; min-height: 72px; padding: 8px; 
 const ARROW = '<svg viewBox="0 0 20 20" aria-hidden="true"><path d="M3 2l13 7-6 1.5L7.5 17z" fill="#2563eb" stroke="#fff" stroke-width="1.5" stroke-linejoin="round"/></svg>';
 
 const FADE_AFTER_MS = 4000;
+// A prompt takes no answer this soon after it shows: a visitor typing on the page must not grant with Space or Enter.
+export const PROMPT_ARM_MS = 500;
 const FADE_MS = 600;
 const STROKE_TIMEOUT_MS = 10_000;
 
@@ -58,7 +61,7 @@ export function label(labels, key, name = '') {
     return String(labels[key] ?? key).replace(/:name/g, name);
 }
 
-export function createUi({ doc = document, win = window, labels }) {
+export function createUi({ doc = document, win = window, labels, now = () => Date.now() }) {
     const host = doc.createElement('div');
 
     host.setAttribute('data-replay-skip', '');
@@ -97,6 +100,8 @@ export function createUi({ doc = document, win = window, labels }) {
     remote.playsInline = true;
     remote.setAttribute('playsinline', '');
     promptCard.hidden = true;
+    // Focusable itself: a new question takes the focus to the card, never to Allow.
+    promptCard.tabIndex = -1;
     promptCard.setAttribute('role', 'alertdialog');
     promptCard.setAttribute('aria-label', label(labels, 'dialog'));
     panel.hidden = true;
@@ -157,24 +162,38 @@ export function createUi({ doc = document, win = window, labels }) {
 
         const row = actions(
             [
-                { label: current.allow, kind: 'primary', onClick: () => answer(true) },
-                { label: current.deny, onClick: () => answer(false) },
+                { label: current.allow, kind: 'primary', onClick: () => answer(true, true) },
+                { label: current.deny, onClick: () => answer(false, true) },
             ],
             promptCard,
         );
 
-        row.querySelector('button')?.focus({ preventScroll: true });
+        // The card, not Allow: a key the visitor was pressing on the page must not answer it. The alertdialog role
+        // and aria-describedby have screen readers read the question; Tab reaches the buttons, which take a press
+        // only after PROMPT_ARM_MS (disabled until then, and answer() checks the time too).
+        const shown = current;
+        const buttons = row.children ? [...row.children] : [];
+
+        shown.shownAt = now();
+        for (const button of buttons) button.disabled = true;
+        shown.arm = setTimeout(() => {
+            for (const button of buttons) button.disabled = false;
+        }, PROMPT_ARM_MS);
+        promptCard.focus({ preventScroll: true });
 
         if (current.timeoutMs > 0) current.timer = setTimeout(() => answer(false), current.timeoutMs);
     }
 
-    function answer(yes) {
+    /** `byVisitor`: a click on a button, ignored for PROMPT_ARM_MS after the prompt shows. */
+    function answer(yes, byVisitor = false) {
         if (!current) return;
+        if (byVisitor && now() - current.shownAt < PROMPT_ARM_MS) return;
 
         const done = current;
 
         current = null;
         clearTimeout(done.timer);
+        clearTimeout(done.arm);
         promptCard.hidden = true;
         promptCard.replaceChildren();
         done.resolve(yes);
