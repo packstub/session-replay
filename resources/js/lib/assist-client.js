@@ -1,4 +1,7 @@
 import { CallClient } from '@packstub/calls';
+import { workerTimers } from './worker-timers.js';
+
+export { workerTimers };
 
 /**
  * What both sides of Assist run the engine with: a CallClient whose poll loop
@@ -7,70 +10,6 @@ import { CallClient } from '@packstub/calls';
  * look like a drop to the other side. The visitor's page (assist.js) and the
  * agent's stage (stage.js) both use it.
  */
-
-function nativeTimers() {
-    return { set: (fn, ms) => setTimeout(fn, ms), clear: (id) => clearTimeout(id) };
-}
-
-/** setTimeout in a Web Worker (not throttled in a hidden tab); plain timers where a CSP or the browser refuses one. */
-export function workerTimers() {
-    if (typeof Worker === 'undefined' || typeof Blob === 'undefined' || typeof URL?.createObjectURL !== 'function') return nativeTimers();
-
-    const pending = new Map();
-    let broken = false;
-    let next = 1;
-    let worker;
-
-    const fallBack = () => {
-        if (broken) return;
-
-        broken = true;
-
-        // What was waiting in the worker runs on plain timers.
-        for (const [id, entry] of pending) entry.native = setTimeout(() => run(id), Math.max(0, entry.at - Date.now()));
-    };
-
-    const run = (id) => {
-        const entry = pending.get(id);
-
-        pending.delete(id);
-        entry?.fn();
-    };
-
-    try {
-        const source = 'const t=new Map();onmessage=({data:d})=>{if(d.clear){clearTimeout(t.get(d.id));t.delete(d.id);return}t.set(d.id,setTimeout(()=>{t.delete(d.id);postMessage(d.id)},d.ms))}';
-
-        worker = new Worker(URL.createObjectURL(new Blob([source], { type: 'text/javascript' })));
-        worker.onmessage = ({ data }) => run(data);
-        worker.onerror = fallBack;
-    } catch {
-        return nativeTimers();
-    }
-
-    return {
-        set(fn, ms) {
-            const id = next++;
-            const entry = { fn, at: Date.now() + ms, native: null };
-
-            pending.set(id, entry);
-
-            if (broken) entry.native = setTimeout(() => run(id), ms);
-            else worker.postMessage({ id, ms });
-
-            return id;
-        },
-        clear(id) {
-            const entry = pending.get(id);
-
-            if (!entry) return;
-
-            pending.delete(id);
-
-            if (entry.native !== null) clearTimeout(entry.native);
-            else if (!broken) worker.postMessage({ id, clear: true });
-        },
-    };
-}
 
 /** The engine's client, its poll loop on the worker timer. `schedule` and `stop` are internal to the engine; this copy is bundled. */
 export class AssistClient extends CallClient {

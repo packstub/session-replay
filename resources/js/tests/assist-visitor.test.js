@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { installAssist } from '../assist.js';
+import { installAssist } from '../lib/assist-visitor.js';
 import { Endpoint, FROM_VISITOR } from '../lib/assist-protocol.js';
 
 /*
@@ -218,7 +218,7 @@ async function live({ stored = {}, video = false } = {}) {
         tab: 'tab-1',
     };
 
-    installAssist(recorder, { ui, timers, Client: FakeClient, fetch, now: () => clock });
+    installAssist(recorder, { ui, timers, Client: FakeClient, drain: async () => {}, fetch, now: () => clock });
 
     // The reload's first poll finds the call; the client joins it.
     await timers.run();
@@ -376,4 +376,9 @@ test('the agent stopping the visitor\'s screen share is logged as the screen gra
     assert.equal(page.client.sharing, false);
     assert.deepEqual(page.grants.filter(([kind]) => kind === 'screen'), [['screen', true], ['screen', false]]);
     assert.deepEqual(page.said().at(-1), { t: 'screen.stopped' });
+});
+
+test('the visitor code takes the engine by injection and refuses to run without one', () => {
+    assert.throws(() => installAssist({ config: () => ({}) }, {}), /calls engine/);
+    assert.throws(() => installAssist({ config: () => ({}) }), /calls engine/);
 });
