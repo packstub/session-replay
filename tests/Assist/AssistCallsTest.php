@@ -493,3 +493,29 @@ it('takes no accept while the request waits for its agent to come back, consent 
     expect(Call::query()->count())->toBe($calls)
         ->and(AssistRequest::query()->sole()->status)->toBe('claimed');
 });
+
+it('revokes in the log what the visitor allowed when the agent is gone, and the marker counts it to then', function () {
+    [$browser, $asked] = $this->agentLeavesTheLiveView();
+    AssistRequest::query()->update(['opened_by' => AssistRequest::BY_AGENT]);
+    $this->visitorPost('grants', $asked['id'], $asked['secret'], $browser['token'], ['kind' => 'audio', 'granted' => true])->assertOk();
+
+    $this->travel(31)->seconds();
+    $this->poll($asked['id'], $asked['secret'], $browser['token'], ['tab' => 'tab-1'])->assertJson(['status' => 'ended', 'end_reason' => 'agent_left']);
+
+    $request = AssistRequest::query()->sole();
+    expect(collect($request->grants)->last())->toMatchArray(['kind' => 'audio', 'granted' => false, 'by' => 'server', 'reason' => 'agent_left']);
+
+    // Long after, the marker still says the audio was on for those 31 seconds only.
+    $marker = ReplayMarker::query()->where('type', 'assist')->sole();
+    expect(json_encode($marker->payload))->toContain('audio 31 s');
+});
+
+it('revokes what the visitor allowed when a lapsed claim goes back to the list', function () {
+    [$browser, $asked] = $this->agentLeavesTheLiveView();
+    $this->visitorPost('grants', $asked['id'], $asked['secret'], $browser['token'], ['kind' => 'video', 'granted' => true])->assertOk();
+
+    $this->travel(31)->seconds();
+    $this->poll($asked['id'], $asked['secret'], $browser['token'], ['tab' => 'tab-1'])->assertJson(['status' => 'open']);
+
+    expect(collect(AssistRequest::query()->sole()->grants)->last())->toMatchArray(['kind' => 'video', 'granted' => false, 'by' => 'server', 'reason' => 'unclaimed']);
+});

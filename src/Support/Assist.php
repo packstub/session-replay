@@ -332,6 +332,28 @@ class Assist
     }
 
     /**
+     * The agent is gone (the request ended, or went back to the list): every grant the visitor left on is
+     * revoked in the log, by the server, since the visitor's page may only hear of it once the request is no
+     * longer live. Consent belongs to the agent it was given to. Returns true, for use in a condition.
+     */
+    protected function revokeGrants(AssistRequest $request, string $reason): bool
+    {
+        $on = [];
+
+        foreach ((array) $request->grants as $grant) {
+            if (is_array($grant) && is_string($grant['kind'] ?? null) && is_bool($grant['granted'] ?? null) && in_array($grant['by'] ?? null, ['visitor', 'server'], true)) {
+                $on[$grant['kind']] = $grant['granted'];
+            }
+        }
+
+        foreach (array_keys(array_filter($on)) as $kind) {
+            $this->log($request, ['kind' => $kind, 'granted' => false, 'by' => 'server', 'reason' => Str::limit($reason, 32, ''), 'at' => now()->toIso8601String()]);
+        }
+
+        return true;
+    }
+
+    /**
      * Append an entry to the request's grants log (capped at MAX_GRANTS, the oldest dropped).
      *
      * @param  array<string, mixed>  $entry
@@ -574,7 +596,8 @@ class Assist
 
         $done = $request->openedByAgent()
             ? $this->finish($request, [AssistRequest::OPEN], AssistRequest::WITHDRAWN, 'withdrawn')
-            : $request->transition([AssistRequest::CLAIMED], AssistRequest::OPEN, AssistRequest::UNCLAIMED);
+            : $request->transition([AssistRequest::CLAIMED], AssistRequest::OPEN, AssistRequest::UNCLAIMED)
+                && $this->revokeGrants($request, 'withdrawn');
 
         if (! $done) {
             throw new AssistRefused(409, __('session-replay::viewer.assist.not_open'), 'state');
@@ -673,7 +696,9 @@ class Assist
 
                 // The page never heard of the claim, or the agent who left the live view did not come back in time:
                 // someone else may take it.
-                $request->transition([AssistRequest::CLAIMED], AssistRequest::OPEN, AssistRequest::UNCLAIMED);
+                if ($request->transition([AssistRequest::CLAIMED], AssistRequest::OPEN, AssistRequest::UNCLAIMED)) {
+                    $this->revokeGrants($request, 'unclaimed');
+                }
 
                 return $this->expire($request);
             }
@@ -793,6 +818,7 @@ class Assist
             }
         }
 
+        $this->revokeGrants($request, $reason);
         $this->mark($request);
 
         AssistEnded::dispatch($request);
@@ -1293,7 +1319,14 @@ class Assist
         $endMs = (int) $end->format('Uv');
 
         foreach ((array) $request->grants as $grant) {
-            if (! is_array($grant) || ($grant['by'] ?? null) !== 'visitor' || ! is_bool($grant['granted'] ?? null) || ! is_string($grant['kind'] ?? null)) {
+            if (! is_array($grant) || ! is_bool($grant['granted'] ?? null) || ! is_string($grant['kind'] ?? null)) {
+                continue;
+            }
+
+            // The visitor's own answers, and the revocations the server writes when the agent is gone.
+            $by = $grant['by'] ?? null;
+
+            if (! ($by === 'visitor' || ($by === 'server' && $grant['granted'] === false))) {
                 continue;
             }
 
