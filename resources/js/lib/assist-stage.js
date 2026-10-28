@@ -467,3 +467,20 @@ export function ago(seconds) {
 
 /** A request that can no longer be helped with. */
 export const FINISHED = ['cancelled', 'declined', 'expired', 'withdrawn', 'ended'];
+
+/**
+ * One word for where the stage is, for a host that colours its own status badge (the
+ * `session-replay:stage` event carries it): `ended`, `unavailable` (no Calls, no routes or
+ * another protocol version), `waiting` (an offer or a claim the visitor's page has not taken up
+ * yet), `connecting`, `reconnecting`, `hidden` (live, the visitor's tab in the background) or `live`.
+ */
+export function stagePhase({ finished = false, status = null, calls = true, routes = true, version = false, client = null, connected = false, hidden = false } = {}) {
+    if (finished || FINISHED.includes(status)) return 'ended';
+    if (!calls || !routes || version) return 'unavailable';
+    if (status === 'open' || status === 'claimed') return 'waiting';
+    if (status !== 'active') return 'ended';
+    if (client === 'reconnecting') return 'reconnecting';
+    if (!client || ['idle', 'connecting', 'calling'].includes(client) || !connected) return 'connecting';
+
+    return hidden ? 'hidden' : 'live';
+}

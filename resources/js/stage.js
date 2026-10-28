@@ -4,7 +4,7 @@ import './stage.css';
 import { HttpSignaling, drain } from '@packstub/calls';
 import { AssistClient, workerTimers } from './lib/assist-client.js';
 import { CHANNEL_LABEL, Endpoint, FROM_VISITOR } from './lib/assist-protocol.js';
-import { AgentState, FINISHED, Gesture, LiveFeed, ago, editable, handleVisitorMessage, reasonKey, stageDelta, stagePoint } from './lib/assist-stage.js';
+import { AgentState, FINISHED, Gesture, LiveFeed, ago, editable, handleVisitorMessage, reasonKey, stageDelta, stagePhase, stagePoint } from './lib/assist-stage.js';
 
 /**
  * The agent's live stage in the built-in viewer ({path}/assist/requests/{id}/stage):
@@ -20,6 +20,15 @@ import { AgentState, FINISHED, Gesture, LiveFeed, ago, editable, handleVisitorMe
  * status is polled from Session Replay's agent route; when it ends, everything
  * stops. Mounted on [data-session-replay-stage]; its data-config is the JSON
  * the Blade view writes.
+ *
+ * A host page may bring its own markup (the Filament package renders its
+ * buttons with the panel's components): the script only looks for the
+ * data-ref, data-action and data-why attributes inside the root, writes a
+ * button's label into its [data-label] element when it has one (else the whole
+ * button), and dispatches `session-replay:stage` on the root after every
+ * render with the state and a one-word `phase`. In a panel that navigates with
+ * wire:navigate the stage leaves the call on `livewire:navigating` (like a page
+ * unload: the request stays the agent's) and mounts again on `livewire:navigated`.
  */
 
 const STATUS_POLL_MS = 2000;
@@ -30,6 +39,11 @@ const NOTES = 6;
 
 function fill(text, values = {}) {
     return String(text ?? '').replace(/:([a-z_]+)/g, (match, key) => (key in values ? String(values[key]) : match));
+}
+
+/** A button's label: its [data-label] element when the host's markup has one (an icon beside the text), else the button. */
+function setLabel(element, text) {
+    (element.querySelector('[data-label]') ?? element).textContent = text;
 }
 
 function mountStage(root) {
@@ -84,6 +98,7 @@ function mountStage(root) {
     let replayer = null;
     let drawing = false;
     let finished = false;
+    let destroyed = false;
     let statusTimer = null;
     let editing = null;
     const ink = { strokes: [], current: null, frame: null };
@@ -190,7 +205,7 @@ function mountStage(root) {
         button.hidden = hidden;
         button.disabled = why !== null;
 
-        if (label !== null) button.textContent = label;
+        if (label !== null) setLabel(button, label);
         if (pressed !== null) button.setAttribute('aria-pressed', String(pressed));
 
         const hint = root.querySelector(`[data-why="${name}"]`);
@@ -243,7 +258,7 @@ function mountStage(root) {
         const talking = state.audio === 'on' || state.video === 'on';
 
         els.audiobar.hidden = !talking || finished;
-        els.mute.textContent = client?.muted ? t('buttons.unmute') : t('buttons.mute');
+        setLabel(els.mute, client?.muted ? t('buttons.unmute') : t('buttons.mute'));
         els.mute.setAttribute('aria-pressed', String(!!client?.muted));
 
         // The view: the mirror, or the visitor's screen as incoming video.
@@ -264,6 +279,16 @@ function mountStage(root) {
         els.screen.classList.toggle('is-controlling', state.control === 'on' && !screen);
 
         if (state.control !== 'on') closeEditor();
+
+        root.dispatchEvent(new CustomEvent('session-replay:stage', { detail: snapshot() }));
+    }
+
+    function phase() {
+        return stagePhase({ finished, status: request.status, calls: state.calls, routes: state.routes, version: state.version, client: client?.state ?? null, connected: state.connected, hidden: state.hidden });
+    }
+
+    function snapshot() {
+        return { phase: phase(), request: request.status, call: client?.state ?? null, connected: state.connected, control: state.control, audio: state.audio, video: state.video, screen: state.screen, mode: state.mode, drawing, events: feed.events, finished };
     }
 
     // ---- the agent's routes -----------------------------------------------------
@@ -311,6 +336,9 @@ function mountStage(root) {
     }
 
     function update(data) {
+        // A poll that was under way when the page went away (wire:navigate) changes nothing.
+        if (destroyed) return;
+
         const before = request.status;
 
         request = data;
@@ -904,11 +932,28 @@ function mountStage(root) {
 
     // ---- the page ---------------------------------------------------------------
 
-    window.addEventListener('resize', () => fit());
-    window.addEventListener('pagehide', () => {
-        // The agent's side of the call is free for the next page (a reload picks it up again).
-        client?.leave();
-    });
+    const onResize = () => fit();
+    // The agent's side of the call is free for the next page (a reload picks it up again).
+    const onPageHide = () => client?.leave();
+
+    window.addEventListener('resize', onResize);
+    window.addEventListener('pagehide', onPageHide);
+
+    /** The page goes away without unloading (wire:navigate): leave the call as on pagehide and stop; the request stays the agent's. */
+    function destroy() {
+        if (destroyed) return;
+
+        destroyed = true;
+        finished = true;
+        timers.clear(statusTimer);
+        closeChannel('unload');
+        // destroy() sends the leave beacon, never a hang-up.
+        dropClient();
+        window.removeEventListener('resize', onResize);
+        window.removeEventListener('pagehide', onPageHide);
+        root.sessionReplayStageMounted = false;
+    }
+
 
     sizeInk();
     render();
@@ -922,11 +967,12 @@ function mountStage(root) {
     // For an app's own scripts and the end-to-end test: what the stage is doing.
     root.sessionReplayStage = {
         get state() {
-            return { request: request.status, call: client?.state ?? null, connected: state.connected, control: state.control, audio: state.audio, video: state.video, screen: state.screen, mode: state.mode, events: feed.events, finished };
+            return snapshot();
         },
         get client() {
             return client;
         },
+        destroy,
     };
 }
 
@@ -939,4 +985,12 @@ function mountAll() {
     });
 }
 
+function destroyAll() {
+    document.querySelectorAll('[data-session-replay-stage]').forEach((root) => root.sessionReplayStage?.destroy());
+}
+
 document.readyState === 'loading' ? document.addEventListener('DOMContentLoaded', mountAll) : mountAll();
+
+// Panels that navigate with wire:navigate swap the page without unloading it.
+document.addEventListener('livewire:navigating', destroyAll);
+document.addEventListener('livewire:navigated', mountAll);

@@ -2,7 +2,7 @@
 
 A visitor asks for help from the page they are on, and someone from support takes the request from a list. Or support sees a live recording and offers help. With [Calls for Laravel](https://github.com/packstub/calls) installed, the two are put on a call between the visitor's page and the agent; without it, the requests are a plain queue your app answers through its own channels.
 
-> **Status.** Built in this package: the requests, the routes, the timeouts, the events, the visitor's page (the "Get help" API and button, the answer to an offer, and the visitor's half of the live view) and the agent's side in the built-in viewer (the Live tab, Offer help, the Requests page and the live stage). The Filament package's stage comes next; the [channel protocol](#the-channel-protocol) below is what both speak.
+> **Status.** Built in this package: the requests, the routes, the timeouts, the events, the visitor's page (the "Get help" API and button, the answer to an offer, and the visitor's half of the live view) and the agent's side in the built-in viewer (the Live tab, Offer help, the Requests page and the live stage). [Filament Session Replay](https://github.com/packstub/filament-session-replay/blob/main/docs/assist.md) brings the same into a panel, hosting this stage ([Hosting the stage](#hosting-the-stage-in-a-page-of-your-own)); the [channel protocol](#the-channel-protocol) below is what the visitor's page and the stage speak.
 
 ## Turning it on
 
@@ -159,6 +159,18 @@ Calls::routes();
 With another name prefix (`Calls::routes(as: 'support.calls.')`), set `session-replay.assist.calls_routes` to it. Without the routes the stage says so instead of trying to connect. Calls' guard must be the viewer's (see [With Calls](#with-calls)).
 
 `stage.js` and `stage.css` come from the package's script route, like the player (about 240 KB: rrweb's replayer and the calls engine), only on the stage page.
+
+### Hosting the stage in a page of your own
+
+The Filament package puts the stage in a panel page with the panel's own buttons; any page can do the same. The script mounts on every `[data-session-replay-stage]` element and reads its `data-config` (the JSON the built-in view writes: the request as the agent sees it, the agent routes, Calls' routes, `video`, `csrf` and the strings). Inside that element it only looks for attributes, so the markup is yours:
+
+- `data-ref`: `status`, `seen`, `screen`, `mirror`, `video`, `ink`, `overlay`, `placeholder`, `editor`, `editor-text`, `editor-select`, `notes`, `url`, `audiobar`, `audio`, `face`, `mute`, `end-audio` (see `resources/views/viewer/stage.blade.php` for what each is).
+- `data-action` on the buttons: `mirror`, `screen`, `control`, `draw`, `audio`, `video`, `share`, `withdraw`, `end`. The script sets `disabled`, `hidden` and `aria-pressed` on them and their label: into the button's `[data-label]` element when it has one (so an icon beside the text stays), else the whole button.
+- `data-why="<action>"`: where the reason a button is disabled goes.
+
+After every change the root dispatches `session-replay:stage` with the state in `event.detail` (`phase`: `waiting`, `connecting`, `live`, `hidden`, `reconnecting`, `ended` or `unavailable`; `request`, `call`, `connected`, `control`, `audio`, `video`, `screen`, `mode`, `drawing`, `events`, `finished`), for a status badge of your own. `root.sessionReplayStage.state` reads the same at any time.
+
+In an app that navigates with `wire:navigate`, the stage leaves the call on `livewire:navigating`, as a page unload does (the request stays the agent's; reopening the stage picks it up with a fresh snapshot), and mounts any stage on the new page on `livewire:navigated`. It is not meant to be kept with `@persist`: a frame moved in the page reloads, which blanks the mirror.
 
 ## Events
 

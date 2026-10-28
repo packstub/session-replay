@@ -482,3 +482,20 @@ test('the stage plays what the visitor\'s page sends and its controls follow the
     assert.equal(made[0].events.length, 2);
     assert.equal(agent.bad, 2);
 });
+
+test('stagePhase: one word for the host\'s status badge', async () => {
+    const { stagePhase } = await import('../lib/assist-stage.js');
+
+    assert.equal(stagePhase({ status: 'ended' }), 'ended');
+    assert.equal(stagePhase({ status: 'active', finished: true }), 'ended');
+    assert.equal(stagePhase({ status: 'open', calls: false }), 'unavailable');
+    assert.equal(stagePhase({ status: 'active', routes: false }), 'unavailable');
+    assert.equal(stagePhase({ status: 'active', client: 'active', connected: true, version: true }), 'unavailable');
+    assert.equal(stagePhase({ status: 'open' }), 'waiting');
+    assert.equal(stagePhase({ status: 'claimed' }), 'waiting');
+    assert.equal(stagePhase({ status: 'active' }), 'connecting');
+    assert.equal(stagePhase({ status: 'active', client: 'active', connected: false }), 'connecting');
+    assert.equal(stagePhase({ status: 'active', client: 'reconnecting', connected: true }), 'reconnecting');
+    assert.equal(stagePhase({ status: 'active', client: 'active', connected: true }), 'live');
+    assert.equal(stagePhase({ status: 'active', client: 'active', connected: true, hidden: true }), 'hidden');
+});
