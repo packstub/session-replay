@@ -98,7 +98,7 @@ abstract class AssistTestCase extends TestCase
 
     protected function poll(string $id, ?string $secret, string $token, array $data = []): TestResponse
     {
-        return $this->getJson(route('session-replay.assist.poll', ['id' => $id] + array_filter(['secret' => $secret, 'token' => $token] + $data, fn ($value) => $value !== null)));
+        return $this->postJson(route('session-replay.assist.poll', ['id' => $id]), array_filter(['secret' => $secret, 'token' => $token] + $data, fn ($value) => $value !== null));
     }
 
     protected function visitorPost(string $action, string $id, string $secret, string $token, array $data = []): TestResponse

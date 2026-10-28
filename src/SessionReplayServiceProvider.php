@@ -257,7 +257,9 @@ class SessionReplayServiceProvider extends PackageServiceProvider
             Route::middleware([...(array) config('session-replay.ingest.middleware', []), ThrottleIngest::class.':session-replay'])->group(function () use ($uuid): void {
                 Route::post('requests', [AssistController::class, 'store'])->name('store');
                 Route::post('heartbeat', [AssistController::class, 'heartbeat'])->name('heartbeat');
-                Route::get('requests/{id}', [AssistController::class, 'show'])->where('id', $uuid)->name('poll');
+                // A POST, like every visitor route: the secret and the token travel in the body, never in a URL that access
+                // logs, proxies and error trackers keep.
+                Route::post('requests/{id}', [AssistController::class, 'show'])->where('id', $uuid)->name('poll');
 
                 foreach (['accept', 'decline', 'cancel', 'hangup', 'leave', 'grants'] as $action) {
                     Route::post('requests/{id}/'.$action, [AssistController::class, $action])->where('id', $uuid)->name($action);

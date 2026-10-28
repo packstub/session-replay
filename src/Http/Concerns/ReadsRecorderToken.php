@@ -22,7 +22,7 @@ trait ReadsRecorderToken
             return $this->refuse(403, 'Recording is turned off.', stop: true);
         }
 
-        $context = ContextToken::decode($request->input('token'));
+        $context = ContextToken::decode($this->fromBody($request, 'token'));
 
         if ($context === null) {
             return $this->refuse(401, 'The recording token is missing, invalid or expired.', stop: true);
@@ -38,7 +38,7 @@ trait ReadsRecorderToken
     /** The recording's write key as the browser sends it (32 hex characters; anything up to 128 is taken), or none. */
     protected function writeKey(Request $request): ?string
     {
-        $key = $request->input('key');
+        $key = $this->fromBody($request, 'key');
 
         return is_string($key) && $key !== '' && strlen($key) <= 128 ? $key : null;
     }
@@ -53,6 +53,19 @@ trait ReadsRecorderToken
             && $context->sameUserAs($session->user_type, $session->user_id)
             && $context->sameImpersonatorAs($session->impersonator_id, $session->impersonator_type)
             && $context->sameTenantAs($session->tenant_type, $session->tenant_id);
+    }
+
+    /**
+     * A credential from the request body only (JSON or a form), never the query string: a URL ends up in access logs,
+     * proxies and error trackers, and with it the token, the write key or a request's secret.
+     */
+    protected function fromBody(Request $request, string $key): mixed
+    {
+        if ($request->isMethodSafe()) {
+            return null;
+        }
+
+        return $request->isJson() ? $request->json($key) : ($request->request->all()[$key] ?? null);
     }
 
     /** "stop" tells the recorder to give up for this page instead of retrying. */

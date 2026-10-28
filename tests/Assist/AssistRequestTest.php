@@ -549,3 +549,17 @@ it('prunes requests with their recording, and old ones that never had one', func
 
     expect(AssistRequest::query()->pluck('id')->all())->toBe([$waiting]);
 });
+
+it('takes the secret, the token and the key from the body only, never from a URL', function () {
+    $browser = $this->browser();
+    $asked = $this->asked($browser);
+
+    // The poll is a POST: a GET would put the secret and the token in access logs.
+    $this->getJson(route('session-replay.assist.poll', ['id' => $asked['id'], 'secret' => $asked['secret'], 'token' => $browser['token']]))->assertStatus(405);
+
+    // The same fields in the query string of a POST are not read.
+    $this->postJson(route('session-replay.assist.poll', ['id' => $asked['id'], 'secret' => $asked['secret'], 'token' => $browser['token']]))->assertUnauthorized();
+    $this->postJson(route('session-replay.assist.poll', ['id' => $asked['id'], 'secret' => $asked['secret']]), ['token' => $browser['token']])->assertForbidden();
+
+    $this->poll($asked['id'], $asked['secret'], $browser['token'])->assertOk()->assertJson(['status' => 'open']);
+});

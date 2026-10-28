@@ -74,12 +74,13 @@ Stateless, like the upload endpoints: no session, cookie or CSRF token, throttle
 - A request is created with the recording's triple: `token` (the signed token the page was rendered with), `session` (the recording's id) and `key` (its write key). Only the browser that makes the recording can attach a request to it. A tab that records nothing sends the token alone.
 - The answer carries a **secret** once: 32 hex characters, stored as its SHA-256 and compared in constant time. Every later call presents `secret` and `token`. The token keeps the throttle and lets the server refuse one that expired, belongs to another workspace, or now names someone else, which ends the request (`identity_changed`).
 - An unknown id and a wrong secret get the same answer.
+- Every visitor route is a `POST` and reads the token, the write key and the secret from the body only (JSON or a form), never from the query string: a URL ends up in access logs, proxies and error trackers. The upload endpoints read the token and the key the same way.
 
 | Method | Route | Does |
 | --- | --- | --- |
 | `POST` | `assist/requests` `{token, session?, key?, message?, url?}` | create; 201 with `secret`, or 200 and `secret: null` for the request that is going; 429 past `requests_per_hour` or `max_open_requests` |
-| `GET` | `assist/requests/{id}?secret&token&after&tab&hold` | the poll: `visitor_seen_at`, the timeouts, the call created on acknowledgement, and Calls' poll for the guest once a call exists. With `session` and `key` of the tab's new recording, the request moves to it (same person, same workspace). |
-| `GET` | `assist/requests/{id}?token&session&key` | the first answer to an agent's offer, with the triple instead of a secret: the secret is issued in it, once (409 after) |
+| `POST` | `assist/requests/{id}` `{secret, token, after, tab, hold}` | the poll: `visitor_seen_at`, the timeouts, the call created on acknowledgement, and Calls' poll for the guest once a call exists. With `session` and `key` of the tab's new recording, the request moves to it (same person, same workspace). |
+| `POST` | `assist/requests/{id}` `{token, session, key}` | the first answer to an agent's offer, with the triple instead of a secret: the secret is issued in it, once (409 after) |
 | `POST` | `assist/requests/{id}/accept` `{secret, token, tab}` | yes to an offer (or, with `watch_consent`, to the agent who claimed); creates the call |
 | `POST` | `assist/requests/{id}/decline` | "Not now" on an offer |
 | `POST` | `assist/requests/{id}/cancel` | stop waiting |

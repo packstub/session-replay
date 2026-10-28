@@ -66,7 +66,7 @@ class AssistController
     }
 
     /**
-     * GET {path}/assist/requests/{id} — secret, token, after, tab, hold; session and key to re-bind the request to the
+     * POST {path}/assist/requests/{id} — secret, token, after, tab, hold (in the body, never the URL); session and key to re-bind the request to the
      * tab's new recording. An agent's proposal is answered without a secret, with the triple: the secret is issued in
      * that first answer, once.
      */
@@ -81,7 +81,7 @@ class AssistController
         $assist = AssistRequest::query()->find(strtolower($id));
         $secret = null;
 
-        if ($assist !== null && $request->input('secret') === null && $assist->openedByAgent()) {
+        if ($assist !== null && $this->fromBody($request, 'secret') === null && $assist->openedByAgent()) {
             $issued = $this->issue($request, $context, $assist);
 
             if ($issued instanceof JsonResponse) {
@@ -264,7 +264,7 @@ class AssistController
     protected function authenticate(Request $request, ContextToken $context, ?AssistRequest $assist): AssistRequest|JsonResponse
     {
         // One answer for an unknown id and a wrong secret: nobody learns which requests exist.
-        if ($assist === null || ! $assist->acceptsSecret($request->input('secret'))) {
+        if ($assist === null || ! $assist->acceptsSecret($this->fromBody($request, 'secret'))) {
             return $this->refuse(403, 'Unknown request, or the wrong secret.');
         }
 
