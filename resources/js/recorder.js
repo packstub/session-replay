@@ -2,13 +2,14 @@ import { record } from '@rrweb/record';
 import { getRecordConsolePlugin } from '@rrweb/rrweb-plugin-console-record';
 import { onCLS, onINP, onLCP } from 'web-vitals';
 import { dropHiddenValues, inputMaskOptions, isUnmasked, maskTextAttributes, redactPluginUrls, redactUrl, redactUrlAttributes, redactUrls, textMasker } from './lib/privacy.js';
-import { EVENT_FULL_SNAPSHOT, assetPlaceholder, attributeMatcher, referencedAssets, renameVolatileIds, shareSnapshot, sharedSnapshots, stripAttributes, styleSlots } from './lib/process.js';
+import { EVENT_FULL_SNAPSHOT, assetPlaceholder, attributeMatcher, referencedAssets, renameVolatileIds, shareSnapshot, sharedSnapshots, skipNodes, stripAttributes, styleSlots } from './lib/process.js';
 import { ACTIVE_SOURCES, activeTime, checkoutInterval, estimateChars, estimateEventChars, isTrigger, trimWindow, windowStart } from './lib/buffer.js';
 import { lastingPlugin, navigationPause } from './lib/navigation.js';
 import { hasHeader, observe, requestMarker } from './lib/requests.js';
 import { MAX_RETRIES, pendingFate, retryDelay } from './lib/pending.js';
 import { ask, dismiss, notice } from './ask.js';
 import { deletePending, listPending, pendingStoreExists, savePending } from './pending.js';
+import { installAssist } from './assist.js';
 
 /**
  * The recorder. Reads window.__sessionReplay (written by @sessionReplay),
@@ -86,6 +87,10 @@ let kept = new Set();
 let generation = 0;
 // start() was called on a page the app does not record (consent given there): it runs on the next page that is.
 let startOnNextPage = false;
+// rrweb ids of the elements carrying data-replay-skip on this page (see skipNodes).
+const skipped = new Set();
+// Assist (assist.enabled): the live view taps emit(), the upload answer and the heartbeat carry an agent's offer.
+let assist = null;
 
 const onError = config?.mode === 'on_error';
 const windowMs = onError ? config.onError.bufferMs : 0;
@@ -502,6 +507,9 @@ function isElementTextMasked(element) {
 function emit(event) {
     if (stopped) return;
 
+    // The Assist widget, the agent's cursor and strokes: never recorded, never mirrored back.
+    if (!skipNodes(event, skipped)) return;
+
     trackActivity(event);
     consoleMarker(event);
     stripAttributes(event, matches);
@@ -516,6 +524,10 @@ function emit(event) {
     if (event.type === EVENT_FULL_SNAPSHOT && navigation.swapped()) unshared.add(event);
     // Whether a snapshot may be shared is the setting of the page it was taken on.
     if (event.type === EVENT_FULL_SNAPSHOT && !config.snapshots?.share) unshared.add(event);
+
+    // The live view gets the event here, masked like the recording, before the asynchronous dedupe below swaps
+    // stylesheet text for placeholders in place (and before an upload renames parts of it).
+    assist?.tap(event);
 
     const slots = config.size.dedupeStylesheets && canHash ? styleSlots(event, config.size.dedupeMinBytes) : [];
 
@@ -757,6 +769,9 @@ async function send(batch) {
     if (response.ok) {
         // Back to the usual pace once the server takes batches again.
         flushInterval = config.flushInterval;
+
+        // An agent's offer of help for this recording (Assist).
+        if (assist && body.assist) assist.knock(body.assist);
 
         // A stylesheet whose upload failed earlier goes again with the next batch; its text is kept until then.
         assetRetry = new Set(await uploadAssets([...new Set([...(body.missing_assets || []), ...assetRetry])], batch.token, batch.session));
@@ -1476,6 +1491,20 @@ function restart(fresh) {
     start();
 }
 
+/**
+ * Assist asks for a live view in mode on_error: the kept window goes up and the tab records from here, as
+ * SessionReplay.send() does.
+ */
+function goLive() {
+    if (!stopRecording || stopped || !session || session.phase !== 'buffering') return;
+
+    if (asking) dismiss();
+
+    asking = false;
+    trimBuffer(Date.now() - windowMs);
+    share(false);
+}
+
 /** `remember`: the server said stop (a limit, someone else's recording); the tab stays quiet until the session idles out. */
 function stop(remember = false) {
     stopped = true;
@@ -1555,6 +1584,42 @@ if (config && !window.SessionReplay) {
         isBuffering: () => !!stopRecording && !stopped && !navigation.isExcluded() && session?.phase === 'buffering',
         sessionId: () => (stopRecording && session ? session.id : null),
     };
+
+    if (config.assist) {
+        try {
+            assist = installAssist({
+                config: () => config,
+                recording: () => (stopRecording && !stopped && session && session.phase === 'recording' ? { id: session.id, key: session.key } : null),
+                snapshot() {
+                    try {
+                        if (!stopRrweb) return false;
+
+                        record.takeFullSnapshot();
+
+                        return true;
+                    } catch {
+                        return false;
+                    }
+                },
+                node: (id) => {
+                    try {
+                        return stopRrweb ? record.mirror.getNode(id) : null;
+                    } catch {
+                        return null;
+                    }
+                },
+                goLive,
+                touch: () => saveSession(),
+                redacted,
+                read: (key) => read('sessionStorage', key),
+                write: (key, value) => write('sessionStorage', key, value),
+            });
+            window.SessionReplay.assist = assist.api;
+        } catch {
+            // No Assist on this page; the recording goes on.
+            assist = null;
+        }
+    }
 
     start();
 }

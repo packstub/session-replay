@@ -15,6 +15,7 @@ use Illuminate\Support\Str;
 use Packstub\SessionReplay\Models\AssistRequest;
 use Packstub\SessionReplay\Models\ReplayMarker;
 use Packstub\SessionReplay\Models\ReplaySession;
+use Packstub\SessionReplay\Support\Assist;
 use Packstub\SessionReplay\Support\ContextToken;
 
 /** What the app told the package (through the SessionReplay facade) and the decisions built on it. */
@@ -345,6 +346,7 @@ class SessionReplayManager
             'onError' => $this->onErrorConfig($token),
             // The debug error page is titled with the app's name; the question leaves that title out.
             'appName' => (string) config('app.name', ''),
+            'assist' => $this->assistConfig(),
         ];
 
         $nonce = $options['nonce'] ?? Vite::cspNonce();
@@ -485,6 +487,46 @@ class SessionReplayManager
                 'failed' => __('session-replay::recorder.ask.failed'),
                 'sent' => __('session-replay::recorder.ask.sent'),
             ] : null,
+        ];
+    }
+
+    /**
+     * What the recorder needs for Assist (assist.enabled): the visitor's routes, the timings, the button and the
+     * strings. Null when Assist is off, so the page carries nothing of it.
+     *
+     * @return array<string, mixed>|null
+     */
+    protected function assistConfig(): ?array
+    {
+        $assist = app(Assist::class);
+
+        if (! $assist->enabled()) {
+            return null;
+        }
+
+        // A route with a uuid constraint is generated with a nil uuid and handed to the browser with __ID__.
+        $nil = '00000000-0000-0000-0000-000000000000';
+        $routes = ['store' => $this->route('assist.store'), 'heartbeat' => $this->route('assist.heartbeat')];
+
+        foreach (['poll', 'accept', 'decline', 'cancel', 'hangup', 'leave', 'signal', 'grants'] as $name) {
+            $routes[$name] = str_replace($nil, '__ID__', $this->route('assist.'.$name, ['id' => $nil]));
+        }
+
+        $calls = $assist->callsAvailable();
+
+        return [
+            'routes' => $routes,
+            'calls' => $calls,
+            'video' => $calls && $assist->videoAllowed(),
+            'button' => (bool) config('session-replay.assist.button', false),
+            'controlMasked' => (bool) config('session-replay.assist.control_masked', false),
+            'heartbeatMs' => max(5, (int) config('session-replay.assist.heartbeat_seconds', 15)) * 1000,
+            'poll' => [
+                'waiting' => max(1000, (int) config('session-replay.assist.poll.waiting_ms', 3000)),
+                // Under Calls' hold of 5 seconds, or the side is let go between two polls.
+                'active' => max(500, min(4000, (int) config('session-replay.assist.poll.active_ms', 2000))),
+            ],
+            'labels' => (array) __('session-replay::recorder.assist'),
         ];
     }
 

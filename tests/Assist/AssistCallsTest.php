@@ -38,6 +38,9 @@ it('creates the call when the page acknowledges the claim, not before', function
 
     Event::assertDispatchedTimes(AssistStarted::class, 1);
 
+    // What the page's RTCPeerConnection needs comes with the call, not before.
+    expect($poll->json('rtc'))->toBe(['iceServers' => Calls::rtcConfiguration()['iceServers'], 'iceTransportPolicy' => 'all']);
+
     // Polls after it reuse the call, held by the tab.
     $this->poll($asked['id'], $asked['secret'], $browser['token'], ['tab' => 'tab-1'])->assertJson(['status' => 'active', 'call' => ['id' => $call->id, 'held' => false]]);
 

@@ -49,6 +49,12 @@ class Assist
         return (bool) config('session-replay.assist.enabled', false);
     }
 
+    /** Whether Calls lets a call carry video (its `video` setting, through the context). */
+    public function videoAllowed(): bool
+    {
+        return $this->callsAvailable() && app(CallContext::class)->hasVideo();
+    }
+
     /** packstub/calls is installed and booted, and assist.calls leaves it on. */
     public function callsAvailable(): bool
     {
@@ -654,11 +660,12 @@ class Assist
      */
     public function presentForVisitor(AssistRequest $request, int $after = 0, ?string $tab = null, bool $hold = true): array
     {
-        $poll = ['call' => null, 'signals' => [], 'cursor' => $after];
+        $poll = ['call' => null, 'signals' => [], 'cursor' => $after, 'rtc' => null];
 
         if ($request->call_id !== null && $this->callsAvailable()) {
             $calls = app(Calls::class)->poll($request->guestId(), $after, $request->call_id, $tab, $hold, self::KIND);
-            $poll = ['call' => $calls['call'], 'signals' => $calls['signals'], 'cursor' => $calls['cursor']];
+            // What the page's RTCPeerConnection needs (ICE servers, transport policy): only once there is a call.
+            $poll = ['call' => $calls['call'], 'signals' => $calls['signals'], 'cursor' => $calls['cursor'], 'rtc' => $calls['call'] === null ? null : app(Calls::class)->rtcConfiguration()];
         }
 
         return [

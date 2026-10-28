@@ -2,7 +2,7 @@
 
 A visitor asks for help from the page they are on, and someone from support takes the request from a list. Or support sees a live recording and offers help. With [Calls for Laravel](https://github.com/packstub/calls) installed, the two are put on a call between the visitor's page and the agent; without it, the requests are a plain queue your app answers through its own channels.
 
-> **Status.** This release ships the server side: the requests table, the routes for both sides, the timeouts, the events and a Requests page in the built-in viewer. The visitor's widget in the recorder and the live view of the visitor's page (the DOM mirror, audio, remote control) come in the next releases; until then a request is created through the HTTP API below.
+> **Status.** The server side and the visitor's page are built: the requests, the routes, the timeouts, the events, the Requests page, and in the recorder the "Get help" API and button, the answer to an offer, and the visitor's half of the live view (the page mirrored to the agent, remote control, annotations, audio, screen share), each behind its own question. The agent's side of the live view (watching, pointing, controlling from the viewer and from Filament) comes next; the [channel protocol](#the-channel-protocol) below is what it speaks.
 
 ## Turning it on
 
@@ -51,6 +51,57 @@ A request goes `open`, then `claimed` by an agent, then `ended` by the agent. `A
 A recording has at most one request going at a time (a tab without a recording, one per rendered page): asking again returns the one that is going. The timeouts run inside the visitor's poll and the agent's list, the way Calls expires calls inside its poll: no scheduler needed.
 
 When a request finishes, the server puts an `assist` marker on the recording: how it was opened, how it ended, how long it ran and what the visitor allowed, never who the agent is. A browser cannot send an `assist` marker itself.
+
+## On the visitor's page
+
+With Assist on, the recorder carries everything the visitor sees; nothing to add to your pages.
+
+### Asking for help
+
+From your own "Contact support" button:
+
+```js
+await SessionReplay.assist.request({ message: 'The checkout button does nothing' })
+SessionReplay.assist.status()   // { id, status: 'open' | 'claimed' | 'active' | null, agent: { name, avatar } | null }
+SessionReplay.assist.cancel()   // stop waiting
+SessionReplay.assist.end()      // end a live assist (or stop waiting)
+
+window.addEventListener('session-replay:assist', ({ detail }) => updateMyButton(detail.status))
+```
+
+Or turn on the floating "Get help" button (`assist.button`, off by default; most apps have a place for it already), which opens a small form with an optional message.
+
+While the request waits, a panel in the corner says so, with Cancel. A tab in mode `on_error` starts uploading when it asks (as `SessionReplay.send()` does), so the agent has a recording to look at. A tab that records nothing (not sampled, no consent) can still ask: the request is queue-only, the agent sees no live page.
+
+### An offer of help
+
+When an agent offers help from a live recording, the page hears of it in the answer to its next upload, or to the heartbeat a visible tab sends every `assist.heartbeat_seconds` (15). The visitor sees "Ana would like to help you with this page", with Accept and Not now. A hidden tab hears of the offer when the visitor comes back to it.
+
+### While an agent is with the visitor
+
+- **Watching.** The agent sees the page as the recording has it, masked the same way: the recorder's own events, sent peer to peer over a WebRTC data channel as they happen. Starting the live view takes one more full snapshot, which the stored recording gets too (one per start and reconnect).
+- **Questions.** Audio (or video, where Calls allows it), remote control, typing into masked fields and screen share are each asked for separately; a question left for 30 seconds counts as no. Audio, video and the Accept of an offer are remembered in the tab for the request, so a reload does not ask again. Remote control is asked again after every reload or navigation. Every answer, and every revocation, goes to the request's grants log.
+- **Remote control.** The agent's named cursor moves on the page, and a dashed outline frames it while the agent has control. Clicks, scrolls, drags and typing are synthetic events, so what needs a real gesture of the visitor's (a popup, a file picker, the clipboard, fullscreen) is refused by the browser, and the package does not work around it. A password field is never filled. A field the agent sees masked (every field with the default `privacy.mask_all_inputs`) is filled only with `assist.control_masked` on and after a separate question; otherwise no remote typing into it. The visitor always wins: their own mouse or keys pause the agent for a second, Escape or "End remote control" takes control back, and control ends when the tab is hidden, on a navigation and when the connection drops.
+- **Annotations.** The agent's strokes are drawn over the page and fade after about four seconds. No question: they change nothing. They never cover a question.
+- **Audio.** Once the visitor allows the microphone, the call bar in the panel has Mute and End. The agent is heard only after that answer.
+- **Screen share.** The browser's own picker follows the visitor's yes. The panel says "Ana sees your screen" while it runs.
+
+### What the agent never sees
+
+The panel, the questions, the agent's cursor and the strokes are left out of the recording entirely: they sit in an element carrying `data-replay-skip` (a closed shadow root inside it), which the recorder drops with everything inside it. Use the attribute for your own elements too; it must be on the element when it is inserted.
+
+Names are text and an avatar is shown only for an `http(s)` URL. The visitor's UI needs no CSS framework: it brings its own small stylesheet, follows the system's light or dark mode, and its strings come in the five languages of the package (`session-replay::recorder.assist.*`).
+
+### The channel protocol
+
+One ordered data channel labelled `assist` per call, JSON messages `{ t, ... }`, implemented in `resources/js/lib/assist-protocol.js` for both sides. Each side opens with `{ t: 'hello', v: 1, role }`; a side on another major version stops. A message above 64 KB goes as `{ t: 'part', id, i, n, d }` pieces; a sender waits for the channel's buffer to drain and drops queued pointer samples first. Every message is checked against the sender's schema (known `t`, finite coordinates inside the visitor's viewport, node ids the visitor's page knows, values under 4 KB); too many bad messages close the channel. Control messages count only while control is granted, annotations not while a question is up.
+
+| From | Messages |
+| --- | --- |
+| visitor | `rr` (`e`: one rrweb event), `css` (`key`, `text`: a stylesheet the events point at as `/*sr-live:<key>*/`, sent once per channel), `state` (`hidden`, `url`, `width`, `height`), `control.granted`, `control.released` (`reason`), `control.refused` (`reason`: `password`, `masked`, `readonly`, `unsupported`, `own_ui`, `declined`…), `media.granted` / `media.refused` / `media.stopped` (`kind`), `screen.granted` / `screen.refused` / `screen.stopped`, `bye` |
+| agent | `control.request`, `control.release`, `move` / `click` / `drag.start` / `drag` (`x`, `y` in the visitor's viewport pixels), `drag.stop`, `scroll` (`dx`, `dy`, under the cursor), `focus` (`id`, an rrweb node id), `input` / `select` (`id`, `value`), `annot.start` / `annot.move` (`x`, `y`), `annot.stop`, `media.request` / `media.stop` (`kind`: `audio`, `video`), `screen.request`, `screen.stop`, `bye` |
+
+Attach the endpoint in the call's `datachannel` event, synchronously, so the other side's hello is not missed.
 
 ## The Requests page
 
@@ -128,6 +179,7 @@ A request as the agent sees it: `id`, `status`, `opened_by`, `session`, `session
 
 ## Privacy
 
+- Nothing of the live view is stored beyond the recording that exists anyway (plus one full snapshot per live-view start). The mirror and the media go peer to peer, encrypted by WebRTC; a TURN relay forwards ciphertext. ICE candidates show each side's addresses to the other; `packstub-calls.ice_transport_policy` `relay` hides them behind your TURN server.
 - The visitor's routes take no identity but the signed token and the request's secret; the agent sees the page's URL with `privacy.redact_query` applied, and the message as text.
 - The grants log is the compliance trail: what the agent asked for (`{kind, asked: true, by: "agent", at}`) and what the visitor allowed or took back (`{kind, granted, by: "visitor", at}`), and when. `AssistEnded` carries it; the `assist` marker summarises what was allowed on the recording.
 - Calls deletes a call's signals when it ends; the package never logs a session description or a candidate.
@@ -146,3 +198,8 @@ A request as the agent sees it: `id`, `status`, `opened_by`, `session`, `session
 | `assist.proposal_timeout_seconds` | `60` | An offer nobody answered expires. |
 | `assist.visitor_timeout_seconds` | `60` | A request whose page stopped polling expires; a live one ends. |
 | `assist.max_duration_minutes` | `120` | An assist ends after this long. |
+| `assist.button` | `false` (`SESSION_REPLAY_ASSIST_BUTTON`) | A floating "Get help" button on every recorded page. |
+| `assist.control_masked` | `false` (`SESSION_REPLAY_ASSIST_CONTROL_MASKED`) | Let the agent type into fields they see masked, after a separate question. Password fields never. |
+| `assist.heartbeat_seconds` | `15` | A visible tab's sign of life, which also brings an agent's offer. |
+| `assist.poll.waiting_ms` | `3000` | How often a waiting page polls its request. |
+| `assist.poll.active_ms` | `2000` | How often it polls during an assist (the call's heartbeat; kept between 500 and 4000, under Calls' hold of 5 seconds). |

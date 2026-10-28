@@ -356,6 +356,20 @@ return [
         'visitor_timeout_seconds' => 60,
         // An assist ends after this many minutes, whatever is going on.
         'max_duration_minutes' => (int) env('SESSION_REPLAY_ASSIST_MAX_DURATION_MINUTES', 120),
+        // A floating "Get help" button on every recorded page; off: ask from your own UI with
+        // SessionReplay.assist.request({ message }).
+        'button' => (bool) env('SESSION_REPLAY_ASSIST_BUTTON', false),
+        // Let the agent type into fields they see masked (every field with privacy.mask_all_inputs), after a
+        // separate question to the visitor. Off: unmasked fields only; password fields never.
+        'control_masked' => (bool) env('SESSION_REPLAY_ASSIST_CONTROL_MASKED', false),
+        // A visible tab's sign of life, which also brings an agent's offer to a page that uploads nothing.
+        'heartbeat_seconds' => 15,
+        // How often the page polls its request: while it waits, and during an assist (the call's heartbeat;
+        // Calls holds a side for 5 seconds).
+        'poll' => [
+            'waiting_ms' => 3000,
+            'active_ms' => 2000,
+        ],
     ],
 
     /*

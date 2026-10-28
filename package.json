@@ -8,6 +8,7 @@
         "test": "node --test resources/js/tests/*.test.js"
     },
     "devDependencies": {
+        "@packstub/calls": "github:packstub/calls-js",
         "@rrweb/record": "^2.1.6",
         "@rrweb/rrweb-plugin-console-record": "^2.1.6",
         "esbuild": "^0.28.2",

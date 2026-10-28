@@ -102,7 +102,7 @@ See [Privacy](docs/privacy.md) for masking, consent and wording for your privacy
 | [Watching replays](docs/watching.md) | The gate, the built-in viewer, the player component, models and scopes |
 | [Storage](docs/storage.md) | Disk layout, tables, multi-tenant apps, sizes and limits, pruning |
 | [Error tracking](docs/error-tracking.md) | The recording's id and URL in Laravel's `Context` |
-| [Assist](docs/assist.md) | Help requests: a visitor asks, support claims or offers help from a live recording; a call with Calls for Laravel |
+| [Assist](docs/assist.md) | Help requests: a visitor asks (`SessionReplay.assist.request()` or a "Get help" button), support claims or offers help from a live recording; with Calls for Laravel, the visitor's page shown live to the agent, remote control, annotations and audio, each with the visitor's consent |
 | [Configuration](docs/configuration.md) | Every key in `config/session-replay.php` |
 
 ## In a Filament panel
