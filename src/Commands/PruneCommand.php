@@ -5,6 +5,7 @@ namespace Packstub\SessionReplay\Commands;
 use Illuminate\Console\Command;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Support\Carbon;
+use Packstub\SessionReplay\Models\AssistRequest;
 use Packstub\SessionReplay\Models\ReplayAsset;
 use Packstub\SessionReplay\Models\ReplayAssetOwner;
 use Packstub\SessionReplay\Models\ReplaySession;
@@ -15,7 +16,7 @@ class PruneCommand extends Command
 {
     protected $signature = 'session-replay:prune {--days= : Keep this many days instead of retention.days}';
 
-    protected $description = 'Delete recordings older than the retention window (pinned ones stay) and the stylesheets and shared snapshots nothing references any more';
+    protected $description = 'Delete recordings older than the retention window (pinned ones stay), the stylesheets and shared snapshots nothing references any more, and old assist requests without a recording';
 
     public function handle(ReplayStorage $storage): int
     {
@@ -61,7 +62,23 @@ class PruneCommand extends Command
             ->where('kind', ReplayAsset::SNAPSHOT)
             ->where(fn ($query) => $query->whereNull('last_seen_at')->orWhere('last_seen_at', '<', now()->subDay())));
 
+        // Assist requests go with their recording (the foreign key); one that never had a recording (a tab that recorded
+        // nothing) goes after the same window. Requests still going are left alone.
+        $requests = AssistRequest::query()
+            ->whereNotIn('status', AssistRequest::PENDING)
+            ->where('updated_at', '<', now()->subDays($days))
+            ->where(fn ($query) => $query
+                ->whereNull('replay_session_id')
+                ->orWhereNotExists(fn ($sessions) => $sessions
+                    ->from((new ReplaySession)->getTable())
+                    ->whereColumn('replay_sessions.id', 'replay_assist_requests.replay_session_id')))
+            ->delete();
+
         $this->components->info("Pruned {$sessions} recordings and {$assets} stylesheets older than {$days} days, and {$snapshots} shared snapshots no recording points at.");
+
+        if ($requests > 0) {
+            $this->components->info("Pruned {$requests} assist requests without a recording.");
+        }
 
         return self::SUCCESS;
     }

@@ -3,6 +3,7 @@
 namespace Packstub\SessionReplay;
 
 use Closure;
+use Illuminate\Contracts\Auth\Authenticatable;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Http\Request;
@@ -11,6 +12,7 @@ use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Vite;
 use Illuminate\Support\HtmlString;
 use Illuminate\Support\Str;
+use Packstub\SessionReplay\Models\AssistRequest;
 use Packstub\SessionReplay\Models\ReplayMarker;
 use Packstub\SessionReplay\Models\ReplaySession;
 use Packstub\SessionReplay\Support\ContextToken;
@@ -44,6 +46,8 @@ class SessionReplayManager
     protected ?Closure $logUrlUsing = null;
 
     protected ?Closure $visibleUsing = null;
+
+    protected ?Closure $canAssistUsing = null;
 
     /** Narrow who is recorded: fn (?Model $user, Request $request): bool. */
     public function recordWhen(Closure $callback): static
@@ -153,6 +157,35 @@ class SessionReplayManager
         }
 
         return $query;
+    }
+
+    /**
+     * Who may help with an assist request (claim it, offer help from a live session, and later watch and control):
+     * fn (Authenticatable $agent, ?ReplaySession $session, AssistRequest $request): bool. Without it, whoever may
+     * watch the recording (check()), or the list for a request without one. Asked on every agent endpoint.
+     */
+    public function canAssistUsing(Closure $callback): static
+    {
+        $this->canAssistUsing = $callback;
+
+        return $this;
+    }
+
+    /**
+     * Whether this agent may help with this request. Nobody assists their own visit: a request of the agent's own
+     * recording is refused whatever the rule says.
+     */
+    public function canAssist(mixed $agent, ?ReplaySession $session, AssistRequest $request): bool
+    {
+        if (! $agent instanceof Authenticatable) {
+            return false;
+        }
+
+        if ($request->user_id !== null && $agent instanceof Model && $request->user_type === $agent->getMorphClass() && $request->user_id === (string) $agent->getKey()) {
+            return false;
+        }
+
+        return $this->canAssistUsing ? (bool) ($this->canAssistUsing)($agent, $session, $request) : $this->check($session, $agent);
     }
 
     public function enabled(): bool

@@ -133,6 +133,22 @@ Share pages that look the same for everyone who opens them: a pricing page, the 
 | `viewer.user_label` | `email` | Attribute shown for a person in the list. |
 | `viewer.autoplay` | `false` | The player starts playing once it is ready (from the linked moment with `?t=` or `?at=`). The component's `autoplay` prop overrides it. |
 
+## Assist
+
+Help requests, off by default; see [Assist](assist.md#configuration) for what each key does.
+
+| Key | Default | Meaning |
+| --- | --- | --- |
+| `assist.enabled` | `false` | `SESSION_REPLAY_ASSIST`. The visitor's and the agent's routes, the Requests page, the knock in the upload answer. |
+| `assist.calls` | `true` | `SESSION_REPLAY_ASSIST_CALLS`. Use `packstub/calls` when installed. |
+| `assist.watch_consent` | `false` | `SESSION_REPLAY_ASSIST_WATCH_CONSENT`. The visitor accepts before the agent joins. |
+| `assist.requests_per_hour` | `6` | `SESSION_REPLAY_ASSIST_REQUESTS_PER_HOUR`. New requests per person (guests: per page) per hour. |
+| `assist.max_open_requests` | `100` | `SESSION_REPLAY_ASSIST_MAX_OPEN_REQUESTS`. Requests going at once, everyone together. |
+| `assist.claim_timeout_seconds` | `30` | An unacknowledged claim goes back to the list. |
+| `assist.proposal_timeout_seconds` | `60` | An unanswered offer expires. |
+| `assist.visitor_timeout_seconds` | `60` | A page that stopped polling: the request expires or ends. |
+| `assist.max_duration_minutes` | `120` | `SESSION_REPLAY_ASSIST_MAX_DURATION_MINUTES`. An assist ends after this long. |
+
 ## Log context
 
 | Key | Default | Meaning |
@@ -153,6 +169,7 @@ Share pages that look the same for everyone who opens them: a pricing page, the 
 | `SessionReplay::urlUsing(fn (ReplaySession $session) => ...)` | Where replays are watched, when not the built-in viewer. |
 | `SessionReplay::logUrlUsing(fn (ReplayMarker $marker) => ...)` | Where a marker's log lines are read: the player's "Open in logs" button. See [Error tracking](error-tracking.md#from-the-replay-to-the-logs). |
 | `SessionReplay::visibleUsing(fn (Builder $query, $viewer) => ...)` | Narrow the recordings a viewer finds in a list. Runs as a group of its own, so an `orWhere()` only narrows. |
+| `SessionReplay::canAssistUsing(fn ($agent, ?ReplaySession $session, AssistRequest $request) => ...)` | Who may help with an assist request. Without it, whoever may watch the recording. See [Assist](assist.md#turning-it-on). |
 
 ## Languages
 
@@ -169,4 +186,4 @@ They land in `lang/vendor/session-replay/{locale}/viewer.php`, `player.php` and 
 | Command | Purpose |
 | --- | --- |
 | `session-replay:install` | Publish the config, offer to migrate, publish the provider with the gate. |
-| `session-replay:prune {--days=}` | Delete old recordings and unreferenced stylesheets. |
+| `session-replay:prune {--days=}` | Delete old recordings, unreferenced stylesheets and old assist requests without a recording. |

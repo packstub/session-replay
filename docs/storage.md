@@ -55,9 +55,10 @@ The files are always read through the package's gated routes, never through a pu
 | `replay_markers` | marker | `type`, `label`, `payload`, `at_ms`. This table is what lets a list filter without opening a file. |
 | `replay_assets` | stylesheet or shared snapshot | `hash`, `kind` (`stylesheet` or `snapshot`), `path`, stored and raw size, `last_seen_at`. Stored once, whichever recordings point at it. A shared snapshot whose content is also sent as a stylesheet becomes a stylesheet, and recordings that point at it as a snapshot still get it. |
 | `replay_asset_owners` | workspace that sent an asset | `hash`, `tenant_key` (a hash of the workspace's type and key, or of none). Written when a stylesheet or a snapshot arrives with content that matches its hash. A recording may point at an asset only when its own workspace is an owner: a hash learned elsewhere, of another workspace's theme or page, opens nothing, and the first recording of a workspace to meet a stylesheet another workspace stored uploads it once more. |
+| `replay_assist_requests` | help request ([Assist](assist.md)) | `status`, `opened_by`, who and workspace, the recording (`replay_session_id`, nullable, moved to the tab's next recording), `secret_hash` (the SHA-256 of the secret the visitor's tab presents), `identity` (a keyed hash of who the token named, salted per request), the agent (`agent_id`, `agent_name`, `agent_avatar`), `call_id`, `message`, `page_url`, the `grants` log, when the page and the agent were last seen, `claimed_at`, `started_at`, `ended_at`, `end_reason`. `lock_key` is unique and set while the request is going, so a recording has one at a time. |
 | `replay_session_assets` | stylesheet or shared snapshot a recording points at | `replay_session_id`, `hash`. What the viewer checks before it serves a stylesheet or a shared snapshot (the hash alone opens nothing), and what keeps either from being pruned while a recording that is left needs it. |
 
-User and tenant keys are stored as strings, so integer, UUID and ULID keys all fit. Chunks, markers and snapshot references are removed with their recording by foreign key; deleting a `ReplaySession` model also deletes its folder on the disk.
+User and tenant keys are stored as strings, so integer, UUID and ULID keys all fit. Chunks, markers, snapshot references and assist requests are removed with their recording by foreign key; deleting a `ReplaySession` model also deletes its folder on the disk.
 
 ## Multi-tenant apps
 
@@ -189,6 +190,7 @@ php artisan session-replay:prune --days=7
 - Keeps pinned recordings: `$session->forceFill(['pinned' => true])->save()`.
 - Deletes stylesheets that were last referenced before the window and that no recording that is left points at, so a pinned recording keeps its styling for as long as it stays, without keeping every other stylesheet of its day. Recordings made before the references were stored (1.0.0-beta.5 and earlier) point at nothing: while a pinned one of those is left, stylesheets last seen since it started stay too.
 - Deletes shared snapshots no recording that is left points at, a day after they were last sent. Sending one again moves that date once it is an hour old, so the batch that points at it always has at least 23 hours to arrive.
+- Deletes finished assist requests that never had a recording (a tab that recorded nothing) once they are older than the window; the others go with their recording.
 - Refuses a window under one day.
 
 Schedule it daily:

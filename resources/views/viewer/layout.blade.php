@@ -33,6 +33,9 @@
         .empty { padding: 3rem 1rem; text-align: center; color: var(--muted); }
         nav.pages { display: flex; justify-content: space-between; gap: 1rem; margin-top: 1rem; }
         dl.facts { display: grid; grid-template-columns: repeat(auto-fit, minmax(11rem, 1fr)); gap: .75rem 1.5rem; padding: 1rem; margin: 0 0 1rem; }
+        td.message { white-space: pre-wrap; min-width: 14rem; max-width: 28rem; }
+        td.actions { display: flex; gap: .4rem; }
+        .flash { padding: .6rem .8rem; margin: 0 0 1rem; } .flash--error { color: var(--danger); }
         dl.facts dt { font-size: .75rem; color: var(--muted); } dl.facts dd { margin: 0; overflow: hidden; text-overflow: ellipsis; }
     </style>
     @stack('head')

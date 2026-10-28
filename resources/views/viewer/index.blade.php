@@ -3,7 +3,12 @@
 @section('content')
     <header class="top">
         <h1>{{ __('session-replay::viewer.title') }}</h1>
-        <span class="muted">{{ trans_choice('session-replay::viewer.count', $sessions->total(), ['count' => $sessions->total()]) }}</span>
+        <span class="muted">
+            @if (config('session-replay.assist.enabled') && \Illuminate\Support\Facades\Route::has('session-replay.assist.index'))
+                <a href="{{ route('session-replay.assist.index') }}">{{ __('session-replay::viewer.assist.nav') }}</a> ·
+            @endif
+            {{ trans_choice('session-replay::viewer.count', $sessions->total(), ['count' => $sessions->total()]) }}
+        </span>
     </header>
 
     <form class="filters card" method="get">

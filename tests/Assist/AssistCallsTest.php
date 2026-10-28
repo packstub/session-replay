@@ -1,0 +1,268 @@
+<?php
+
+use Illuminate\Support\Facades\Event;
+use Packstub\Calls\Facades\Calls;
+use Packstub\Calls\Models\Call;
+use Packstub\SessionReplay\Events\AssistEnded;
+use Packstub\SessionReplay\Events\AssistStarted;
+use Packstub\SessionReplay\Models\AssistRequest;
+use Packstub\SessionReplay\Models\ReplayMarker;
+
+beforeEach(function () {
+    $this->needsCalls();
+    $this->staffGate();
+});
+
+it('creates the call when the page acknowledges the claim, not before', function () {
+    Event::fake([AssistStarted::class]);
+
+    [$browser, $asked, $agent] = $this->claimed();
+
+    expect(Call::query()->count())->toBe(0);
+
+    $poll = $this->poll($asked['id'], $asked['secret'], $browser['token'], ['tab' => 'tab-1'])->assertOk()->assertJson(['status' => 'active']);
+
+    $call = Call::query()->sole();
+
+    expect($call->kind)->toBe('assist')
+        ->and($call->status)->toBe('active')
+        ->and($call->caller_id)->toBe((string) $agent->id)
+        ->and($call->callee_id)->toBe('guest:'.$asked['id'])
+        ->and(AssistRequest::query()->sole()->call_id)->toBe($call->id)
+        // The call as the guest sees it: the agent is the peer the page checks against agent.id.
+        ->and($poll->json('call.id'))->toBe($call->id)
+        ->and($poll->json('call.peer'))->toBe(['id' => (string) $agent->id, 'name' => 'Ana Support', 'avatar' => null])
+        ->and($poll->json('agent.id'))->toBe((string) $agent->id)
+        ->and($poll->json('call.peers'))->toHaveCount(1);
+
+    Event::assertDispatchedTimes(AssistStarted::class, 1);
+
+    // Polls after it reuse the call, held by the tab.
+    $this->poll($asked['id'], $asked['secret'], $browser['token'], ['tab' => 'tab-1'])->assertJson(['status' => 'active', 'call' => ['id' => $call->id, 'held' => false]]);
+
+    expect(Call::query()->count())->toBe(1);
+});
+
+it('keeps the assist call away from the Calls widget, which polls for kind=call', function () {
+    [$browser, $asked, $agent] = $this->claimed();
+
+    $this->poll($asked['id'], $asked['secret'], $browser['token'], ['tab' => 'tab-1'])->assertJson(['status' => 'active']);
+
+    expect(Calls::poll((string) $agent->id, kind: 'call')['call'])->toBeNull()
+        ->and(Calls::poll((string) $agent->id, kind: 'assist')['call']['kind'])->toBe('assist');
+});
+
+it('relays signals both ways, with a session description left as it was sent', function () {
+    [$browser, $asked, $agent] = $this->claimed();
+
+    $call = $this->poll($asked['id'], $asked['secret'], $browser['token'], ['tab' => 'tab-1'])->json('call.id');
+    $sdp = "v=0\r\no=- 1 2 IN IP4 127.0.0.1\r\n";
+
+    $this->visitorPost('signal', $asked['id'], $asked['secret'], $browser['token'], ['type' => 'offer', 'payload' => ['type' => 'offer', 'sdp' => $sdp]])->assertCreated();
+
+    $theirs = Calls::poll((string) $agent->id, 0, $call, 'agent-tab', hold: true, kind: 'assist');
+
+    expect($theirs['signals'])->toHaveCount(1)
+        ->and($theirs['signals'][0]['payload']['sdp'])->toBe($sdp)
+        ->and($theirs['signals'][0]['from'])->toBe('guest:'.$asked['id']);
+
+    Calls::signal(Call::query()->with('participants')->find($call), (string) $agent->id, 'answer', ['type' => 'answer', 'sdp' => 'v=0']);
+
+    $mine = $this->poll($asked['id'], $asked['secret'], $browser['token'], ['tab' => 'tab-1'])->assertOk();
+
+    expect($mine->json('signals'))->toHaveCount(1)
+        ->and($mine->json('signals.0.type'))->toBe('answer')
+        ->and($mine->json('cursor'))->toBe($mine->json('signals.0.id'));
+
+    $this->visitorPost('signal', $asked['id'], $asked['secret'], $browser['token'], ['type' => 'script', 'payload' => []])->assertUnprocessable();
+    $this->visitorPost('signal', $asked['id'], $asked['secret'], $browser['token'], ['type' => 'ice', 'payload' => 'text'])->assertUnprocessable();
+    $this->visitorPost('signal', $asked['id'], 'wrong', $browser['token'], ['type' => 'ice', 'payload' => ['candidate' => 'x']])->assertForbidden();
+});
+
+it('caps a signal\'s size the way Calls does', function () {
+    config()->set('packstub-calls.max_signal_kb', 1);
+
+    [$browser, $asked] = $this->claimed();
+
+    $this->poll($asked['id'], $asked['secret'], $browser['token'], ['tab' => 'tab-1']);
+
+    $this->visitorPost('signal', $asked['id'], $asked['secret'], $browser['token'], ['type' => 'offer', 'payload' => ['sdp' => str_repeat('a', 2048)]])
+        ->assertStatus(413)
+        ->assertJson(['reason' => 'too_large']);
+});
+
+it('ends the request with Calls\' reason when the agent hangs up', function () {
+    Event::fake([AssistEnded::class]);
+
+    [$browser, $asked, $agent] = $this->claimed();
+
+    $call = $this->poll($asked['id'], $asked['secret'], $browser['token'], ['tab' => 'tab-1'])->json('call.id');
+
+    Calls::hangup(Call::query()->with('participants')->find($call), (string) $agent->id);
+
+    expect(AssistRequest::query()->sole())->status->toBe('ended')->end_reason->toBe('hung_up');
+
+    $this->poll($asked['id'], $asked['secret'], $browser['token'], ['tab' => 'tab-1'])->assertJson(['status' => 'ended', 'call' => ['status' => 'ended']]);
+
+    Event::assertDispatchedTimes(AssistEnded::class, 1);
+});
+
+it('hangs up the call when the visitor hangs up or the agent ends it', function () {
+    [$browser, $asked, $agent] = $this->claimed();
+
+    $this->poll($asked['id'], $asked['secret'], $browser['token'], ['tab' => 'tab-1']);
+    $this->visitorPost('hangup', $asked['id'], $asked['secret'], $browser['token'])->assertOk()->assertJson(['status' => 'ended', 'end_reason' => 'hung_up']);
+
+    expect(Call::query()->sole()->status)->toBe('ended');
+
+    $second = $this->asked($browser);
+    $this->actingAs($agent)->postJson(route('session-replay.assist.claim', $second['id']))->assertOk();
+    $this->poll($second['id'], $second['secret'], $browser['token'], ['tab' => 'tab-1'])->assertJson(['status' => 'active']);
+
+    $this->postJson(route('session-replay.assist.end', $second['id']))->assertOk()->assertJson(['status' => 'ended', 'end_reason' => 'ended_by_agent']);
+
+    expect(Call::query()->latest('id')->first()->status)->toBe('ended')
+        ->and(ReplayMarker::query()->where('type', 'assist')->count())->toBe(2);
+});
+
+it('frees the guest\'s side when the page unloads, so the next page takes it', function () {
+    [$browser, $asked] = $this->claimed();
+
+    $this->poll($asked['id'], $asked['secret'], $browser['token'], ['tab' => 'tab-1']);
+    $this->visitorPost('leave', $asked['id'], $asked['secret'], $browser['token'], ['tab' => 'tab-1'])->assertNoContent();
+
+    expect(Call::query()->sole()->participants->firstWhere('user_id', 'guest:'.$asked['id'])->tab)->toBeNull();
+
+    $this->poll($asked['id'], $asked['secret'], $browser['token'], ['tab' => 'tab-2'])->assertJson(['call' => ['held' => false]]);
+});
+
+it('refuses a claim when the viewer and Calls see different people', function () {
+    config()->set('auth.guards.calls', ['driver' => 'session', 'provider' => 'users']);
+    config()->set('packstub-calls.guard', 'calls');
+
+    $asked = $this->asked($this->browser());
+
+    $this->actingAs($this->staff())->postJson(route('session-replay.assist.claim', $asked['id']))
+        ->assertStatus(409)
+        ->assertJson(['reason' => 'guard_mismatch']);
+
+    expect(AssistRequest::query()->sole()->status)->toBe('open');
+});
+
+it('asks before the agent joins with watch_consent', function () {
+    config()->set('session-replay.assist.watch_consent', true);
+
+    [$browser, $asked] = $this->claimed();
+
+    $this->poll($asked['id'], $asked['secret'], $browser['token'])->assertJson(['status' => 'claimed', 'consent' => 'watch', 'call' => null]);
+
+    // Waiting for the answer is not a lost page: the claim stays past the claim timeout.
+    $this->travel(40)->seconds();
+    $this->poll($asked['id'], $asked['secret'], $browser['token'])->assertJson(['status' => 'claimed']);
+
+    expect(Call::query()->count())->toBe(0);
+
+    $this->visitorPost('accept', $asked['id'], $asked['secret'], $browser['token'], ['tab' => 'tab-1'])->assertOk()->assertJson(['status' => 'active']);
+
+    expect(Call::query()->sole()->status)->toBe('active');
+});
+
+it('puts an unacknowledged claim back in the list when a call was due', function () {
+    [, $asked] = $this->claimed();
+
+    $this->travel(31)->seconds();
+
+    expect(collect($this->getJson(route('session-replay.assist.queue'))->json('requests'))->firstWhere('id', $asked['id'])['status'])->toBe('open');
+});
+
+it('offers help from a live recording, knocks on the page and issues the secret once', function () {
+    $browser = $this->browser();
+    $agent = $this->staff();
+
+    $offer = $this->actingAs($agent)->postJson(route('session-replay.assist.propose', $browser['session']))->assertCreated()->assertJson(['status' => 'open', 'opened_by' => 'agent', 'mine' => true]);
+    $id = $offer->json('id');
+
+    // A second agent: 409 with the holder's name.
+    $this->actingAs($this->staff(['name' => 'Bob']))->postJson(route('session-replay.assist.propose', $browser['session']))
+        ->assertStatus(409)
+        ->assertJson(['reason' => 'exists', 'holder' => 'Ana Support']);
+
+    // The knock, in the next upload of that recording only.
+    $this->ingest(['token' => $browser['token'], 'session' => $browser['session']->id, 'key' => $browser['key'], 'seq' => 1])
+        ->assertOk()
+        ->assertJson(['assist' => ['id' => $id, 'agent' => ['id' => (string) $agent->id, 'name' => 'Ana Support', 'avatar' => null]]]);
+
+    $other = $this->browser();
+    $this->ingest(['token' => $other['token'], 'session' => $other['session']->id, 'key' => $other['key'], 'seq' => 1])->assertJson(['assist' => null]);
+
+    $this->postJson(route('session-replay.assist.heartbeat'), ['token' => $browser['token'], 'session' => $browser['session']->id, 'key' => $browser['key']])
+        ->assertJson(['assist' => ['id' => $id]]);
+
+    // Someone without the recording's key gets nothing.
+    $this->poll($id, null, $browser['token'], ['session' => $browser['session']->id, 'key' => 'wrong'])->assertForbidden();
+    $this->poll($id, null, $other['token'], ['session' => $other['session']->id, 'key' => $other['key']])->assertForbidden();
+
+    $first = $this->poll($id, null, $browser['token'], ['session' => $browser['session']->id, 'key' => $browser['key']])->assertOk()->assertJson(['status' => 'open', 'consent' => 'watch']);
+    $secret = $first->json('secret');
+
+    expect($secret)->toMatch('/^[a-f0-9]{32}$/');
+
+    $this->poll($id, null, $browser['token'], ['session' => $browser['session']->id, 'key' => $browser['key']])->assertStatus(409);
+    $this->poll($id, $secret, $browser['token'])->assertOk()->assertJsonMissing(['secret' => $secret]);
+
+    $this->visitorPost('accept', $id, $secret, $browser['token'], ['tab' => 'tab-1'])->assertOk()->assertJson(['status' => 'active']);
+
+    expect(Call::query()->sole())->kind->toBe('assist')->status->toBe('active');
+});
+
+it('lets the visitor say not now to an offer, and expires one nobody answers', function () {
+    $browser = $this->browser();
+    $agent = $this->staff();
+
+    $id = $this->actingAs($agent)->postJson(route('session-replay.assist.propose', $browser['session']))->json('id');
+    $secret = $this->poll($id, null, $browser['token'], ['session' => $browser['session']->id, 'key' => $browser['key']])->json('secret');
+
+    $this->visitorPost('decline', $id, $secret, $browser['token'])->assertOk()->assertJson(['status' => 'declined']);
+    $this->getJson(route('session-replay.assist.status', $id))->assertJson(['status' => 'declined']);
+
+    $id = $this->postJson(route('session-replay.assist.propose', $browser['session']))->assertCreated()->json('id');
+
+    $this->travel(61)->seconds();
+    $browser['session']->forceFill(['last_activity_at' => now()])->save();
+
+    $this->getJson(route('session-replay.assist.status', $id))->assertJson(['status' => 'expired', 'end_reason' => 'proposal_timeout']);
+});
+
+it('lets the agent take an offer back', function () {
+    $browser = $this->browser();
+    $agent = $this->staff();
+
+    $id = $this->actingAs($agent)->postJson(route('session-replay.assist.propose', $browser['session']))->json('id');
+
+    $this->postJson(route('session-replay.assist.withdraw', $id))->assertOk()->assertJson(['status' => 'withdrawn']);
+
+    $this->ingest(['token' => $browser['token'], 'session' => $browser['session']->id, 'key' => $browser['key'], 'seq' => 1])->assertJson(['assist' => null]);
+});
+
+it('offers help only while the recording is live, to someone else, behind the gate', function () {
+    $staff = $this->staff();
+    $browser = $this->browser(null, ['last_activity_at' => now()->subMinutes(10)]);
+
+    $this->actingAs($staff)->postJson(route('session-replay.assist.propose', $browser['session']))->assertStatus(422)->assertJson(['reason' => 'not_live']);
+
+    $mine = $this->browser($staff);
+    $this->postJson(route('session-replay.assist.propose', $mine['session']))->assertForbidden();
+
+    $live = $this->browser();
+    $this->actingAs($this->user())->postJson(route('session-replay.assist.propose', $live['session']))->assertForbidden();
+});
+
+it('ends the assist when the agent starts another call, since an agent helps one visitor at a time', function () {
+    [$browser, $asked, $agent] = $this->claimed();
+
+    $this->poll($asked['id'], $asked['secret'], $browser['token'], ['tab' => 'tab-1'])->assertJson(['status' => 'active']);
+
+    Calls::start($agent, $this->user());
+
+    expect(AssistRequest::query()->sole()->status)->toBe('ended');
+});
