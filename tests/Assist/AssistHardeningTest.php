@@ -1,7 +1,9 @@
 <?php
 
+use Illuminate\Database\UniqueConstraintViolationException;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\RateLimiter;
+use Illuminate\Support\Facades\Schema;
 use Illuminate\Support\Str;
 use Packstub\SessionReplay\Facades\SessionReplay;
 use Packstub\SessionReplay\Models\AssistRequest;
@@ -256,4 +258,20 @@ it('narrows the queue to the workspace the caller names, in the query', function
 
     expect(app(Assist::class)->queue($agent))->toHaveCount(2)
         ->and(app(Assist::class)->queue($agent, $acme)->pluck('id')->all())->toBe([$ours]);
+});
+
+it('keeps lock_key unique while letting any number of finished requests have none', function () {
+    $unique = collect(Schema::connection(config('session-replay.storage.connection'))->getIndexes('replay_assist_requests'))
+        ->first(fn (array $index) => $index['columns'] === ['lock_key']);
+
+    expect($unique)->not->toBeNull()->and($unique['unique'])->toBeTrue();
+
+    $row = fn (?string $key) => AssistRequest::query()->forceCreate(['id' => (string) Str::uuid(), 'status' => 'ended', 'opened_by' => 'visitor', 'lock_key' => $key]);
+
+    $row(null);
+    $row(null);
+    $row('one');
+
+    expect(fn () => $row('one'))->toThrow(UniqueConstraintViolationException::class)
+        ->and(AssistRequest::query()->whereNull('lock_key')->count())->toBe(2);
 });

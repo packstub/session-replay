@@ -491,7 +491,13 @@ export function installAssist(recorder, env) {
         endpoint?.send({ t: 'state', hidden: document.visibilityState === 'hidden', url: recorder.redacted(location.href), width: window.innerWidth, height: window.innerHeight });
     }
 
-    /** The recorder's tap: one event, after every privacy step, before the asynchronous stylesheet dedupe. */
+    /**
+     * The recorder's tap: one event, after every privacy step, before the asynchronous stylesheet dedupe. One channel
+     * message per event, sent at once: rrweb already emits one event per batch of mutations and groups pointer
+     * positions into one event, and the endpoint sends behind backpressure (pointer samples dropped first), so
+     * batching events per task would save little framing; it would need a message type both sides know, so it waits
+     * for a protocol version that needs one.
+     */
     function tap(event) {
         if (!streaming || !endpoint) return;
 

@@ -26,6 +26,7 @@ use Packstub\SessionReplay\Events\AssistStarted;
 use Packstub\SessionReplay\Exceptions\AssistRefused;
 use Packstub\SessionReplay\Facades\SessionReplay;
 use Packstub\SessionReplay\Models\AssistRequest;
+use Packstub\SessionReplay\Models\ReplayChunk;
 use Packstub\SessionReplay\Models\ReplayMarker;
 use Packstub\SessionReplay\Models\ReplaySession;
 use Throwable;
@@ -1240,7 +1241,8 @@ class Assist
 
     /**
      * An "assist" marker on the recording the request ended on: how it was opened, how it ended, how long it ran and
-     * what the visitor allowed. Never who the agent is. Written by the server, so a browser cannot make one up.
+     * what the visitor allowed, each with how long it was on ("control 2 min, audio 45 s"). Never who the agent is.
+     * Written by the server, so a browser cannot make one up.
      */
     protected function mark(AssistRequest $request): void
     {
@@ -1248,7 +1250,12 @@ class Assist
             return;
         }
 
-        $granted = array_values(array_unique(array_column(array_filter((array) $request->grants, fn (mixed $grant): bool => is_array($grant) && ($grant['granted'] ?? false) === true), 'kind')));
+        $end = $request->ended_at ?? now();
+        $granted = [];
+
+        foreach ($this->grantDurations($request, $end) as $kind => $ms) {
+            $granted[] = $ms >= 1000 ? $kind.' '.self::humanDuration($ms) : $kind;
+        }
 
         ReplayMarker::query()->insert([
             'replay_session_id' => $request->replay_session_id,
@@ -1258,12 +1265,79 @@ class Assist
                 'opened_by' => $request->opened_by,
                 'status' => $request->status,
                 'reason' => $request->end_reason,
-                'durationMs' => $request->started_at === null ? null : (int) $request->started_at->diffInMilliseconds($request->ended_at ?? now()),
-                'granted' => $granted === [] ? null : implode(', ', $granted),
+                'durationMs' => $request->started_at === null ? null : (int) $request->started_at->diffInMilliseconds($end),
+                'granted' => $granted === [] ? null : Str::limit(implode(', ', $granted), 480),
             ], fn (mixed $value): bool => $value !== null)),
-            'at_ms' => now()->getTimestampMs(),
+            'at_ms' => $this->recordingTime($request->replay_session_id),
             'created_at' => now(),
         ]);
+    }
+
+    /**
+     * How long each thing the visitor allowed was on, in the order first allowed: from each grant to the next
+     * revocation of the same kind, or to the end of the assist.
+     *
+     * @return array<string, int> kind => milliseconds
+     */
+    protected function grantDurations(AssistRequest $request, \DateTimeInterface $end): array
+    {
+        $since = [];
+        $total = [];
+        $endMs = (int) $end->format('Uv');
+
+        foreach ((array) $request->grants as $grant) {
+            if (! is_array($grant) || ($grant['by'] ?? null) !== 'visitor' || ! is_bool($grant['granted'] ?? null) || ! is_string($grant['kind'] ?? null)) {
+                continue;
+            }
+
+            $kind = $grant['kind'];
+            $at = is_string($grant['at'] ?? null) && strtotime($grant['at']) !== false ? strtotime($grant['at']) * 1000 : $endMs;
+
+            if ($grant['granted']) {
+                $total[$kind] ??= 0;
+                $since[$kind] ??= $at;
+            } elseif (isset($since[$kind])) {
+                $total[$kind] += max(0, $at - $since[$kind]);
+                unset($since[$kind]);
+            }
+        }
+
+        foreach ($since as $kind => $at) {
+            $total[$kind] += max(0, $endMs - $at);
+        }
+
+        return $total;
+    }
+
+    /** "45 s", "2 min", "1 h 5 min". */
+    protected static function humanDuration(int $ms): string
+    {
+        $seconds = (int) round($ms / 1000);
+
+        if ($seconds < 60) {
+            return $seconds.' s';
+        }
+
+        $minutes = (int) round($seconds / 60);
+
+        return $minutes < 60 ? $minutes.' min' : intdiv($minutes, 60).' h'.($minutes % 60 ? ' '.($minutes % 60).' min' : '');
+    }
+
+    /**
+     * Now on the recording's own clock: the browser's events carry its clock, the server's may differ. The offset is
+     * read off the last chunk (its last event against when it arrived, upload time included, so the marker may land
+     * a moment early, never before that event). The server's clock when no chunk is stored.
+     */
+    protected function recordingTime(string $sessionId): int
+    {
+        $now = now()->getTimestampMs();
+        $last = ReplayChunk::query()->where('replay_session_id', $sessionId)->orderByDesc('seq')->first(['to_ms', 'created_at']);
+
+        if ($last === null || $last->created_at === null) {
+            return $now;
+        }
+
+        return max((int) $last->to_ms, $now + ((int) $last->to_ms - $last->created_at->getTimestampMs()));
     }
 
     protected function seconds(string $key, int $default): int

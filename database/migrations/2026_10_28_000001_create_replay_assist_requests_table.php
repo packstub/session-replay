@@ -19,7 +19,11 @@ return new class extends Migration
 
     public function up(): void
     {
-        Schema::connection($this->connection)->create('replay_assist_requests', function (Blueprint $table) {
+        $schema = Schema::connection($this->connection);
+        // SQL Server lets a unique index hold one NULL only: there it is filtered to the rows that have a key.
+        $sqlServer = $schema->getConnection()->getDriverName() === 'sqlsrv';
+
+        $schema->create('replay_assist_requests', function (Blueprint $table) use ($sqlServer) {
             $table->uuid('id')->primary();
             $table->char('secret_hash', 64)->nullable(); // null until issued (an agent's proposal, before the page answers it)
             // The recording the tab is making; null for a tab that records nothing. Moves to the tab's next recording
@@ -38,7 +42,12 @@ return new class extends Migration
             // Set while the request is not finished (the recording's id, or for a tab without one "tab:" and a hash of the
             // token's nonce and the tab's own id, so pages served from a full-page cache do not share it): unique, so a
             // recording (or a tab without one) never has two requests going at once, however the requests race.
-            $table->string('lock_key', 80)->nullable()->unique();
+            $table->string('lock_key', 80)->nullable();
+
+            if (! $sqlServer) {
+                $table->unique('lock_key');
+            }
+
             // The agent as the request they claimed or proposed from saw them: the viewer guard's key, the morph class of
             // that guard's user, the guard's name and Calls' scope there. The call is created later in the visitor's
             // request, where no panel is active: the agent is loaded and rung from these, never from the default guard.
@@ -63,6 +72,13 @@ return new class extends Migration
             $table->index(['status', 'created_at']);
             $table->index(['tenant_type', 'tenant_id', 'status']);
         });
+
+        if ($sqlServer) {
+            $connection = $schema->getConnection();
+            $index = $connection->getTablePrefix().'replay_assist_requests_lock_key_unique';
+
+            $connection->statement('create unique index '.$index.' on '.$connection->getQueryGrammar()->wrapTable('replay_assist_requests').' (lock_key) where lock_key is not null');
+        }
     }
 
     public function down(): void

@@ -7,6 +7,7 @@ use Packstub\SessionReplay\Events\AssistEnded;
 use Packstub\SessionReplay\Events\AssistRequested;
 use Packstub\SessionReplay\Facades\SessionReplay;
 use Packstub\SessionReplay\Models\AssistRequest;
+use Packstub\SessionReplay\Models\ReplayChunk;
 use Packstub\SessionReplay\Models\ReplayMarker;
 use Packstub\SessionReplay\Models\ReplaySession;
 use Packstub\SessionReplay\Support\ContextToken;
@@ -565,4 +566,52 @@ it('takes the secret, the token and the key from the body only, never from a URL
     $this->postJson(route('session-replay.assist.poll', ['id' => $asked['id'], 'secret' => $asked['secret']]), ['token' => $browser['token']])->assertForbidden();
 
     $this->poll($asked['id'], $asked['secret'], $browser['token'])->assertOk()->assertJson(['status' => 'open']);
+});
+
+it('puts how long each grant was on in the marker, at the time on the recording\'s own clock', function () {
+    $this->freezeSecond();
+
+    [$browser, $asked] = $this->claimed();
+
+    // The visitor's browser runs ten minutes behind the server: its last chunk arrived just now.
+    $chunk = ReplayChunk::query()->where('replay_session_id', $browser['session']->id)->orderByDesc('seq')->firstOrFail();
+    $browserNow = now()->subMinutes(10)->getTimestampMs();
+    $chunk->forceFill(['to_ms' => $browserNow, 'created_at' => now()])->save();
+
+    $grant = fn (string $kind, bool $granted) => $this->visitorPost('grants', $asked['id'], $asked['secret'], $browser['token'], ['kind' => $kind, 'granted' => $granted])->assertOk();
+
+    $grant('control', true);
+    $this->travel(2)->minutes();
+    $grant('control', false);
+    $grant('audio', true);
+    $this->travel(45)->seconds();
+    $grant('control', true);
+
+    $this->postJson(route('session-replay.assist.end', $asked['id']))->assertOk();
+
+    $marker = ReplayMarker::query()->where('type', 'assist')->sole();
+
+    // Control 2 min, then again for under a second; audio on until the end.
+    expect($marker->payload['granted'])->toBe('control 2 min, audio 45 s')
+        ->and($marker->at_ms)->toBe($browserNow + (2 * 60 + 45) * 1000);
+});
+
+it('places the marker at the server\'s time for a recording with nothing stored, and never before its last event', function () {
+    $this->freezeSecond();
+
+    [$browser, $asked] = $this->claimed();
+
+    // A browser clock ahead of the server, the chunk uploaded late: the marker still comes after the last event.
+    ReplayChunk::query()->where('replay_session_id', $browser['session']->id)->update(['to_ms' => now()->addMinute()->getTimestampMs(), 'created_at' => now()->addMinutes(5)]);
+
+    $this->postJson(route('session-replay.assist.end', $asked['id']))->assertOk();
+
+    expect(ReplayMarker::query()->where('type', 'assist')->sole()->at_ms)->toBe(now()->addMinute()->getTimestampMs());
+
+    ReplayChunk::query()->where('replay_session_id', $browser['session']->id)->delete();
+    $second = $this->asked($browser);
+    $this->postJson(route('session-replay.assist.claim', $second['id']))->assertOk();
+    $this->postJson(route('session-replay.assist.end', $second['id']))->assertOk();
+
+    expect(ReplayMarker::query()->where('type', 'assist')->latest('id')->first()->at_ms)->toBe(now()->getTimestampMs());
 });
