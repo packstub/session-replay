@@ -53,6 +53,12 @@ class Assist
      */
     public const AGENT_PRESENT_SECONDS = 10;
 
+    /**
+     * How often the timeouts run over a workspace's pending requests at most: the queue is read every few seconds by
+     * every agent (the panel's table, notifier and badge), and each request's own poll runs its timeouts anyway.
+     */
+    public const SWEEP_EVERY_SECONDS = 5;
+
     public function enabled(): bool
     {
         return (bool) config('session-replay.assist.enabled', false);
@@ -107,7 +113,7 @@ class Assist
             return [$existing, $this->issueSecret($existing, $context), false];
         }
 
-        $this->sweep();
+        $this->sweep([$context->tenantType, $context->tenantId]);
         $this->assertUnderLimits($context);
 
         $secret = self::newSecret();
@@ -383,18 +389,24 @@ class Assist
     // ------------------------------------------------------------------
 
     /**
-     * The requests this agent may see that wait or are theirs: open and claimed ones, and their own live ones.
+     * The requests this agent may see that wait or are theirs: open and claimed ones, and their own live ones. Only
+     * the workspace the app's tenantUsing() names for the agent's request, and only $workspace when one is given (a
+     * panel scoped to its tenant).
      *
      * @return Collection<int, AssistRequest>
      */
-    public function queue(Authenticatable $agent): Collection
+    public function queue(Authenticatable $agent, ?Model $workspace = null): Collection
     {
-        $this->sweep();
+        $tenant = $this->agentTenant();
+        $scopes = array_filter([$tenant, $workspace]);
+
+        $this->sweep($scopes === [] ? null : [reset($scopes)->getMorphClass(), (string) reset($scopes)->getKey()]);
 
         return AssistRequest::query()
             ->pending()
             ->where(fn ($query) => $query->whereIn('status', [AssistRequest::OPEN, AssistRequest::CLAIMED])->orWhere(fn ($mine) => $this->whereHolder($mine, $agent)))
-            ->when($this->agentTenant(), fn ($query, Model $tenant) => $query->where('tenant_type', $tenant->getMorphClass())->where('tenant_id', (string) $tenant->getKey()))
+            ->when($tenant, fn ($query, Model $tenant) => $query->where('tenant_type', $tenant->getMorphClass())->where('tenant_id', (string) $tenant->getKey()))
+            ->when($workspace, fn ($query, Model $workspace) => $query->where('tenant_type', $workspace->getMorphClass())->where('tenant_id', (string) $workspace->getKey()))
             ->where(function ($query) use ($agent): void {
                 // A request without a recording has nothing for visibleUsing() to look at: with a rule there, it is
                 // shown only when canAssistUsing() decides (fail closed), or a viewer of one workspace would see another's.
@@ -602,10 +614,25 @@ class Assist
     // Lifecycle
     // ------------------------------------------------------------------
 
-    /** The timeouts, over every request that is not finished. */
-    public function sweep(): void
+    /**
+     * The timeouts, over every request that is not finished, or those of one workspace ([tenant_type, tenant_id]; a
+     * null pair is the requests without a workspace). At most once every SWEEP_EVERY_SECONDS per workspace (and for
+     * all of them), across processes through the cache: the queue is read every few seconds by every agent.
+     *
+     * @param  array{0: ?string, 1: ?string}|null  $workspace
+     */
+    public function sweep(?array $workspace = null): void
     {
-        AssistRequest::query()->pending()->get()->each(fn (AssistRequest $request) => $this->expire($request));
+        $key = 'session-replay|assist-sweep|'.($workspace === null ? '*' : ($workspace[0] ?? '').':'.($workspace[1] ?? ''));
+
+        if (! Cache::add($key, true, self::SWEEP_EVERY_SECONDS)) {
+            return;
+        }
+
+        AssistRequest::query()->pending()
+            ->when($workspace !== null, fn (Builder $query) => $query->where('tenant_type', $workspace[0])->where('tenant_id', $workspace[1]))
+            ->get()
+            ->each(fn (AssistRequest $request) => $this->expire($request));
     }
 
     /**

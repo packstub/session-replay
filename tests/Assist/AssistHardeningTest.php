@@ -201,3 +201,59 @@ it('treats a recording from before write keys as no recording: the heartbeat kee
     expect(app(Assist::class)->knock($session->id))->toBeNull();
     $this->poll($offer->id, null, $browser['token'], ['session' => $session->id])->assertForbidden();
 });
+
+it('runs the timeouts over the queue at most once every few seconds, and only over the agent\'s workspace', function () {
+    $this->freezeSecond();
+    config()->set('session-replay.assist.requests_per_hour', null);
+
+    $acme = $this->team('Acme');
+    $globex = $this->team('Globex');
+    $ask = fn (Team $team, string $tab) => $this->postJson(route('session-replay.assist.store'), ['token' => $this->token($this->user(), $team), 'tab' => $tab])->assertCreated()->json('id');
+    $quiet = fn (string $id) => AssistRequest::query()->whereKey($id)->update(['visitor_seen_at' => now()->subMinutes(2)]);
+    $status = fn (string $id) => AssistRequest::query()->find($id)->status;
+
+    SessionReplay::tenantUsing(fn () => $acme);
+    $this->actingAs($this->staff());
+
+    $first = $ask($acme, 'tab-1');
+    $theirs = $ask($globex, 'tab-1');
+    $quiet($first);
+    $quiet($theirs);
+
+    // Asking swept the workspace a moment ago. The next read after the interval sweeps Acme: its quiet request
+    // expires; Globex's is not this agent's to sweep.
+    $this->travel(Assist::SWEEP_EVERY_SECONDS)->seconds();
+    $this->getJson(route('session-replay.assist.queue'))->assertOk();
+
+    expect($status($first))->toBe('expired')
+        ->and($status($theirs))->toBe('open');
+
+    // Reads right after it do not sweep again (the table polls every 5 s, the notifier every 10 s, the badge too).
+    $second = $ask($acme, 'tab-2');
+    $quiet($second);
+    $this->travel(2)->seconds();
+    $this->getJson(route('session-replay.assist.queue'))->assertOk();
+
+    expect($status($second))->toBe('open');
+
+    // Once the interval has passed, the next read sweeps.
+    $this->travel(Assist::SWEEP_EVERY_SECONDS)->seconds();
+    $this->getJson(route('session-replay.assist.queue'))->assertOk();
+
+    expect($status($second))->toBe('expired')
+        ->and($status($theirs))->toBe('open');
+});
+
+it('narrows the queue to the workspace the caller names, in the query', function () {
+    $acme = $this->team('Acme');
+    $globex = $this->team('Globex');
+
+    $ours = $this->postJson(route('session-replay.assist.store'), ['token' => $this->token($this->user(), $acme), 'tab' => 'tab-1'])->assertCreated()->json('id');
+    $this->postJson(route('session-replay.assist.store'), ['token' => $this->token($this->user(), $globex), 'tab' => 'tab-1'])->assertCreated();
+
+    $agent = $this->staff();
+    $this->actingAs($agent);
+
+    expect(app(Assist::class)->queue($agent))->toHaveCount(2)
+        ->and(app(Assist::class)->queue($agent, $acme)->pluck('id')->all())->toBe([$ours]);
+});
