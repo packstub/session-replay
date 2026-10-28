@@ -16,11 +16,11 @@ use Packstub\SessionReplay\Support\ContextToken;
  *   open     → claimed    an agent takes a visitor's request (one UPDATE where status = open)
  *   open     → active     the visitor accepts an agent's proposal (the call is created then)
  *   claimed  → active     the visitor's page acknowledges the claim on its next poll (the call is created then)
- *   claimed  → open       no acknowledgement within assist.claim_timeout_seconds
+ *   claimed  → open       no acknowledgement within assist.claim_timeout_seconds, or the agent withdraws the claim
  *   open|claimed → cancelled   the visitor cancels, or the token names someone else
  *   open     → declined   "Not now" on an agent's proposal
  *   open|claimed → expired     a proposal unanswered, or a page that stopped polling
- *   open|claimed → withdrawn   the agent takes the proposal or the claim back
+ *   open     → withdrawn  the agent takes the proposal back, or may not help any more when the visitor accepts
  *   claimed|active → ended     the call ended (with Calls' reason), the agent ended it, max_duration
  *
  * @property string $id
@@ -82,6 +82,12 @@ class AssistRequest extends ReplayModel
 
     /** What a visitor's browser may report in the grants log. */
     public const GRANTS = ['watch', 'control', 'audio', 'video', 'screen', 'control_masked'];
+
+    /** What an agent may log asking for (the request side of the log, next to the visitor's answers). */
+    public const ASKS = ['control', 'audio', 'video', 'screen', 'control_masked'];
+
+    /** The agent's fields, cleared when a claim goes back to the list. */
+    public const UNCLAIMED = ['agent_id' => null, 'agent_name' => null, 'agent_avatar' => null, 'claimed_at' => null, 'agent_seen_at' => null];
 
     /** The most entries the grants log keeps: a page reporting in a loop must not grow the row for ever. */
     public const MAX_GRANTS = 200;

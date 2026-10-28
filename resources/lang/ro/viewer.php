@@ -81,6 +81,7 @@ return [
             'withdrawn' => 'Retrasă.',
             'ended' => 'Încheiată.',
             'proposed' => 'Ofertă trimisă. Vizitatorul o vede la următoarea încărcare.',
+            'asked' => 'Notat.',
         ],
     ],
 

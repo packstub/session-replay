@@ -424,13 +424,56 @@ it('ends an assist at max_duration_minutes', function () {
     $last->assertJson(['status' => 'ended', 'end_reason' => 'max_duration']);
 });
 
-it('lets the agent withdraw a claim, and nobody else', function () {
+it('lets the agent withdraw a claim, and nobody else; the request goes back to the list', function () {
+    Event::fake([AssistEnded::class]);
+
     $asked = $this->asked($this->browser());
     $ana = $this->staff();
+    $bob = $this->staff(['name' => 'Bob']);
 
     $this->actingAs($ana)->postJson(route('session-replay.assist.claim', $asked['id']))->assertOk();
-    $this->actingAs($this->staff(['name' => 'Bob']))->postJson(route('session-replay.assist.withdraw', $asked['id']))->assertForbidden();
-    $this->actingAs($ana)->postJson(route('session-replay.assist.withdraw', $asked['id']))->assertOk()->assertJson(['status' => 'withdrawn']);
+    $this->actingAs($bob)->postJson(route('session-replay.assist.withdraw', $asked['id']))->assertForbidden();
+    $this->actingAs($ana)->postJson(route('session-replay.assist.withdraw', $asked['id']))->assertOk()->assertJson(['status' => 'open', 'agent' => null]);
+
+    // The visitor still waits: nothing ended, and someone else may take it now.
+    Event::assertNotDispatched(AssistEnded::class);
+    expect(AssistRequest::query()->sole())->claimed_at->toBeNull()->agent_seen_at->toBeNull();
+
+    $this->actingAs($bob)->postJson(route('session-replay.assist.claim', $asked['id']))->assertOk()->assertJson(['status' => 'claimed', 'agent' => ['name' => 'Bob']]);
+
+    // Ana let go: it is not hers to withdraw again.
+    $this->actingAs($ana)->postJson(route('session-replay.assist.withdraw', $asked['id']))->assertForbidden();
+});
+
+it('logs what the agent asked for next to what the visitor allowed', function () {
+    $browser = $this->browser();
+    $asked = $this->asked($browser);
+    $ana = $this->staff();
+
+    // Not while nobody holds it, and not by someone who does not.
+    $this->actingAs($ana)->postJson(route('session-replay.assist.asks', $asked['id']), ['what' => 'control'])->assertForbidden();
+
+    $this->postJson(route('session-replay.assist.claim', $asked['id']))->assertOk();
+
+    $this->postJson(route('session-replay.assist.asks', $asked['id']), ['what' => 'root'])->assertUnprocessable();
+    $this->postJson(route('session-replay.assist.asks', $asked['id']), ['what' => 'watch'])->assertUnprocessable();
+    $this->postJson(route('session-replay.assist.asks', $asked['id']), ['what' => 'control'])->assertOk();
+    $this->actingAs($this->staff(['name' => 'Bob']))->postJson(route('session-replay.assist.asks', $asked['id']), ['what' => 'audio'])->assertForbidden();
+
+    $this->visitorPost('grants', $asked['id'], $asked['secret'], $browser['token'], ['kind' => 'control', 'granted' => true])->assertOk();
+
+    $grants = AssistRequest::query()->sole()->grants;
+
+    expect($grants)->toHaveCount(2)
+        ->and($grants[0])->toMatchArray(['kind' => 'control', 'asked' => true, 'by' => 'agent'])
+        ->and($grants[0])->not->toHaveKey('granted')
+        ->and($grants[1])->toMatchArray(['kind' => 'control', 'granted' => true, 'by' => 'visitor']);
+
+    // An ask is not a grant: the marker names what the visitor allowed only.
+    $this->actingAs($ana)->postJson(route('session-replay.assist.asks', $asked['id']), ['what' => 'audio'])->assertOk();
+    $this->postJson(route('session-replay.assist.end', $asked['id']))->assertOk();
+
+    expect(ReplayMarker::query()->where('type', 'assist')->sole()->payload['granted'])->toBe('control');
 });
 
 it('logs what the visitor allowed, with a timestamp, and only known grants', function () {

@@ -41,11 +41,11 @@ A request goes `open`, then `claimed` by an agent, then `ended` by the agent. `A
 | `open` → `claimed` | agent | an agent takes a visitor's request; two agents cannot both get it |
 | `open` → `active` | visitor | the visitor accepts an agent's offer; the call is created then |
 | `claimed` → `active` | visitor's page | its next poll acknowledges the claim; the call is created then |
-| `claimed` → `open` | timeout | the page did not acknowledge within `assist.claim_timeout_seconds` (30) |
+| `claimed` → `open` | timeout, agent | the page did not acknowledge within `assist.claim_timeout_seconds` (30), or the agent let go of the claim (the visitor still waits; someone else may take it) |
 | `open`, `claimed` → `cancelled` | visitor | Cancel, or the page is signed in as someone else now |
 | `open` → `declined` | visitor | "Not now" on an agent's offer |
 | `open`, `claimed` → `expired` | timeout | an offer unanswered for `assist.proposal_timeout_seconds` (60), or a page that stopped polling for `assist.visitor_timeout_seconds` (60) |
-| `open`, `claimed` → `withdrawn` | agent | the agent takes the offer or the claim back |
+| `open` → `withdrawn` | agent | the agent takes the offer back, or may no longer help (`canAssist` is asked again when the visitor accepts; `end_reason` `not_allowed`) |
 | `claimed`, `active` → `ended` | agent, Calls, timeout | the agent ends it, the call ended (Calls' reason: `hung_up`, `dropped`…), the visitor hung up, the page went quiet, or `assist.max_duration_minutes` (120) passed |
 
 A recording has at most one request going at a time (a tab without a recording, one per rendered page): asking again returns the one that is going. The timeouts run inside the visitor's poll and the agent's list, the way Calls expires calls inside its poll: no scheduler needed.
@@ -119,7 +119,8 @@ Behind `viewer.middleware` and the `viewSessionReplay` gate; every request-bound
 | `GET` | `assist/requests/{id}/status` | one request; also marks you as seen while you hold it |
 | `POST` | `assist/requests/{id}/claim` | take a visitor's request; 409 with `holder` when someone was faster |
 | `POST` | `assist/sessions/{session}/propose` | offer help to the person making a live recording; 409 with `holder` when the recording has a request going, 422 when it is not live (no upload for two minutes) |
-| `POST` | `assist/requests/{id}/withdraw` | take your offer or your claim back |
+| `POST` | `assist/requests/{id}/withdraw` | take your offer back (it ends, `withdrawn`), or let go of your claim (it goes back to the list) |
+| `POST` | `assist/requests/{id}/asks` `{what}` | log that you asked the visitor for `control`, `audio`, `video`, `screen` or `control_masked`, so the grants log shows what was asked next to what was allowed |
 | `POST` | `assist/requests/{id}/end` | end it (and the call) |
 
 A request as the agent sees it: `id`, `status`, `opened_by`, `session`, `session_url`, `user` (`id`, `label`), `message`, `page_url`, `agent` (`id`, `name`), `mine`, `call`, `visitor_here`, `visitor_seen_ago`, `waiting` (seconds), `grants`, `claimed_at`, `started_at`, `ended_at`, `end_reason`, `created_at`. Refusals are `{message, reason}`, `reason` one of `taken`, `exists`, `not_allowed`, `guard_mismatch`, `not_live`, `no_calls`, `state`.
@@ -127,7 +128,7 @@ A request as the agent sees it: `id`, `status`, `opened_by`, `session`, `session
 ## Privacy
 
 - The visitor's routes take no identity but the signed token and the request's secret; the agent sees the page's URL with `privacy.redact_query` applied, and the message as text.
-- The grants log is the compliance trail: what the visitor allowed, and when. `AssistEnded` carries it; the `assist` marker summarises it on the recording.
+- The grants log is the compliance trail: what the agent asked for (`{kind, asked: true, by: "agent", at}`) and what the visitor allowed or took back (`{kind, granted, by: "visitor", at}`), and when. `AssistEnded` carries it; the `assist` marker summarises what was allowed on the recording.
 - Calls deletes a call's signals when it ends; the package never logs a session description or a candidate.
 - A request is deleted with its recording by `session-replay:prune`; one that never had a recording, after `retention.days`.
 

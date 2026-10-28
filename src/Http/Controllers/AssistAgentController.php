@@ -71,6 +71,21 @@ class AssistAgentController
         return $this->act($http, $id, fn (Authenticatable $agent, AssistRequest $request) => $this->assist->withdraw($agent, $request), 'withdrawn');
     }
 
+    /**
+     * POST {path}/assist/requests/{id}/asks — what (control, audio, video, screen, control_masked): the agent asked the
+     * visitor for it over the channel, logged next to the visitor's answer.
+     */
+    public function ask(Request $http, string $id): JsonResponse|RedirectResponse
+    {
+        $what = $http->input('what');
+
+        if (! in_array($what, AssistRequest::ASKS, true)) {
+            return response()->json(['message' => 'Ask for control, audio, video, screen or control_masked.', 'reason' => 'invalid'], 422);
+        }
+
+        return $this->act($http, $id, fn (Authenticatable $agent, AssistRequest $request) => $this->assist->ask($agent, $request, $what), 'asked');
+    }
+
     /** POST {path}/assist/requests/{id}/end */
     public function end(Request $http, string $id): JsonResponse|RedirectResponse
     {

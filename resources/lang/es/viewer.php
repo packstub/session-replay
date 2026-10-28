@@ -81,6 +81,7 @@ return [
             'withdrawn' => 'Retirada.',
             'ended' => 'Terminada.',
             'proposed' => 'Oferta enviada. El visitante la verá en su próxima subida.',
+            'asked' => 'Anotado.',
         ],
     ],
 

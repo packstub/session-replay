@@ -81,6 +81,7 @@ return [
             'withdrawn' => 'Withdrawn.',
             'ended' => 'Ended.',
             'proposed' => 'Offer sent. The visitor sees it on their next upload.',
+            'asked' => 'Noted.',
         ],
     ],
 

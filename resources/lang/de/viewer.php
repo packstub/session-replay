@@ -81,6 +81,7 @@ return [
             'withdrawn' => 'Zurückgezogen.',
             'ended' => 'Beendet.',
             'proposed' => 'Angebot gesendet. Der Besucher sieht es bei seinem nächsten Upload.',
+            'asked' => 'Vermerkt.',
         ],
     ],
 

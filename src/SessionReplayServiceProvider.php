@@ -276,6 +276,7 @@ class SessionReplayServiceProvider extends PackageServiceProvider
                 Route::post('requests/{id}/claim', [AssistAgentController::class, 'claim'])->where('id', $uuid)->name('claim');
                 Route::post('requests/{id}/withdraw', [AssistAgentController::class, 'withdraw'])->where('id', $uuid)->name('withdraw');
                 Route::post('requests/{id}/end', [AssistAgentController::class, 'end'])->where('id', $uuid)->name('end');
+                Route::post('requests/{id}/asks', [AssistAgentController::class, 'ask'])->where('id', $uuid)->name('asks');
                 Route::post('sessions/{session}/propose', [AssistAgentController::class, 'propose'])->where('session', $uuid)->missing(fn () => abort(403))->name('propose');
             });
         });

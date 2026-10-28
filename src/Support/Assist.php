@@ -3,10 +3,12 @@
 namespace Packstub\SessionReplay\Support;
 
 use Illuminate\Contracts\Auth\Authenticatable;
+use Illuminate\Contracts\Auth\UserProvider;
 use Illuminate\Database\Connection;
 use Illuminate\Database\Eloquent\Collection;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\UniqueConstraintViolationException;
+use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Str;
@@ -209,6 +211,18 @@ class Assist
             throw new AssistRefused(409, 'Live help needs packstub/calls.', 'no_calls');
         }
 
+        // The agent's rights may have changed since they offered or claimed (a role taken away, the person removed):
+        // asked again now, before the visitor's page is put on a call with them.
+        $agent = $this->agentModel($request);
+
+        if ($agent === null || ! SessionReplay::canAssist($agent, $request->session, $request)) {
+            $proposal
+                ? $this->finish($request, [AssistRequest::OPEN], AssistRequest::WITHDRAWN, 'not_allowed')
+                : $request->transition([AssistRequest::CLAIMED], AssistRequest::OPEN, AssistRequest::UNCLAIMED);
+
+            throw new AssistRefused(409, 'This person cannot help with this request any more.', 'not_allowed');
+        }
+
         if (! $this->startCall($request, [$request->status], $tab)) {
             throw new AssistRefused(409, 'The request changed meanwhile.', 'state');
         }
@@ -273,10 +287,20 @@ class Assist
             throw new AssistRefused(409, 'The assist is not live.', 'state');
         }
 
-        $this->connection()->transaction(function () use ($request, $kind, $granted): void {
+        $this->log($request, ['kind' => $kind, 'granted' => $granted, 'by' => 'visitor', 'at' => now()->toIso8601String()]);
+    }
+
+    /**
+     * Append an entry to the request's grants log (capped at MAX_GRANTS, the oldest dropped).
+     *
+     * @param  array<string, mixed>  $entry
+     */
+    protected function log(AssistRequest $request, array $entry): void
+    {
+        $this->connection()->transaction(function () use ($request, $entry): void {
             $fresh = AssistRequest::query()->whereKey($request->getKey())->lockForUpdate()->firstOrFail();
             $grants = array_slice((array) $fresh->grants, -(AssistRequest::MAX_GRANTS - 1));
-            $grants[] = ['kind' => $kind, 'granted' => $granted, 'by' => 'visitor', 'at' => now()->toIso8601String()];
+            $grants[] = $entry;
 
             $fresh->forceFill(['grants' => $grants])->save();
         });
@@ -468,7 +492,8 @@ class Assist
     }
 
     /**
-     * The agent takes the proposal or the claim back.
+     * The agent takes a proposal back (it ends, withdrawn) or lets go of a claim: the visitor still waits, so the
+     * request goes back to the list for someone else.
      *
      * @throws AssistRefused
      */
@@ -476,9 +501,30 @@ class Assist
     {
         $this->assertHolder($agent, $request);
 
-        if (! $this->finish($request, [AssistRequest::OPEN, AssistRequest::CLAIMED], AssistRequest::WITHDRAWN, 'withdrawn')) {
+        $done = $request->openedByAgent()
+            ? $this->finish($request, [AssistRequest::OPEN], AssistRequest::WITHDRAWN, 'withdrawn')
+            : $request->transition([AssistRequest::CLAIMED], AssistRequest::OPEN, AssistRequest::UNCLAIMED);
+
+        if (! $done) {
             throw new AssistRefused(409, __('session-replay::viewer.assist.not_open'), 'state');
         }
+    }
+
+    /**
+     * The agent's side of the grants log: what they asked the visitor for (sent over the channel, which the server
+     * never sees), so the row shows asked next to granted.
+     *
+     * @throws AssistRefused
+     */
+    public function ask(Authenticatable $agent, AssistRequest $request, string $what): void
+    {
+        $this->assertHolder($agent, $request);
+
+        if (! in_array($request->status, [AssistRequest::CLAIMED, AssistRequest::ACTIVE], true)) {
+            throw new AssistRefused(409, __('session-replay::viewer.assist.not_open'), 'state');
+        }
+
+        $this->log($request, ['kind' => $what, 'asked' => true, 'by' => 'agent', 'at' => now()->toIso8601String()]);
     }
 
     /**
@@ -534,9 +580,7 @@ class Assist
         if ($request->status === AssistRequest::CLAIMED) {
             if (! $this->acknowledged($request) && $request->claimed_at?->lt($now->copy()->subSeconds($this->seconds('claim_timeout_seconds', 30)))) {
                 // The page never heard of the claim: someone else may take it.
-                $request->transition([AssistRequest::CLAIMED], AssistRequest::OPEN, [
-                    'agent_id' => null, 'agent_name' => null, 'agent_avatar' => null, 'claimed_at' => null, 'agent_seen_at' => null,
-                ]);
+                $request->transition([AssistRequest::CLAIMED], AssistRequest::OPEN, AssistRequest::UNCLAIMED);
 
                 return $this->expire($request);
             }
@@ -847,6 +891,26 @@ class Assist
         $avatar = is_string($avatar) && preg_match('~^https?://~i', $avatar) === 1 && strlen($avatar) <= 2000 ? $avatar : null;
 
         return ['agent_id' => (string) $agent->getAuthIdentifier(), 'agent_name' => $name, 'agent_avatar' => $avatar];
+    }
+
+    /**
+     * The agent of a request as the viewer guard knows them (agent_id is that guard's key), or Calls' user for the
+     * id when the guard has no user provider.
+     */
+    protected function agentModel(AssistRequest $request): ?Authenticatable
+    {
+        if ($request->agent_id === null) {
+            return null;
+        }
+
+        $guard = Auth::guard(config('session-replay.viewer.guard'));
+        $provider = method_exists($guard, 'getProvider') ? $guard->getProvider() : null;
+
+        if ($provider instanceof UserProvider) {
+            return $provider->retrieveById($request->agent_id);
+        }
+
+        return $this->callsAvailable() ? app(Calls::class)->findUser($request->agent_id) : null;
     }
 
     /** @return array{id: ?string, name: ?string, avatar: ?string} */

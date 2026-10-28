@@ -5,6 +5,7 @@ use Packstub\Calls\Facades\Calls;
 use Packstub\Calls\Models\Call;
 use Packstub\SessionReplay\Events\AssistEnded;
 use Packstub\SessionReplay\Events\AssistStarted;
+use Packstub\SessionReplay\Facades\SessionReplay;
 use Packstub\SessionReplay\Models\AssistRequest;
 use Packstub\SessionReplay\Models\ReplayMarker;
 
@@ -231,6 +232,35 @@ it('lets the visitor say not now to an offer, and expires one nobody answers', f
     $browser['session']->forceFill(['last_activity_at' => now()])->save();
 
     $this->getJson(route('session-replay.assist.status', $id))->assertJson(['status' => 'expired', 'end_reason' => 'proposal_timeout']);
+});
+
+it('asks canAssist again when the visitor accepts an offer', function () {
+    $browser = $this->browser();
+    $agent = $this->staff();
+
+    $id = $this->actingAs($agent)->postJson(route('session-replay.assist.propose', $browser['session']))->assertCreated()->json('id');
+    $secret = $this->poll($id, null, $browser['token'], ['session' => $browser['session']->id, 'key' => $browser['key']])->json('secret');
+
+    // Between the offer and the answer the agent lost the right to help.
+    SessionReplay::canAssistUsing(fn () => false);
+
+    $this->visitorPost('accept', $id, $secret, $browser['token'], ['tab' => 'tab-1'])->assertStatus(409)->assertJson(['reason' => 'not_allowed']);
+
+    expect(AssistRequest::query()->sole())->status->toBe('withdrawn')->end_reason->toBe('not_allowed')
+        ->and(Call::query()->count())->toBe(0);
+});
+
+it('puts a claim back in the list when the agent may not help any more by the time the visitor accepts', function () {
+    config()->set('session-replay.assist.watch_consent', true);
+
+    [$browser, $asked] = $this->claimed();
+
+    SessionReplay::canAssistUsing(fn () => false);
+
+    $this->visitorPost('accept', $asked['id'], $asked['secret'], $browser['token'], ['tab' => 'tab-1'])->assertStatus(409)->assertJson(['reason' => 'not_allowed']);
+
+    expect(AssistRequest::query()->sole())->status->toBe('open')->agent_id->toBeNull()
+        ->and(Call::query()->count())->toBe(0);
 });
 
 it('lets the agent take an offer back', function () {
