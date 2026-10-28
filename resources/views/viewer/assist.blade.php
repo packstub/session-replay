@@ -15,6 +15,8 @@
         <p class="card flash flash--error" role="alert">{{ session('session-replay.assist-error') }}</p>
     @endif
 
+    @php($hasStage = \Illuminate\Support\Facades\Route::has('session-replay.assist.stage') && $assist->callsAvailable())
+
     <div class="card table-scroll">
         @if ($requests->isEmpty())
             <p class="empty">{{ __('session-replay::viewer.assist.empty') }}</p>
@@ -61,6 +63,9 @@
                                 @endif
                             </td>
                             <td class="actions">
+                                @if ($mine && $hasStage && in_array($request->status, ['open', 'claimed', 'active'], true))
+                                    <a class="button primary" href="{{ route('session-replay.assist.stage', $request->id) }}">{{ __('session-replay::viewer.assist.open_stage') }}</a>
+                                @endif
                                 @if ($request->status === 'open' && ! $request->openedByAgent())
                                     <form method="post" action="{{ route('session-replay.assist.claim', $request->id) }}">
                                         @csrf

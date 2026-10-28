@@ -5,11 +5,14 @@
     "scripts": {
         "build": "node build.mjs",
         "dev": "node build.mjs --watch",
-        "test": "node --test resources/js/tests/*.test.js"
+        "test": "node --test resources/js/tests/*.test.js",
+        "test:e2e": "playwright test"
     },
     "devDependencies": {
         "@packstub/calls": "github:packstub/calls-js",
+        "@playwright/test": "^1.64.1",
         "@rrweb/record": "^2.1.6",
+        "@rrweb/replay": "^2.1.6",
         "@rrweb/rrweb-plugin-console-record": "^2.1.6",
         "esbuild": "^0.28.2",
         "rrweb-player": "^2.1.6",

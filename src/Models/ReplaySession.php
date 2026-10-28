@@ -181,6 +181,18 @@ class ReplaySession extends ReplayModel
         $query->where('tenant_type', $tenant->getMorphClass())->where('tenant_id', (string) $tenant->getKey());
     }
 
+    /** Recordings with an upload or a heartbeat in the last two minutes, the window isLive() uses. */
+    public function scopeLive(Builder $query): void
+    {
+        $query->where('last_activity_at', '>', now()->subMinutes(2));
+    }
+
+    /** Seconds since the last upload or heartbeat, for "last seen 40 s ago"; null without either. */
+    public function lastSeenSeconds(): ?int
+    {
+        return $this->last_activity_at === null ? null : (int) max(0, $this->last_activity_at->diffInSeconds(now()));
+    }
+
     public function scopeWithErrors(Builder $query): void
     {
         $query->where('error_count', '>', 0);

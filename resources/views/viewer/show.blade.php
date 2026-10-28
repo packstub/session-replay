@@ -8,8 +8,12 @@
         <a href="{{ $back }}">← {{ __('session-replay::viewer.all_recordings') }}</a>
     </header>
 
+    @if (session('session-replay.assist-error'))
+        <p class="card flash flash--error" role="alert">{{ session('session-replay.assist-error') }}</p>
+    @endif
+
     <dl class="facts card">
-        <div><dt>{{ __('session-replay::viewer.length') }}</dt><dd>{{ $session->durationForHumans() }} @if ($session->isLive()) <span class="badge ok">{{ __('session-replay::viewer.live') }}</span> @endif</dd></div>
+        <div><dt>{{ __('session-replay::viewer.length') }}</dt><dd>{{ $session->durationForHumans() }} @if ($session->isLive()) <span class="badge ok">{{ __('session-replay::viewer.live') }}</span> @include('session-replay::viewer.partials.last-seen', ['session' => $session]) @endif</dd></div>
         <div><dt>{{ __('session-replay::viewer.pages') }}</dt><dd>{{ $session->page_count }}</dd></div>
         <div><dt>{{ __('session-replay::viewer.errors') }}</dt><dd>{{ $session->error_count }}</dd></div>
         <div><dt>{{ __('session-replay::viewer.device') }}</dt><dd>{{ $session->device ?? '·' }} @if ($session->viewport_width) <span class="muted">{{ $session->viewport_width }}×{{ $session->viewport_height }}</span> @endif</dd></div>
@@ -19,6 +23,10 @@
         @endif
         <div><dt>{{ __('session-replay::viewer.first_page') }}</dt><dd title="{{ $session->entry_url }}">{{ $session->entry_url }}</dd></div>
     </dl>
+
+    @if ($assist && $session->isLive())
+        <div class="assist-bar">@include('session-replay::viewer.partials.offer-help', ['session' => $session, 'assist' => $assist])</div>
+    @endif
 
     @if ($session->truncated)
         <p class="muted">{{ __('session-replay::viewer.truncated') }}</p>

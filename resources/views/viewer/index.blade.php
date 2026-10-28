@@ -11,7 +11,23 @@
         </span>
     </header>
 
+    @if (session('session-replay.assist'))
+        <p class="card flash" role="status">{{ session('session-replay.assist') }}</p>
+    @endif
+    @if (session('session-replay.assist-error'))
+        <p class="card flash flash--error" role="alert">{{ session('session-replay.assist-error') }}</p>
+    @endif
+
+    {{-- The Live tab: recordings with an upload or a heartbeat in the last two minutes, saying how long ago. --}}
+    <nav class="tabs" aria-label="{{ __('session-replay::viewer.tabs') }}">
+        <a href="{{ route('session-replay.index', array_filter($filters)) }}" @if (! $live) aria-current="page" @endif>{{ __('session-replay::viewer.all_recordings') }}</a>
+        <a href="{{ route('session-replay.index', ['live' => 1] + array_filter($filters)) }}" @if ($live) aria-current="page" @endif>
+            {{ __('session-replay::viewer.live_tab') }} <span class="badge {{ $liveCount ? 'ok' : '' }}">{{ $liveCount }}</span>
+        </a>
+    </nav>
+
     <form class="filters card" method="get">
+        @if ($live) <input type="hidden" name="live" value="1"> @endif
         <label>{{ __('session-replay::viewer.user_id') }} <input type="text" name="user" value="{{ $filters['user'] ?? '' }}" size="10"></label>
         <label>{{ __('session-replay::viewer.from') }} <input type="date" name="from" value="{{ $filters['from'] ?? '' }}"></label>
         <label>{{ __('session-replay::viewer.to') }} <input type="date" name="to" value="{{ $filters['to'] ?? '' }}"></label>
@@ -19,13 +35,13 @@
         <label class="check"><input type="checkbox" name="reported" value="1" @checked($filters['reported'] ?? false)> {{ __('session-replay::viewer.reported') }}</label>
         <button class="primary" type="submit">{{ __('session-replay::viewer.filter') }}</button>
         @if (array_filter($filters))
-            <a class="button" href="{{ route('session-replay.index') }}">{{ __('session-replay::viewer.reset') }}</a>
+            <a class="button" href="{{ route('session-replay.index', $live ? ['live' => 1] : []) }}">{{ __('session-replay::viewer.reset') }}</a>
         @endif
     </form>
 
     <div class="card table-scroll">
         @if ($sessions->isEmpty())
-            <p class="empty">{{ __('session-replay::viewer.empty') }}</p>
+            <p class="empty">{{ $live ? __('session-replay::viewer.live_empty') : __('session-replay::viewer.empty') }}</p>
         @else
             <table>
                 <thead>
@@ -50,7 +66,10 @@
                             </td>
                             <td title="{{ $session->started_at?->toDayDateTimeString() }}">
                                 {{ $session->started_at?->diffForHumans() }}
-                                @if ($session->isLive()) <span class="badge ok">{{ __('session-replay::viewer.live') }}</span> @endif
+                                @if ($session->isLive())
+                                    <span class="badge ok">{{ __('session-replay::viewer.live') }}</span>
+                                    @include('session-replay::viewer.partials.last-seen', ['session' => $session])
+                                @endif
                             </td>
                             <td>{{ $session->durationForHumans() }}</td>
                             <td>{{ $session->page_count }}</td>
@@ -63,7 +82,10 @@
                                 @if ($rating) <span class="badge {{ ['good' => 'ok', 'needs-improvement' => 'warn', 'poor' => 'danger'][$rating] }}">{{ __('session-replay::viewer.ratings.'.$rating) }}</span> @else <span class="muted">·</span> @endif
                             </td>
                             <td class="url muted" title="{{ $session->entry_url }}">{{ \Illuminate\Support\Str::after((string) $session->entry_url, '://') }}</td>
-                            <td><a href="{{ route('session-replay.show', $session) }}">{{ __('session-replay::viewer.watch') }}</a></td>
+                            <td class="actions">
+                                <a href="{{ route('session-replay.show', $session) }}">{{ __('session-replay::viewer.watch') }}</a>
+                                @include('session-replay::viewer.partials.offer-help', ['session' => $session, 'assist' => $assist])
+                            </td>
                         </tr>
                     @endforeach
                 </tbody>

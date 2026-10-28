@@ -1,4 +1,5 @@
-import { CallClient, drain } from '@packstub/calls';
+import { drain } from '@packstub/calls';
+import { AssistClient, workerTimers } from './lib/assist-client.js';
 import { AssistSignaling } from './lib/assist-signaling.js';
 import { CHANNEL_LABEL, Endpoint, FROM_AGENT, LiveStyles, encodeEvent } from './lib/assist-protocol.js';
 import { RemoteControl, maskedField } from './lib/assist-control.js';
@@ -21,7 +22,8 @@ import { STATE_KEY, randomId, storedRequest } from './lib/assist-hook.js';
  * The request id and secret live in sessionStorage beside sr:session, with
  * the grants a reload keeps (watch, audio, video; control is asked again
  * after every reload or navigation). Polling runs on a Web Worker timer: a
- * hidden tab's own timers slow to once a minute, which would lose the call.
+ * hidden tab's own timers slow to once a minute, which would lose the call
+ * (lib/assist-client.js, shared with the agent's stage).
  *
  * The call is a @packstub/calls CallClient with media 'none' and the channel
  * "assist"; its signaling is AssistSignaling over Session Replay's visitor
@@ -31,95 +33,6 @@ import { STATE_KEY, randomId, storedRequest } from './lib/assist-hook.js';
 const TERMINAL = ['cancelled', 'declined', 'expired', 'withdrawn', 'ended'];
 const PENDING = ['open', 'claimed', 'active'];
 const GRANT_TIMEOUT_MS = 30_000;
-
-// ---- timers that keep running in a hidden tab -------------------------------
-
-function nativeTimers() {
-    return { set: (fn, ms) => setTimeout(fn, ms), clear: (id) => clearTimeout(id) };
-}
-
-/** setTimeout in a Web Worker (not throttled in a hidden tab); plain timers where a CSP or the browser refuses one. */
-export function workerTimers() {
-    if (typeof Worker === 'undefined' || typeof Blob === 'undefined' || typeof URL?.createObjectURL !== 'function') return nativeTimers();
-
-    const pending = new Map();
-    let broken = false;
-    let next = 1;
-    let worker;
-
-    const fallBack = () => {
-        if (broken) return;
-
-        broken = true;
-
-        // What was waiting in the worker runs on plain timers.
-        for (const [id, entry] of pending) entry.native = setTimeout(() => run(id), Math.max(0, entry.at - Date.now()));
-    };
-
-    const run = (id) => {
-        const entry = pending.get(id);
-
-        pending.delete(id);
-        entry?.fn();
-    };
-
-    try {
-        const source = 'const t=new Map();onmessage=({data:d})=>{if(d.clear){clearTimeout(t.get(d.id));t.delete(d.id);return}t.set(d.id,setTimeout(()=>{t.delete(d.id);postMessage(d.id)},d.ms))}';
-
-        worker = new Worker(URL.createObjectURL(new Blob([source], { type: 'text/javascript' })));
-        worker.onmessage = ({ data }) => run(data);
-        worker.onerror = fallBack;
-    } catch {
-        return nativeTimers();
-    }
-
-    return {
-        set(fn, ms) {
-            const id = next++;
-            const entry = { fn, at: Date.now() + ms, native: null };
-
-            pending.set(id, entry);
-
-            if (broken) entry.native = setTimeout(() => run(id), ms);
-            else worker.postMessage({ id, ms });
-
-            return id;
-        },
-        clear(id) {
-            const entry = pending.get(id);
-
-            if (!entry) return;
-
-            pending.delete(id);
-
-            if (entry.native !== null) clearTimeout(entry.native);
-            else if (!broken) worker.postMessage({ id, clear: true });
-        },
-    };
-}
-
-/** The engine's client, its poll loop on the worker timer. `schedule` and `stop` are internal to the engine; this copy is bundled. */
-class AssistClient extends CallClient {
-    constructor(options, timers) {
-        super(options);
-        this.timers = timers;
-    }
-
-    schedule(delay) {
-        this.timers?.clear(this.timer);
-        this.timer = null;
-
-        if (!this.polling) return;
-
-        this.timer = this.timers.set(() => this.tick(), delay ?? this.pollIntervals.active);
-    }
-
-    stop() {
-        this.timers?.clear(this.timer);
-        this.timer = null;
-        super.stop();
-    }
-}
 
 /**
  * @param {object} recorder  what the recorder lends Assist
@@ -321,6 +234,8 @@ export function installAssist(recorder) {
 
         state = { id: data.id, secret: data.secret, status: data.status, openedBy: 'visitor', agent: null, grants: {} };
         save();
+        // The "Get help" button goes while a request is going, also one made with SessionReplay.assist.request().
+        launcher();
         handle(data);
         emit();
         schedulePoll(0);
@@ -439,6 +354,7 @@ export function installAssist(recorder) {
 
         state = { id: data.id, secret: data.secret, status: data.status, openedBy: 'agent', agent: data.agent, grants: {} };
         save();
+        launcher();
         handle(data);
         emit();
         schedulePoll();
@@ -732,6 +648,8 @@ export function installAssist(recorder) {
             return;
         }
 
+        // Asked again after the agent ended the audio (media.stop mutes): the visitor said yes, so they are heard.
+        if (announce && client?.muted) client.setMuted(false);
         if (client?.remoteStream) ui.media(client.remoteStream, true);
         endpoint?.send({ t: 'media.granted', kind });
         activeView();

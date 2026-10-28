@@ -8,6 +8,8 @@ use Illuminate\Contracts\View\View;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Route;
+use Packstub\Calls\Calls;
 use Packstub\SessionReplay\Exceptions\AssistRefused;
 use Packstub\SessionReplay\Facades\SessionReplay;
 use Packstub\SessionReplay\Models\AssistRequest;
@@ -59,10 +61,46 @@ class AssistAgentController
         return response()->json($this->assist->presentForAgent($this->assist->agentPoll($agent, $request), $agent));
     }
 
-    /** POST {path}/assist/requests/{id}/claim */
+    /**
+     * GET {path}/assist/requests/{id}/stage — the live stage of a request this agent holds (claimed, offered or
+     * live): the visitor's page mirrored, remote control, annotations, audio, screen share. Behind the viewer's
+     * middleware and gate like every agent route, with visibleUsing() and canAssist asked again.
+     */
+    public function stage(string $id): View|RedirectResponse
+    {
+        $agent = $this->agent();
+        $request = $this->find($id, $agent);
+
+        abort_unless($request->agent_id === (string) $agent->getAuthIdentifier(), 403);
+
+        if (! $request->isPending()) {
+            return redirect()->route('session-replay.assist.index')->with('session-replay.assist-error', __('session-replay::viewer.assist.not_open'));
+        }
+
+        return view('session-replay::viewer.stage', [
+            'request' => $request,
+            'assist' => $this->assist,
+            'config' => $this->stageConfig($request, $agent),
+        ]);
+    }
+
+    /** POST {path}/assist/requests/{id}/claim — the form goes on to the stage (with Calls), the JSON stays JSON. */
     public function claim(Request $http, string $id): JsonResponse|RedirectResponse
     {
-        return $this->act($http, $id, fn (Authenticatable $agent, AssistRequest $request) => $this->assist->claim($agent, $request), 'claimed');
+        if ($http->expectsJson() || ! $this->hasStage()) {
+            return $this->act($http, $id, fn (Authenticatable $agent, AssistRequest $request) => $this->assist->claim($agent, $request), 'claimed');
+        }
+
+        $agent = $this->agent();
+        $request = $this->find($id, $agent);
+
+        try {
+            $this->assist->claim($agent, $request);
+        } catch (AssistRefused $refused) {
+            return $this->refused($http, $refused);
+        }
+
+        return redirect()->route('session-replay.assist.stage', $request->id)->with('session-replay.assist', __('session-replay::viewer.assist.flash.claimed'));
     }
 
     /** POST {path}/assist/requests/{id}/withdraw */
@@ -106,9 +144,68 @@ class AssistAgentController
             return $this->refused($http, $refused);
         }
 
-        return $http->expectsJson()
-            ? response()->json($this->assist->presentForAgent($request, $agent), 201)
+        if ($http->expectsJson()) {
+            return response()->json($this->assist->presentForAgent($request, $agent), 201);
+        }
+
+        return $this->hasStage()
+            ? redirect()->route('session-replay.assist.stage', $request->id)->with('session-replay.assist', __('session-replay::viewer.assist.flash.proposed'))
             : back()->with('session-replay.assist', __('session-replay::viewer.assist.flash.proposed'));
+    }
+
+    /** The built-in stage needs the viewer's pages and Calls (without it there is no live view to go to). */
+    protected function hasStage(): bool
+    {
+        return Route::has('session-replay.assist.stage') && $this->assist->callsAvailable();
+    }
+
+    /**
+     * What the stage's script needs: the request as the agent sees it, the agent routes, Calls' own routes (the
+     * stage runs its own CallClient as the agent, kind=assist) and the strings.
+     *
+     * @return array<string, mixed>
+     */
+    protected function stageConfig(AssistRequest $request, Authenticatable $agent): array
+    {
+        $prefix = (string) config('session-replay.assist.calls_routes', 'calls.');
+        $calls = $this->assist->callsAvailable();
+        $routes = null;
+        $policy = 'all';
+
+        if ($calls && Route::has($prefix.'poll') && Route::has($prefix.'signal')) {
+            $routes = [
+                'poll' => route($prefix.'poll'),
+                'store' => route($prefix.'store'),
+                'answer' => route($prefix.'answer', ['call' => '__ID__']),
+                'decline' => route($prefix.'decline', ['call' => '__ID__']),
+                'hangup' => route($prefix.'hangup', ['call' => '__ID__']),
+                'signal' => route($prefix.'signal', ['call' => '__ID__']),
+                'leave' => route($prefix.'leave', ['call' => '__ID__']),
+                'ice' => route($prefix.'ice'),
+            ];
+            $policy = app(Calls::class)->rtcConfiguration()['iceTransportPolicy'];
+        }
+
+        return [
+            'request' => $this->assist->presentForAgent($request, $agent),
+            'routes' => [
+                'status' => route('session-replay.assist.status', $request->id),
+                'asks' => route('session-replay.assist.asks', $request->id),
+                'end' => route('session-replay.assist.end', $request->id),
+                'withdraw' => route('session-replay.assist.withdraw', $request->id),
+                'list' => route('session-replay.assist.index'),
+            ],
+            'calls' => [
+                'available' => $calls,
+                'routes' => $routes,
+                'iceTransportPolicy' => $policy,
+                'reconnectTimeout' => (int) config('packstub-calls.reconnect_timeout', 15) * 1000,
+                'pollMs' => 1000,
+            ],
+            'video' => $this->assist->videoAllowed(),
+            'csrf' => csrf_token(),
+            'labels' => __('session-replay::viewer.stage'),
+        ];
     }
 
     // ------------------------------------------------------------------

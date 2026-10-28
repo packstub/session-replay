@@ -2,7 +2,7 @@
 
 A visitor asks for help from the page they are on, and someone from support takes the request from a list. Or support sees a live recording and offers help. With [Calls for Laravel](https://github.com/packstub/calls) installed, the two are put on a call between the visitor's page and the agent; without it, the requests are a plain queue your app answers through its own channels.
 
-> **Status.** The server side and the visitor's page are built: the requests, the routes, the timeouts, the events, the Requests page, and in the recorder the "Get help" API and button, the answer to an offer, and the visitor's half of the live view (the page mirrored to the agent, remote control, annotations, audio, screen share), each behind its own question. The agent's side of the live view (watching, pointing, controlling from the viewer and from Filament) comes next; the [channel protocol](#the-channel-protocol) below is what it speaks.
+> **Status.** Built in this package: the requests, the routes, the timeouts, the events, the visitor's page (the "Get help" API and button, the answer to an offer, and the visitor's half of the live view) and the agent's side in the built-in viewer (the Live tab, Offer help, the Requests page and the live stage). The Filament package's stage comes next; the [channel protocol](#the-channel-protocol) below is what both speak.
 
 ## Turning it on
 
@@ -121,9 +121,44 @@ One ordered data channel labelled `assist` per call, JSON messages `{ t, ... }`,
 
 Attach the endpoint in the call's `datachannel` event, synchronously, so the other side's hello is not missed.
 
-## The Requests page
+## The agent's side, in the built-in viewer
 
-`/session-replay/assist` (linked from the recordings list while Assist is on) lists the requests that wait and your own: the person, their message (shown as text), the page, how long they have waited, whether the page is still polling, and Claim, Withdraw and End buttons. It sits behind the viewer's middleware and gate, and the buttons post with the CSRF token.
+Everything below sits behind the viewer's middleware and the `viewSessionReplay` gate, asks `visibleUsing()` and `canAssist` again on every request, and posts with the CSRF token. The Filament package brings the same into a panel.
+
+### Live recordings and Offer help
+
+The recordings list has a **Live now** tab: recordings with an upload or a heartbeat in the last two minutes (`ReplaySession::live()`, the window `isLive()` uses). Live is a window, not a promise, so every live row says when the page was last heard from: "last seen 40 s ago". A visible tab sends a heartbeat every `assist.heartbeat_seconds` (15), a hidden one sends nothing, so a page someone left open in the background looks older and older until it drops out.
+
+With Calls installed, a live row (and a live recording's page) has **Offer help**, the propose route as a form. It leads to the stage, where the agent waits for the visitor's Accept. A recording with a request going shows that instead (the agent's own: **Open live view**), and nobody is offered their own visit.
+
+### The Requests page
+
+`/session-replay/assist` (linked from the recordings list while Assist is on) lists the requests that wait and your own: the person, their message (shown as text), the page, how long they have waited, whether the page is still polling, and Claim, Withdraw and End buttons. **Claim** leads to the stage when Calls is installed (without it, back to the list: the request is a queue entry your app answers its own way). Your own requests that are going have **Open live view**.
+
+### The live stage
+
+`/session-replay/assist/requests/{id}/stage`, for the agent who holds the request (claimed, offered or live); anyone else gets a 403, a request that is over sends you back to the list.
+
+- **The status line** says what is happening in words: waiting for the visitor to accept, waiting for their page to pick up, connecting, live, live with the visitor's tab hidden (the page waits until they come back), reconnecting, over and why. It polls the request's status route every two seconds and stops everything once the request ends, whoever ended it.
+- **The mirror.** The visitor's page replayed live by rrweb's `Replayer` (no player controls), in rrweb's sandboxed iframe without scripts: the same masked events the recording stores, so a masked field shows asterisks and a blocked element an empty box. It plays about 300 ms behind the visitor, with the visitor's clock lined up with the agent's on the first event. A reconnect (either side reloads) starts from a fresh snapshot. Text typed into a field shows when the visitor leaves the field, like in the recording (`size.sampling.input` is `last`; set it to `all` to see every keystroke, live and stored).
+- **Request control** asks the visitor (logged in the grants log as asked). Once allowed, the stage gets a dashed frame and the pointer drives the visitor's page: click, drag, the wheel and the arrow and page keys scroll. A click on a field opens a small box over it for typing (Enter sends, Escape closes); the visitor sees each change. Their page refuses a password field always, a masked field unless `assist.control_masked` and their own yes, and says so; the stage shows the reason. **Release control** gives it back; the visitor may take it back any time (Escape), and control ends when their tab is hidden, on a navigation and on a reconnect.
+- **Draw** turns the pointer into a pen: strokes show on the stage and on the visitor's page and fade after a few seconds. No question asked, nothing on the page changes.
+- **Start audio** asks the visitor for their microphone; once they allow it, the agent's own microphone joins and a small audio bar has Mute and End audio. **Start video** is there while Calls' `video` setting allows it.
+- **Their screen** asks the visitor to share their screen (the browser's own picker follows their yes); while they share, the stage shows it as video and the view switch goes between their page and their screen. Control and drawing work on the page view only. **Share my screen** shares the agent's.
+- **End assist** ends the request and the call; **Withdraw** takes an offer back or lets go of a claim.
+- Every button that cannot be used now is disabled with the reason under it (the live view is still connecting, the visitor's tab is hidden, the visitor has not answered yet, only on the page view, video is off). What the visitor answered, refused or took back is listed under **What happened**.
+
+The stage runs its own Calls client as the agent (`kind=assist` polls, so it never touches the Calls widget's calls, and the Calls widget never touches it) over **Calls' own routes**. In a plain Laravel app register them, in `routes/web.php` so they get the `web` middleware:
+
+```php
+use Packstub\Calls\Facades\Calls;
+
+Calls::routes();
+```
+
+With another name prefix (`Calls::routes(as: 'support.calls.')`), set `session-replay.assist.calls_routes` to it. Without the routes the stage says so instead of trying to connect. Calls' guard must be the viewer's (see [With Calls](#with-calls)).
+
+`stage.js` and `stage.css` come from the package's script route, like the player (about 240 KB: rrweb's replayer and the calls engine), only on the stage page.
 
 ## Events
 
@@ -224,3 +259,4 @@ A request as the agent sees it: `id`, `status`, `opened_by`, `session`, `session
 | `assist.heartbeat_seconds` | `15` | A visible tab's sign of life, which also brings an agent's offer. |
 | `assist.poll.waiting_ms` | `3000` | How often a waiting page polls its request. |
 | `assist.poll.active_ms` | `2000` | How often it polls during an assist (the call's heartbeat; kept between 500 and 4000, under Calls' hold of 5 seconds). |
+| `assist.calls_routes` | `calls.` | The name prefix of Calls' routes (`Calls::routes(as: …)`), which the agent's live stage polls. |

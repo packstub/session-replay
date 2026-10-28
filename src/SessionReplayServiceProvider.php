@@ -273,6 +273,8 @@ class SessionReplayServiceProvider extends PackageServiceProvider
             Route::middleware([...$this->viewerMiddleware(), AuthorizeViewer::class])->group(function () use ($uuid): void {
                 if (config('session-replay.viewer.enabled', true)) {
                     Route::get('/', [AssistAgentController::class, 'index'])->name('index');
+                    // The agent's live stage of a request they hold (the built-in viewer's page).
+                    Route::get('requests/{id}/stage', [AssistAgentController::class, 'stage'])->where('id', $uuid)->name('stage');
                 }
 
                 Route::get('queue', [AssistAgentController::class, 'queue'])->name('queue');

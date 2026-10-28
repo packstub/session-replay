@@ -376,6 +376,9 @@ return [
             'waiting_ms' => 3000,
             'active_ms' => 2000,
         ],
+        // The name prefix of Calls' routes (Calls::routes(as: …)), which the agent's live stage polls: in a plain app,
+        // register Calls::routes() in routes/web.php (the `web` middleware and the viewer's guard).
+        'calls_routes' => 'calls.',
     ],
 
     /*
