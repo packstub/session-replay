@@ -501,11 +501,14 @@ export function stageStop(data) {
  * One word for where the stage is, for a host that colours its own status badge (the
  * `session-replay:stage` event carries it): `ended`, `unavailable` (no Calls, no routes or
  * another protocol version), `waiting` (an offer or a claim the visitor's page has not taken up
- * yet), `connecting`, `reconnecting`, `hidden` (live, the visitor's tab in the background) or `live`.
+ * yet), `connecting`, `reconnecting` (also while the agent is back on the live view after
+ * leaving it and the new call is on its way), `hidden` (live, the visitor's tab in the background) or `live`.
  */
-export function stagePhase({ finished = false, status = null, calls = true, routes = true, version = false, client = null, connected = false, hidden = false } = {}) {
+export function stagePhase({ finished = false, status = null, reconnecting = false, calls = true, routes = true, version = false, client = null, connected = false, hidden = false } = {}) {
     if (finished || FINISHED.includes(status)) return 'ended';
     if (!calls || !routes || version) return 'unavailable';
+    // Claimed again after the agent left the live view: a new call comes on the visitor's next poll.
+    if (status === 'claimed' && reconnecting) return 'reconnecting';
     if (status === 'open' || status === 'claimed') return 'waiting';
     if (status !== 'active') return 'ended';
     if (client === 'reconnecting') return 'reconnecting';

@@ -58,8 +58,9 @@ export default defineConfig({
     projects: [{ name: 'chromium', use: { ...devices['Desktop Chrome'] } }],
 
     webServer: {
-        // Several PHP workers: the visitor's page and the agent's stage poll at the same time.
-        command: `php vendor/bin/testbench workbench:build && PHP_CLI_SERVER_WORKERS=8 php vendor/bin/testbench serve --port=${PORT}`,
+        // Several PHP workers: the visitor's page and the agent's stage poll at the same time. Calls drops a side
+        // after 6 s instead of 15, so the test of an agent leaving the live view and coming back is quick.
+        command: `php vendor/bin/testbench workbench:build && CALLS_RECONNECT_TIMEOUT=6 PHP_CLI_SERVER_WORKERS=8 php vendor/bin/testbench serve --port=${PORT}`,
         url: `${BASE_URL}/login`,
         reuseExistingServer: !process.env.CI,
         timeout: 180_000,

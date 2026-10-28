@@ -387,3 +387,90 @@ it('ends a live request whose call ended without telling it', function () {
 
     expect(ReplayMarker::query()->where('type', 'assist')->count())->toBe(1);
 });
+
+it('keeps the request when the agent leaves the live view, and puts both on a new call once the agent is back', function () {
+    Event::fake([AssistStarted::class, AssistEnded::class]);
+
+    [$browser, $asked, $agent, $first, $last] = $this->agentLeavesTheLiveView();
+    $startedAt = AssistRequest::query()->sole()->started_at;
+
+    // The poll that dropped the agent already says what became of the request; the old call is over.
+    $last->assertOk()->assertJson(['status' => 'claimed', 'reconnecting' => true, 'call' => ['id' => $first, 'status' => 'ended', 'end_reason' => 'dropped']]);
+
+    $request = AssistRequest::query()->sole();
+
+    expect($request->status)->toBe('claimed')
+        ->and($request->call_id)->toBeNull()
+        ->and($request->agent_id)->toBe((string) $agent->id)
+        ->and(ReplayMarker::query()->where('type', 'assist')->count())->toBe(0);
+
+    // While the agent is away the page waits: no new call rings an agent who is not there.
+    $this->travel(2)->seconds();
+    $this->poll($asked['id'], $asked['secret'], $browser['token'], ['tab' => 'tab-1'])->assertJson(['status' => 'claimed', 'reconnecting' => true, 'call' => null]);
+
+    expect(Call::query()->count())->toBe(1);
+
+    // The agent's stage is back: its status poll says so.
+    $this->actingAs($agent)->getJson(route('session-replay.assist.status', $asked['id']))->assertOk()->assertJson(['status' => 'claimed', 'reconnecting' => true, 'mine' => true]);
+
+    $poll = $this->poll($asked['id'], $asked['secret'], $browser['token'], ['tab' => 'tab-1'])->assertJson(['status' => 'active', 'reconnecting' => false]);
+    $second = Call::query()->latest('id')->first();
+
+    expect($poll->json('call.id'))->toBe($second->id)
+        ->and($second->id)->not->toBe($first)
+        ->and($second->status)->toBe('active')
+        ->and($second->kind)->toBe('assist')
+        ->and(Calls::poll((string) $agent->id, kind: 'assist')['call']['id'])->toBe($second->id);
+
+    $request->refresh();
+
+    // The same assist: its start (max_duration, the marker's duration) stays, and the app hears of it once.
+    expect($request->status)->toBe('active')
+        ->and($request->call_id)->toBe($second->id)
+        ->and($request->started_at->equalTo($startedAt))->toBeTrue();
+
+    Event::assertDispatchedTimes(AssistStarted::class, 1);
+    Event::assertNotDispatched(AssistEnded::class);
+});
+
+it('lets the claim lapse when the agent does not come back to the live view in time', function () {
+    [$browser, $asked] = $this->agentLeavesTheLiveView();
+
+    $this->travel(31)->seconds();
+    $this->poll($asked['id'], $asked['secret'], $browser['token'], ['tab' => 'tab-1'])->assertJson(['status' => 'open', 'agent' => null, 'reconnecting' => false, 'call' => null]);
+
+    $request = AssistRequest::query()->sole();
+
+    expect($request->started_at)->toBeNull()
+        ->and($request->agent_id)->toBeNull()
+        ->and(Call::query()->count())->toBe(1);
+});
+
+it('counts max_duration from the start of the assist while it waits for the agent to come back', function () {
+    config()->set('session-replay.assist.max_duration_minutes', 1);
+
+    [$browser, $asked] = $this->agentLeavesTheLiveView();
+
+    // Started 8 s ago, then the claim was renewed; 55 s later the assist is past its minute.
+    $this->travel(55)->seconds();
+    AssistRequest::query()->update(['claimed_at' => now()]);
+
+    $this->poll($asked['id'], $asked['secret'], $browser['token'], ['tab' => 'tab-1'])->assertJson(['status' => 'ended', 'end_reason' => 'max_duration']);
+});
+
+it('still ends the request when it is the visitor\'s page that Calls drops', function () {
+    config()->set('packstub-calls.reconnect_timeout', 6);
+    $this->freezeSecond();
+
+    [$browser, $asked, $agent] = $this->claimed();
+
+    $call = $this->poll($asked['id'], $asked['secret'], $browser['token'], ['tab' => 'tab-1'])->json('call.id');
+
+    // The page is gone; the agent's stage polls on.
+    for ($i = 0; $i < 4; $i++) {
+        $this->travel(2)->seconds();
+        Calls::poll((string) $agent->id, 0, $call, 'agent-tab', hold: true, kind: 'assist');
+    }
+
+    expect(AssistRequest::query()->sole())->status->toBe('ended')->end_reason->toBe('dropped');
+});

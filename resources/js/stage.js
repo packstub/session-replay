@@ -94,6 +94,7 @@ function mountStage(root) {
     const gesture = new Gesture();
     const timers = workerTimers();
     let client = null;
+    let clientCall = null;
     let endpoint = null;
     let replayer = null;
     let drawing = false;
@@ -185,7 +186,8 @@ function mountStage(root) {
             case 'open':
                 return t('status.offered');
             case 'claimed':
-                return t('status.claimed');
+                // Back on the live view after leaving it: the visitor's page makes a new call on its next poll.
+                return request.reconnecting ? t('status.reconnecting') : t('status.claimed');
             case 'active':
                 if (!client || client.state === 'connecting' || client.state === 'idle' || client.state === 'calling') return t('status.connecting');
                 if (client.state === 'reconnecting') return t('status.reconnecting');
@@ -284,7 +286,7 @@ function mountStage(root) {
     }
 
     function phase() {
-        return stagePhase({ finished, status: request.status, calls: state.calls, routes: state.routes, version: state.version, client: client?.state ?? null, connected: state.connected, hidden: state.hidden });
+        return stagePhase({ finished, status: request.status, reconnecting: !!request.reconnecting, calls: state.calls, routes: state.routes, version: state.version, client: client?.state ?? null, connected: state.connected, hidden: state.hidden });
     }
 
     function snapshot() {
@@ -347,6 +349,13 @@ function mountStage(root) {
         // Over, or no longer this agent's (released, taken by someone else): the stage stops, without hanging up.
         if (stop === 'not_mine') note('not_allowed');
         if (stop) return finish();
+
+        // A client on a call the request no longer has (Calls dropped this side while the stage was away, and the
+        // visitor's page made a new one when it came back): the new call replaces it.
+        if (client && clientCall !== data.call) {
+            closeChannel('replaced');
+            dropClient();
+        }
 
         if (data.status === 'active' && data.call && state.calls && state.routes) startClient(data.call);
         if (before !== data.status && data.status === 'active') note('started');
@@ -411,6 +420,7 @@ function mountStage(root) {
             if (detail?.media) note('media_failed');
         });
 
+        clientCall = callId;
         client.resumeCall(callId);
     }
 
@@ -420,6 +430,7 @@ function mountStage(root) {
         const old = client;
 
         client = null;
+        clientCall = null;
 
         try {
             old.destroy();

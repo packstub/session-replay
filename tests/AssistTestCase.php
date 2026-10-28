@@ -6,6 +6,7 @@ use Illuminate\Support\Facades\Gate;
 use Illuminate\Support\Str;
 use Illuminate\Testing\TestResponse;
 use Packstub\Calls\CallsServiceProvider;
+use Packstub\Calls\Facades\Calls;
 use Packstub\SessionReplay\Models\ReplaySession;
 use Packstub\SessionReplay\Tests\Fixtures\Models\Team;
 use Packstub\SessionReplay\Tests\Fixtures\Models\User;
@@ -137,5 +138,30 @@ abstract class AssistTestCase extends TestCase
         $this->actingAs($agent)->postJson(route('session-replay.assist.claim', $asked['id']))->assertOk();
 
         return [$browser, $asked, $agent];
+    }
+
+    /**
+     * The visitor's page on the call and the agent's stage with it, then the agent leaves the live view: their side stops
+     * polling Calls while the page keeps polling, until Calls drops the agent (packstub-calls.reconnect_timeout).
+     *
+     * @return array{0: array{session: ReplaySession, token: string, key: string}, 1: array{id: string, secret: string}, 2: User, 3: int, 4: TestResponse}
+     */
+    protected function agentLeavesTheLiveView(): array
+    {
+        config()->set('packstub-calls.reconnect_timeout', 6);
+        $this->freezeSecond();
+
+        [$browser, $asked, $agent] = $this->claimed();
+
+        $call = $this->poll($asked['id'], $asked['secret'], $browser['token'], ['tab' => 'tab-1'])->assertJson(['status' => 'active'])->json('call.id');
+        Calls::poll((string) $agent->id, 0, $call, 'agent-tab', hold: true, kind: 'assist');
+
+        // The agent navigates away; the visitor's page goes on polling every 2 s.
+        for ($i = 0; $i < 4; $i++) {
+            $this->travel(2)->seconds();
+            $last = $this->poll($asked['id'], $asked['secret'], $browser['token'], ['tab' => 'tab-1']);
+        }
+
+        return [$browser, $asked, $agent, $call, $last];
     }
 }

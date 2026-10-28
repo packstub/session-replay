@@ -178,3 +178,61 @@ test('an agent claims a request and helps on the live stage: mirror, control, an
     await visitorContext.close();
     await agentContext.close();
 });
+
+test('an agent who leaves the live view for longer than Calls waits comes back to the same request on a new call', async ({ browser }) => {
+    const visitorContext = await browser.newContext();
+    const agentContext = await browser.newContext();
+
+    await visitorContext.addInitScript(openShadowRoots);
+
+    const visitor = await visitorContext.newPage();
+    const agent = await agentContext.newPage();
+    const consoleErrors = [];
+
+    agent.on('pageerror', (error) => consoleErrors.push(`agent: ${error.message}`));
+    visitor.on('pageerror', (error) => consoleErrors.push(`visitor: ${error.message}`));
+
+    const firstUpload = visitor.waitForResponse((response) => response.url().includes('/session-replay/ingest') && response.status() === 201, { timeout: 30_000 });
+
+    await visitor.goto('/');
+    await firstUpload;
+    await visitor.evaluate(() => window.SessionReplay.assist.request({ message: 'I will wait for you' }));
+
+    await agent.goto('/agent');
+    await agent.getByRole('row', { name: /I will wait for you/ }).getByRole('button', { name: 'Claim' }).click();
+    await expect(agent).toHaveURL(/\/stage$/);
+
+    const stageUrl = agent.url();
+    const status = agent.locator('[data-ref="status"]');
+
+    await expect(status).toHaveText(/^Live:/, { timeout: 60_000 });
+    await expect(visitor.getByText(/sees this page/)).toBeVisible();
+
+    const callOf = async () => (await agent.evaluate(async (url) => (await (await fetch(url.replace(/\/stage$/, '/status'), { headers: { Accept: 'application/json' } })).json()).call, stageUrl));
+    const firstCall = await callOf();
+
+    // Ana leaves the live view for longer than Calls waits for a side (CALLS_RECONNECT_TIMEOUT=6 in this run).
+    await agent.goto('/agent');
+    await expect(visitor.getByText(/stepped away and is reconnecting/)).toBeVisible({ timeout: 30_000 });
+    await agent.waitForTimeout(3_000);
+    await expect(visitor.getByText(/stepped away and is reconnecting/)).toBeVisible();
+
+    // She comes back: the request is still hers, and both are put on a new call.
+    await agent.goto(stageUrl);
+    await expect(status).toHaveText(/^Live:/, { timeout: 60_000 });
+    await expect(visitor.getByText(/sees this page/)).toBeVisible();
+
+    const mirror = agent.frameLocator('[data-ref="mirror"] iframe');
+
+    await visitor.locator('#add').click();
+    await expect(mirror.locator('#list li')).toHaveCount(1);
+    expect(await callOf()).not.toBe(firstCall);
+
+    await agent.getByRole('button', { name: 'End assist' }).click();
+    await expect(visitor.getByText('The help session has ended.')).toBeVisible({ timeout: 30_000 });
+
+    expect(consoleErrors).toEqual([]);
+
+    await visitorContext.close();
+    await agentContext.close();
+});

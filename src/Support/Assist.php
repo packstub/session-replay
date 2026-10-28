@@ -17,6 +17,7 @@ use Illuminate\Support\Str;
 use Packstub\Calls\Calls;
 use Packstub\Calls\Contracts\CallContext;
 use Packstub\Calls\Models\Call;
+use Packstub\Calls\Models\CallParticipant;
 use Packstub\Calls\Participant;
 use Packstub\SessionReplay\Events\AssistClaimed;
 use Packstub\SessionReplay\Events\AssistEnded;
@@ -45,6 +46,12 @@ class Assist
 {
     /** The Calls kind of an assist call, so the Calls widget (which polls kind=call) never sees it. */
     public const KIND = 'assist';
+
+    /**
+     * How recently the agent's stage must have polled the request's status (agent_seen_at) for the visitor's poll to
+     * put them on a call: the stage polls every 2 s, so an agent who left the live view is not rung until they are back.
+     */
+    public const AGENT_PRESENT_SECONDS = 10;
 
     public function enabled(): bool
     {
@@ -207,7 +214,9 @@ class Assist
             $this->expire($request);
         }
 
-        if ($request->status === AssistRequest::CLAIMED && $this->callsAvailable() && ! $this->watchConsent()) {
+        // The claim is acknowledged by creating the call, once the agent's stage is there (a claim made a moment ago,
+        // or an agent back on the live view after leaving it). Back from leaving, no new consent is asked.
+        if ($request->status === AssistRequest::CLAIMED && $this->callsAvailable() && (! $this->watchConsent() || $request->rejoining()) && $this->agentPresent($request)) {
             $this->startCall($request, [AssistRequest::CLAIMED], $tab);
         }
 
@@ -627,7 +636,8 @@ class Assist
 
         if ($request->status === AssistRequest::CLAIMED) {
             if (! $this->acknowledged($request) && $request->claimed_at?->lt($now->copy()->subSeconds($this->seconds('claim_timeout_seconds', 30)))) {
-                // The page never heard of the claim: someone else may take it.
+                // The page never heard of the claim, or the agent who left the live view did not come back in time:
+                // someone else may take it.
                 $request->transition([AssistRequest::CLAIMED], AssistRequest::OPEN, AssistRequest::UNCLAIMED);
 
                 return $this->expire($request);
@@ -637,7 +647,8 @@ class Assist
                 return $this->finish($request, [AssistRequest::CLAIMED], AssistRequest::EXPIRED, 'visitor_timeout');
             }
 
-            return $request->claimed_at?->lt($maxDuration) === true
+            // Waiting for an agent who left the live view counts towards max_duration from the start of the assist.
+            return ($request->started_at ?? $request->claimed_at)?->lt($maxDuration) === true
                 && $this->finish($request, [AssistRequest::CLAIMED], AssistRequest::ENDED, 'max_duration');
         }
 
@@ -661,22 +672,69 @@ class Assist
             return;
         }
 
-        $call = Call::query()->find($request->call_id);
+        $call = Call::query()->with('participants')->find($request->call_id);
 
         if ($call === null || $call->isEnded()) {
-            $this->finish($request, [AssistRequest::ACTIVE], AssistRequest::ENDED, (string) ($call?->end_reason ?? 'ended'), hangUp: false);
+            $this->callOver($request, $call);
         }
     }
 
-    /** The CallEnded listener: the assist on that call ends with Calls' reason (hung_up, dropped…). */
+    /**
+     * The CallEnded listener: the assist on that call ends with Calls' reason (hung_up, dropped…), unless only the
+     * agent went away (callOver()).
+     */
     public function callEnded(Call $call): void
     {
         if ($call->kind !== self::KIND) {
             return;
         }
 
+        $call->load('participants');
+
         AssistRequest::query()->pending()->where('call_id', $call->getKey())->get()
-            ->each(fn (AssistRequest $request) => $this->finish($request, AssistRequest::PENDING, AssistRequest::ENDED, (string) ($call->end_reason ?? 'ended'), hangUp: false));
+            ->each(fn (AssistRequest $request) => $this->callOver($request, $call));
+    }
+
+    /**
+     * The call of a live request is over. When Calls dropped the agent's side (they left the live view: navigated
+     * away, closed the tab, lost the network for longer than packstub-calls.reconnect_timeout) while the visitor's
+     * page was still on it, the request goes back to claimed without a call: the visitor's page says the agent is
+     * reconnecting, and the visitor's poll makes a new call once the agent's stage polls again. An agent who does not
+     * come back within claim_timeout_seconds lets the claim lapse, as an unanswered claim does. Anything else ends it.
+     */
+    protected function callOver(AssistRequest $request, ?Call $call): void
+    {
+        if ($call !== null && $request->status === AssistRequest::ACTIVE && $this->agentWentAway($request, $call)
+            && AssistRequest::query()->whereKey($request->getKey())->where('status', AssistRequest::ACTIVE)->where('call_id', $call->getKey())
+                ->update(['status' => AssistRequest::CLAIMED, 'call_id' => null, 'claimed_at' => now(), 'updated_at' => now()]) === 1) {
+            $request->refresh();
+
+            return;
+        }
+
+        $this->finish($request, AssistRequest::PENDING, AssistRequest::ENDED, (string) ($call?->end_reason ?? 'ended'), hangUp: false);
+    }
+
+    /** Calls ended the call because the agent's side stopped polling, and the visitor's side was still there. */
+    protected function agentWentAway(AssistRequest $request, Call $call): bool
+    {
+        if ($call->end_reason !== 'dropped' || $request->agent_id === null) {
+            return false;
+        }
+
+        return $call->participant($request->agent_id)?->status === CallParticipant::DROPPED
+            && $call->participant($request->guestId())?->status === CallParticipant::JOINED;
+    }
+
+    /**
+     * The agent's stage polled the request's status a moment ago: they are on the live view. Back from leaving it, the
+     * poll must also be later than the drop (claimed_at was set then), to the second.
+     */
+    protected function agentPresent(AssistRequest $request): bool
+    {
+        return $request->agent_seen_at !== null
+            && $request->agent_seen_at->gte(now()->subSeconds(self::AGENT_PRESENT_SECONDS))
+            && (! $request->rejoining() || ($request->claimed_at !== null && $request->agent_seen_at->gt($request->claimed_at)));
     }
 
     /**
@@ -725,6 +783,12 @@ class Assist
             $calls = app(Calls::class)->poll($request->guestId(), $after, $request->call_id, $tab, $hold, self::KIND);
             // What the page's RTCPeerConnection needs (ICE servers, transport policy): only once there is a call.
             $poll = ['call' => $calls['call'], 'signals' => $calls['signals'], 'cursor' => $calls['cursor'], 'rtc' => $calls['call'] === null ? null : app(Calls::class)->rtcConfiguration()];
+
+            // This very poll may have ended the call (Calls drops a side inside its poll): the page hears what became
+            // of the request now, not on its next poll.
+            if (($calls['call']['status'] ?? null) === Call::ENDED) {
+                $request->refresh();
+            }
         }
 
         return [
@@ -734,6 +798,8 @@ class Assist
             'agent' => $request->agent_id === null ? null : $this->agentOf($request),
             // What the visitor's answer moves on: the widget asks "Accept / Not now".
             'consent' => $this->awaitsConsent($request) ? 'watch' : null,
+            // The agent left the live view and the page waits for them to come back.
+            'reconnecting' => $request->rejoining(),
             'end_reason' => $request->end_reason,
             ...$poll,
         ];
@@ -759,6 +825,7 @@ class Assist
             'agent' => $request->agent_id === null ? null : ['id' => $request->agent_id, 'name' => $request->agent_name],
             'mine' => $this->holds($agent, $request),
             'call' => $request->call_id,
+            'reconnecting' => $request->rejoining(),
             'visitor_here' => $request->visitorIsHere(),
             'visitor_seen_ago' => $request->visitor_seen_at === null ? null : (int) max(0, $request->visitor_seen_at->diffInSeconds(now())),
             'waiting' => $request->waitingFor(),
@@ -798,7 +865,10 @@ class Assist
      */
     protected function startCall(AssistRequest $request, array $from, ?string $tab): bool
     {
-        if (! $request->transition($from, AssistRequest::ACTIVE, ['started_at' => now()])) {
+        // Back from the agent leaving the live view, the assist keeps its start (max_duration, the marker's duration).
+        $rejoining = $request->rejoining();
+
+        if (! $request->transition($from, AssistRequest::ACTIVE, ['started_at' => $request->started_at ?? now()])) {
             return false;
         }
 
@@ -843,7 +913,9 @@ class Assist
 
         $request->refresh();
 
-        AssistStarted::dispatch($request);
+        if (! $rejoining) {
+            AssistStarted::dispatch($request);
+        }
 
         return true;
     }
@@ -865,7 +937,7 @@ class Assist
     /** The claim reached the page: with a call to create, only the call does that (the page creates it on its poll). */
     protected function acknowledged(AssistRequest $request): bool
     {
-        if ($this->callsAvailable() && ! $this->watchConsent()) {
+        if ($this->callsAvailable() && (! $this->watchConsent() || $request->rejoining())) {
             return false;
         }
 
@@ -879,7 +951,7 @@ class Assist
             return $request->openedByAgent();
         }
 
-        return $request->status === AssistRequest::CLAIMED && $this->watchConsent() && $this->callsAvailable();
+        return $request->status === AssistRequest::CLAIMED && ! $request->rejoining() && $this->watchConsent() && $this->callsAvailable();
     }
 
     protected function watchConsent(): bool

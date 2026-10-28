@@ -198,7 +198,20 @@ export function installAssist(recorder, env) {
         } else if (data.status === 'claimed') {
             ui.cancelPrompts('offer');
 
-            if (data.consent === 'watch') consent();
+            // The agent left the live view: the call is over, the request waits for them to come back. The client
+            // goes once this answer is through it (the answer is also the client's own poll).
+            if (data.reconnecting && client) {
+                Promise.resolve().then(() => {
+                    if (!client || state?.status !== 'claimed') return;
+
+                    closeChannel('reconnect');
+                    dropClient();
+                    schedulePoll(0);
+                });
+            }
+
+            if (data.reconnecting) ui.show({ text: label(labels, 'rejoining', agentName()), agent: state.agent, actions: [{ label: label(labels, 'end'), kind: 'danger', onClick: () => cancel() }] });
+            else if (data.consent === 'watch') consent();
             else if (settings().calls) ui.show({ text: label(labels, 'joining', agentName()), agent: state.agent, actions: [{ label: label(labels, 'cancel'), onClick: () => cancel() }] });
             else ui.show({ text: label(labels, 'queued', agentName()), agent: state.agent });
         } else if (data.status === 'active') {

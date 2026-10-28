@@ -35,6 +35,7 @@ return [
         'sees' => ':name sieht diese Seite',
         'seesScreen' => ':name sieht Ihren Bildschirm',
         'reconnecting' => 'Verbindung wird wiederhergestellt…',
+        'rejoining' => ':name ist kurz weg und verbindet sich neu…',
         'controlling' => ':name steuert diese Seite. Mit Escape beenden.',
         'end' => 'Beenden',
         'endControl' => 'Fernsteuerung beenden',

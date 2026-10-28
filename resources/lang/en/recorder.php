@@ -35,6 +35,7 @@ return [
         'sees' => ':name sees this page',
         'seesScreen' => ':name sees your screen',
         'reconnecting' => 'Reconnecting…',
+        'rejoining' => ':name stepped away and is reconnecting…',
         'controlling' => ':name is controlling this page. Press Escape to stop.',
         'end' => 'End',
         'endControl' => 'End remote control',

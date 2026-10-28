@@ -90,7 +90,7 @@ class AssistRequest extends ReplayModel
     public const ASKS = ['control', 'audio', 'video', 'screen', 'control_masked'];
 
     /** The agent's fields, cleared when a claim goes back to the list. */
-    public const UNCLAIMED = ['agent_id' => null, 'agent_type' => null, 'agent_guard' => null, 'agent_scope' => null, 'agent_name' => null, 'agent_avatar' => null, 'claimed_at' => null, 'agent_seen_at' => null];
+    public const UNCLAIMED = ['agent_id' => null, 'agent_type' => null, 'agent_guard' => null, 'agent_scope' => null, 'agent_name' => null, 'agent_avatar' => null, 'claimed_at' => null, 'agent_seen_at' => null, 'started_at' => null];
 
     /** The most entries the grants log keeps: a page reporting in a loop must not grow the row for ever. */
     public const MAX_GRANTS = 200;
@@ -147,6 +147,12 @@ class AssistRequest extends ReplayModel
     }
 
     /** The id the visitor has on the Calls call: always this, also for a signed-in visitor. */
+    /** Claimed again after a live assist: the agent left the live view and the visitor's page waits for them. */
+    public function rejoining(): bool
+    {
+        return $this->status === self::CLAIMED && $this->started_at !== null;
+    }
+
     public function guestId(): string
     {
         return 'guest:'.$this->id;

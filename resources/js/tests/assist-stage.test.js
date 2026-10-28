@@ -555,3 +555,11 @@ test('a question asked again too soon after a no says so', () => {
     assert.equal(reasonKey('blocked'), 'blocked');
     assert.equal(reasonKey('not_visible'), 'not_visible');
 });
+
+test('the stage is reconnecting while the agent is back after leaving and the new call is on its way', async () => {
+    const { stagePhase } = await import('../lib/assist-stage.js');
+
+    assert.equal(stagePhase({ status: 'claimed', reconnecting: true }), 'reconnecting');
+    assert.equal(stagePhase({ status: 'claimed' }), 'waiting');
+    assert.equal(stagePhase({ status: 'claimed', reconnecting: true, calls: false }), 'unavailable');
+});

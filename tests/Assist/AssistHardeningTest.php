@@ -6,6 +6,7 @@ use Illuminate\Support\Str;
 use Packstub\SessionReplay\Facades\SessionReplay;
 use Packstub\SessionReplay\Models\AssistRequest;
 use Packstub\SessionReplay\Models\ReplaySession;
+use Packstub\SessionReplay\Support\Assist;
 use Packstub\SessionReplay\Support\ContextToken;
 use Packstub\SessionReplay\Tests\Fixtures\Models\Team;
 
@@ -197,6 +198,6 @@ it('treats a recording from before write keys as no recording: the heartbeat kee
     $offer = AssistRequest::query()->find($asked->json('id'));
     $offer->forceFill(['replay_session_id' => $session->id, 'opened_by' => 'agent', 'lock_key' => 'offer-'.$session->id])->save();
 
-    expect(app(\Packstub\SessionReplay\Support\Assist::class)->knock($session->id))->toBeNull();
+    expect(app(Assist::class)->knock($session->id))->toBeNull();
     $this->poll($offer->id, null, $browser['token'], ['session' => $session->id])->assertForbidden();
 });

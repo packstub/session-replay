@@ -35,6 +35,7 @@ return [
         'sees' => ':name ve esta página',
         'seesScreen' => ':name ve tu pantalla',
         'reconnecting' => 'Reconectando…',
+        'rejoining' => ':name se ha ausentado y se está reconectando…',
         'controlling' => ':name está controlando esta página. Pulsa Escape para detenerlo.',
         'end' => 'Terminar',
         'endControl' => 'Terminar el control remoto',

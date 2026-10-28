@@ -35,6 +35,7 @@ return [
         'sees' => ':name vede această pagină',
         'seesScreen' => ':name îți vede ecranul',
         'reconnecting' => 'Se reconectează…',
+        'rejoining' => ':name s-a deconectat și revine…',
         'controlling' => ':name controlează această pagină. Apasă Escape ca să oprești.',
         'end' => 'Încheie',
         'endControl' => 'Oprește controlul de la distanță',

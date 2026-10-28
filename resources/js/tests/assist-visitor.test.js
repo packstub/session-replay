@@ -90,7 +90,9 @@ class FakeClient extends EventTarget {
 
     leave() {}
 
-    destroy() {}
+    destroy() {
+        this.destroyed = true;
+    }
 }
 
 /** The panel: prompts the test answers, the status panel's buttons it can press. */
@@ -183,6 +185,8 @@ async function live({ stored = {}, video = false } = {}) {
     const grants = [];
     const ui = fakeUi();
     const timers = fakeTimers();
+    // What the poll route answers; a test changes it to move the request.
+    const server = { poll: { id: 'r1', status: 'active', opened_by: 'visitor', agent: { id: '5', name: 'Ana' }, call: { id: 'c1', peer: { id: '5' } }, signals: [], cursor: 0 } };
 
     globalThis.window = Object.assign(new EventTarget(), { innerWidth: 1280, innerHeight: 800 });
     globalThis.document = Object.assign(new EventTarget(), { visibilityState: 'visible' });
@@ -199,7 +203,7 @@ async function live({ stored = {}, video = false } = {}) {
         }
 
         if (url.endsWith('/poll')) {
-            return answer({ id: 'r1', status: 'active', opened_by: 'visitor', agent: { id: '5', name: 'Ana' }, call: { id: 'c1', peer: { id: '5' } }, signals: [], cursor: 0 });
+            return answer(server.poll);
         }
 
         return answer({});
@@ -242,6 +246,8 @@ async function live({ stored = {}, video = false } = {}) {
     return {
         ui,
         client,
+        timers,
+        server,
         grants,
         store,
         /** What the visitor's page sent the agent, apart from the mirror. */
@@ -381,4 +387,32 @@ test('the agent stopping the visitor\'s screen share is logged as the screen gra
 test('the visitor code takes the engine by injection and refuses to run without one', () => {
     assert.throws(() => installAssist({ config: () => ({}) }, {}), /calls engine/);
     assert.throws(() => installAssist({ config: () => ({}) }), /calls engine/);
+});
+
+test('when the agent leaves the live view the page says they are reconnecting, and joins the new call once they are back', async () => {
+    const page = await live();
+    const first = page.client;
+
+    // The client's own poll hears the request went back to claimed: the call is over, the agent is away.
+    page.server.poll = { id: 'r1', status: 'claimed', opened_by: 'visitor', agent: { id: '5', name: 'Ana' }, reconnecting: true, call: null, signals: [], cursor: 0 };
+    await first.options.signaling.poll({ after: 0, tab: 'x', hold: true });
+    await settle();
+
+    assert.equal(first.destroyed, true);
+    assert.equal(page.ui.shown.text, 'rejoining');
+    assert.equal(JSON.parse(page.store.get('sr:assist')).status, 'claimed');
+
+    // Waiting polls go on; nothing new while the agent is away.
+    await page.timers.run();
+    await settle();
+    assert.equal(FakeClient.last, first);
+
+    // The agent is back: the next poll brings a new call, and the page joins it.
+    page.server.poll = { id: 'r1', status: 'active', opened_by: 'visitor', agent: { id: '5', name: 'Ana' }, reconnecting: false, call: { id: 'c2', peer: { id: '5' } }, signals: [], cursor: 0 };
+    await page.timers.run();
+    await settle();
+
+    assert.notEqual(FakeClient.last, first);
+    assert.equal(FakeClient.last.callId, 'c2');
+    assert.equal(page.ui.shown.text, 'sees');
 });
