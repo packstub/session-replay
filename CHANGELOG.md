@@ -13,32 +13,14 @@ The first stable release, with a "Report a problem" button, server errors on the
 
 **Upgrading:** run `php artisan migrate` (a column for the impersonator's type and an index for a workspace's list). Config keys were renamed to name their unit (`idle_minutes`, `flush_seconds`, `on_error.ask_timeout_seconds`, `ingest.requests_per_minute`); a published config with the old names keeps working, but `config()->set()` at runtime needs the new names ([#42](https://github.com/packstub/session-replay/issues/42)).
 
-### Added
-
 - `SessionReplay.send()` for a "Report a problem" button, with a `ReplayReported` event to tell support ([#39](https://github.com/packstub/session-replay/issues/39))
 - Server errors on the replay, marker details, and **Open in logs** through `SessionReplay::logUrlUsing()`
 - Failed `fetch` and XHR requests and client-side page changes are marked in apps without Livewire
-- **Copy link to this moment** under the player, and optional autoplay (`viewer.autoplay`)
-- The `on_error.ask` question as a toast, `on_error.ask_again` and `on_error.max_buffer_mb`
+- **Copy link to this moment** under the player, and the `on_error.ask` question as a toast
 - A `ReplaySession` policy (Filament Shield's, say) authorizes the viewer when no gate is defined ([#41](https://github.com/packstub/session-replay/issues/41))
 - The impersonator can be a model ([#40](https://github.com/packstub/session-replay/issues/40)), and a `session-replay:session` browser event for error trackers ([#43](https://github.com/packstub/session-replay/issues/43))
-
-### Changed
-
-- `viewer.guard` alone now sets the viewer's login
-- Properties are capped at 4 KB, since they travel in every page's signed (not encrypted) token
-- The recorder script runs once per tab with `wire:navigate`
-
-### Fixed
-
-- Privacy: hidden and file inputs are always masked, and `mask_all_text` masks text in attributes too
-- Privacy: URLs in errors and console messages are redacted, and a stylesheet is served only to recordings that use it
-- Privacy: a misspelt `consent` or `mode` now means the stricter choice instead of recording everyone ([#38](https://github.com/packstub/session-replay/issues/38))
-- Privacy: a `visibleUsing()` rule with `orWhere()` no longer shows recordings from outside the list's scope
-- Pages the app does not record stay unrecorded when reached with `wire:navigate`
-- Times from the browser are stored in the app's timezone, so markers line up outside UTC
-- Sturdier uploads: the daily limit is obeyed, throttling recovers, and parallel or half-failed batches are stored in full
-- Rotating `APP_KEY` no longer stops open tabs from recording
+- Privacy fixes: hidden and file inputs always masked, URLs redacted in errors, stricter defaults for a misspelt `consent` or `mode` ([#38](https://github.com/packstub/session-replay/issues/38)), `visibleUsing()` kept to its scope
+- Sturdier uploads and times: the daily limit is obeyed, half-failed batches are stored in full, and times follow the app's timezone
 
 Docs: https://packstub.dev/docs/session-replay
 
