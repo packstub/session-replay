@@ -6,6 +6,7 @@ All notable changes to `packstub/session-replay` are documented here.
 
 - The README opens with a banner and an animation of a replay; the docs sync to packstub.dev on every change
 - A demo app, [packstub/session-replay-demo](https://github.com/packstub/session-replay-demo): a small Laravel shop with real recordings to watch
+- Jumping to a marker on another page no longer flashes that page unstyled in Chrome: the player waits for its styles (at most 0.4 s)
 
 ## 1.0.0 — 2026-10-22
 
