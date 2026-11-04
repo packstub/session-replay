@@ -33,9 +33,27 @@ jobs:
             printing { print }
           ' CHANGELOG.md | sed '/./,$!d' | sed -e :a -e '/^\n*$/{$d;N;ba' -e '}' > release-notes.md
 
-          if [ ! -s release-notes.md ]; then
-            echo "No \"## $version\" section in CHANGELOG.md; see the changelog for details." > release-notes.md
+          if [ -s release-notes.md ]; then
+            echo "Notes from CHANGELOG.md:"; cat release-notes.md
+          else
+            echo "No \"## $version\" section in CHANGELOG.md; only the merged pull requests go in the notes."
           fi
+
+      # GitHub's list of merged pull requests under the summary (Dependabot is left
+      # out by .github/release.yml). The maintainer's own "first contribution" line
+      # is dropped, and the New Contributors heading with it when nobody is left.
+      - name: Append the merged pull requests
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ inputs.tag || github.ref_name }}
+        run: |
+          # Relative links (docs/x.md, UPGRADE.md) work in the repo, not on a release page.
+          perl -pi -e 's{\]\((?![a-z][a-z0-9+.-]*:|#|/)([^)\s]+)\)}{](https://github.com/$ENV{GITHUB_REPOSITORY}/blob/$ENV{TAG}/$1)}g' release-notes.md
+          gh api "repos/$GITHUB_REPOSITORY/releases/generate-notes" -f tag_name="$TAG" -q .body \
+            | perl -0pe 's/^\* \@icaliman made their first contribution[^\n]*\n//mg; s/^## New Contributors\n+(?=\*\*Full Changelog|\z)//mg' \
+            > generated.md
+          if [ -s release-notes.md ]; then echo >> release-notes.md; fi
+          cat generated.md >> release-notes.md
           cat release-notes.md
 
       - name: Create the release
