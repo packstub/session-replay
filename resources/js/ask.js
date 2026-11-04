@@ -98,13 +98,26 @@ function element(tag, attributes = {}, text = null) {
     return node;
 }
 
+// The recorder's <script> tag carries the page's CSP nonce when the app uses one (Vite::cspNonce()); read while
+// that tag runs, so the <style> of the dialog, the toast and the notice carries it too: a style-src that names a
+// nonce blocks every inline style without it, inside a shadow root as well.
+const NONCE = document.currentScript?.nonce || '';
+
+function styles() {
+    const node = element('style', {}, STYLE);
+
+    if (NONCE) node.nonce = NONCE;
+
+    return node;
+}
+
 export function ask(labels, { offerAnonymous = false, error = null, toast = false, timeoutMs = 60_000 } = {}) {
     return new Promise((resolve) => {
         const host = element('div', { 'data-session-replay-ask': '' });
         const root = host.attachShadow({ mode: 'closed' });
         const previous = document.activeElement;
 
-        const style = element('style', {}, STYLE);
+        const style = styles();
         const dialog = toast
             ? element('div', { class: 'toast', role: 'dialog', 'aria-live': 'polite', popover: 'manual', 'aria-labelledby': 'sr-ask-title', 'aria-describedby': 'sr-ask-body' })
             : element('dialog', { 'aria-labelledby': 'sr-ask-title', 'aria-describedby': 'sr-ask-body', tabindex: '-1' });
@@ -222,7 +235,7 @@ export function notice(text) {
     const root = host.attachShadow({ mode: 'closed' });
     const box = element('div', { class: 'notice', role: 'status', popover: 'manual' }, text);
 
-    root.append(element('style', {}, STYLE), box);
+    root.append(styles(), box);
     document.documentElement.append(host);
 
     try {
