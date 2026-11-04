@@ -2,8 +2,11 @@
 
 namespace Packstub\SessionReplay\Support;
 
+use Illuminate\Contracts\Filesystem\FileNotFoundException;
 use Illuminate\Contracts\Filesystem\Filesystem;
 use Illuminate\Support\Facades\Storage;
+use League\Flysystem\FilesystemException;
+use League\Flysystem\UnableToReadFile;
 
 /** Where the bytes live: gzip files on the configured disk, one folder per recording and one for stylesheets and shared snapshots. */
 class ReplayStorage
@@ -58,25 +61,43 @@ class ReplayStorage
         return strlen($gzip);
     }
 
+    /** The file's bytes, or null when there is no such file (read once: an exists() first is a second round trip on S3). */
     public function get(string $path): ?string
     {
-        return $this->disk()->exists($path) ? $this->disk()->get($path) : null;
+        try {
+            return $this->disk()->get($path);
+        } catch (UnableToReadFile|FileNotFoundException) {
+            return null;
+        }
     }
 
     /** @return resource|null */
     public function readStream(string $path)
     {
-        return $this->disk()->exists($path) ? $this->disk()->readStream($path) : null;
+        try {
+            return $this->disk()->readStream($path) ?: null;
+        } catch (UnableToReadFile|FileNotFoundException) {
+            return null;
+        }
     }
 
-    public function deleteSession(string $sessionId): void
+    /** Whether the recording's files are gone; false keeps its row, so the next prune tries again instead of orphaning them. */
+    public function deleteSession(string $sessionId): bool
     {
-        $this->disk()->deleteDirectory($this->directory().'/sessions/'.$sessionId);
+        try {
+            return $this->disk()->deleteDirectory($this->directory().'/sessions/'.$sessionId);
+        } catch (FilesystemException) {
+            return false;
+        }
     }
 
-    public function delete(string $path): void
+    public function delete(string $path): bool
     {
-        $this->disk()->delete($path);
+        try {
+            return $this->disk()->delete($path);
+        } catch (FilesystemException) {
+            return false;
+        }
     }
 
     /**
@@ -94,7 +115,7 @@ class ReplayStorage
             return strlen($body) > $maxRawBytes ? null : (string) gzencode($body, 6);
         }
 
-        return $this->inflate($body, $maxRawBytes) === null ? null : $body;
+        return $this->inflatedSize($body, $maxRawBytes) === null ? null : $body;
     }
 
     /**
@@ -108,36 +129,59 @@ class ReplayStorage
      */
     public function inflate(string $gzip, int $maxRawBytes): ?string
     {
+        $raw = '';
+
+        return $this->walk($gzip, $maxRawBytes, function (string $piece) use (&$raw): void {
+            $raw .= $piece;
+        }) === null ? null : $raw;
+    }
+
+    /**
+     * What the gzip inflates to, in bytes, by the same rules as inflate(), without keeping any of it: a batch is
+     * stored as sent, so checking it must not cost its inflated size in memory (up to 60 MB per request).
+     *
+     * @internal
+     */
+    public function inflatedSize(string $gzip, int $maxRawBytes): ?int
+    {
+        return $this->walk($gzip, $maxRawBytes, fn () => null);
+    }
+
+    /** Inflates piece by piece, handing each to `$sink`; the inflated size, or null when the stream is refused. */
+    protected function walk(string $gzip, int $maxRawBytes, callable $sink): ?int
+    {
         $context = inflate_init(ZLIB_ENCODING_GZIP);
 
         if ($context === false) {
             return null;
         }
 
-        $raw = '';
+        $size = 0;
 
-        foreach (str_split($gzip, 8192) as $piece) {
+        for ($offset = 0, $length = strlen($gzip); $offset < $length; $offset += 8192) {
             if (inflate_get_status($context) === ZLIB_STREAM_END) {
                 return null;
             }
 
-            $inflated = @inflate_add($context, $piece);
+            $inflated = @inflate_add($context, substr($gzip, $offset, 8192));
 
             if ($inflated === false) {
                 return null;
             }
 
-            $raw .= $inflated;
+            $size += strlen($inflated);
 
-            if (strlen($raw) > $maxRawBytes) {
+            if ($size > $maxRawBytes) {
                 return null;
             }
+
+            $sink($inflated);
         }
 
-        if (inflate_get_status($context) !== ZLIB_STREAM_END || inflate_get_read_len($context) !== strlen($gzip)) {
+        if (inflate_get_status($context) !== ZLIB_STREAM_END || inflate_get_read_len($context) !== $length) {
             return null;
         }
 
-        return $raw;
+        return $size;
     }
 }

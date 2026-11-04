@@ -248,3 +248,20 @@ export function isUnmasked(element, unmaskSelector, maskSelector) {
 export function textMasker(unmaskSelector, maskSelector) {
     return (text, element) => (isUnmasked(element, unmaskSelector, maskSelector) ? text : String(text ?? '').replace(/\S/g, '*'));
 }
+
+/**
+ * The mask selector as rrweb should get it: a part like "[data-replay-mask] *"
+ * next to "[data-replay-mask]" says nothing more to it (it asks closest() at
+ * the root of what it serializes and hands the answer down to the children),
+ * and costs a walk up the ancestors for every element serialized, which is
+ * where a morph of a long table spent most of its time. A selector with
+ * parentheses (:is(), :not()) is left alone: a comma inside them is no list.
+ */
+export function simplifyMaskSelector(selector) {
+    if (typeof selector !== 'string' || selector.includes('(')) return selector;
+
+    const parts = selector.split(',').map((part) => part.trim()).filter(Boolean);
+    const plain = new Set(parts);
+
+    return parts.filter((part) => !(part.endsWith(' *') && plain.has(part.slice(0, -2).trim()))).join(', ');
+}

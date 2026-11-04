@@ -50,6 +50,7 @@ return new class extends Migration
             $table->timestamps();
 
             $table->index(['user_type', 'user_id']);
+            $table->index('user_id'); // one person's recordings when the type is not given (the viewer's ?user=, a key typed into a filter)
             $table->index(['tenant_type', 'tenant_id']);
             $table->index(['tenant_type', 'tenant_id', 'started_at']); // a workspace's list, newest first
         });

@@ -13,7 +13,9 @@ use Packstub\SessionReplay\Models\ReplayChunk;
 use Packstub\SessionReplay\Models\ReplayMarker;
 use Packstub\SessionReplay\Models\ReplaySession;
 use Packstub\SessionReplay\Models\ReplaySessionAsset;
+use Packstub\SessionReplay\Support\BatchIngester;
 use Packstub\SessionReplay\Support\ContextToken;
+use Packstub\SessionReplay\Support\ReplayStorage;
 
 it('stores the first batch as a recording with who, where and the file on disk', function () {
     Event::fake([ReplaySessionStarted::class]);
@@ -782,4 +784,51 @@ it('announces every problem the person reported once, with its recording', funct
 
     expect(ReplayMarker::query()->where('type', 'report')->count())->toBe(1)
         ->and(ReplaySession::query()->findOrFail($id)->error_count)->toBe(0);
+});
+
+it('bounds the index next to the events and counts it toward the daily limit', function () {
+    config()->set('session-replay.ingest.daily_mb', 1);
+
+    $ada = $this->token($this->user());
+
+    // Over 256 KB of index: refused before anything is read.
+    $this->ingest(['token' => $ada, 'meta' => ['pad' => str_repeat('x', 300 * 1024)]])->assertUnprocessable();
+    expect(ReplaySession::query()->count())->toBe(0);
+
+    // Five batches of tiny events with 180 KB of index each (900 KB), then a sixth: over the day's megabyte.
+    foreach (range(1, 5) as $seq) {
+        $this->ingest(['token' => $ada, 'meta' => ['pad' => str_repeat('x', 180 * 1024)]])->assertCreated();
+    }
+
+    $this->ingest(['token' => $ada, 'meta' => ['pad' => str_repeat('x', 180 * 1024)]])->assertStatus(429)->assertJson(['stop' => true]);
+});
+
+it('stores at most 5,000 markers per recording, while the counters still see every one', function () {
+    $session = $this->recording();
+    $cap = BatchIngester::MAX_MARKERS_PER_SESSION;
+    $now = now();
+
+    foreach (array_chunk(range(1, $cap - 1), 500) as $chunk) {
+        ReplayMarker::query()->insert(array_map(fn (int $i): array => ['replay_session_id' => $session->id, 'type' => 'console', 'label' => "Line {$i}", 'at_ms' => $i, 'created_at' => $now], $chunk));
+    }
+
+    $markers = array_map(fn (int $i): array => ['type' => 'error', 'label' => "Boom {$i}", 'at' => now()->getTimestampMs() + $i, 'payload' => []], range(1, 3));
+
+    $this->ingest(['token' => $this->token($session->user), 'session' => $session->id, 'seq' => 1, 'meta' => ['markers' => $markers]])->assertOk();
+
+    expect(ReplayMarker::query()->where('replay_session_id', $session->id)->count())->toBe($cap)
+        ->and(ReplayMarker::query()->where('replay_session_id', $session->id)->where('type', 'error')->count())->toBe(1)
+        ->and($session->fresh()->error_count)->toBe(3);
+});
+
+it('checks a gzip batch without keeping what it inflates', function () {
+    $storage = app(ReplayStorage::class);
+    $json = json_encode($this->events(50));
+    $gzip = gzencode($json);
+
+    expect($storage->inflatedSize($gzip, 1_000_000))->toBe(strlen($json))
+        ->and($storage->inflatedSize($gzip, strlen($json) - 1))->toBeNull()
+        ->and($storage->inflatedSize($gzip.gzencode('more'), 1_000_000))->toBeNull()
+        ->and($storage->inflatedSize(substr($gzip, 0, -2), 1_000_000))->toBeNull()
+        ->and($storage->inflate($gzip, 1_000_000))->toBe($json);
 });

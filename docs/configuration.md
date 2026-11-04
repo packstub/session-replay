@@ -35,7 +35,7 @@ Only a published file is read this way; `config()->set()` at runtime needs the n
 | --- | --- | --- |
 | `mode` | `env('SESSION_REPLAY_MODE', 'session')` | `session`: a recorded tab uploads from its first page. `on_error`: the browser keeps the last moments in memory and uploads only when something goes wrong. See [Recording only when something goes wrong](recording.md#recording-only-when-something-goes-wrong). |
 | `on_error.buffer_seconds` | `60` | Seconds kept before the trigger, 5 to 600. The window starts at a full page snapshot, so a replay may start up to half a window (at most 30 s) earlier. |
-| `on_error.max_buffer_mb` | `5` | The most the window may take in memory, in MB of events as the recorder estimates them, 1 to 50. A page that changes a lot reaches it before `buffer_seconds`; the window then shrinks to its newest page snapshot. |
+| `on_error.max_buffer_mb` | `5` | The most the window may take in memory, in MB of events as the recorder estimates them (a page snapshot by its nodes, about 120 bytes each), 1 to 50. A page that changes a lot reaches it before `buffer_seconds`; the window then shrinks to its newest page snapshot. A page whose snapshot alone is larger keeps that snapshot and up to half the ceiling of events after it. |
 | `on_error.triggers` | `['error', 'request']` | Marker types that upload the window: `error`, `request`, `console`, `rage-click`, `custom`. A type also has to be captured (`capture.*`). |
 | `on_error.ask` | `false` | Ask the person before anything is sent: `true` (or `dialog`) in a small modal dialog the recorder draws, `toast` in a card at the bottom corner that leaves the page usable. See [Privacy](privacy.md#asking-before-a-replay-is-sent). |
 | `on_error.ask_again` | `false` | After "Don't send" (or a toast left unanswered): `false` leaves the tab alone until its session ends; `true` asks again on the next trigger, at most once per window, and keeps the window going meanwhile. |
@@ -56,7 +56,7 @@ Only a published file is read this way; `config()->set()` at runtime needs the n
 | --- | --- | --- |
 | `privacy.mask_all_inputs` | `true` | Mask every input's value. Password inputs are masked regardless. |
 | `privacy.mask_all_text` | `false` | Mask every text node: layout-only recordings. |
-| `privacy.mask_text_selector` | `[data-replay-mask], [data-replay-mask] *, [contenteditable], [contenteditable] *` | Elements whose text is replaced with asterisks. Rich editors are in the default, so what people type there is masked like an input. |
+| `privacy.mask_text_selector` | `[data-replay-mask], [contenteditable]` | Elements whose text is replaced with asterisks, with everything inside them. Rich editors are in the default, so what people type there is masked like an input. |
 | `privacy.unmask_text_selector` | `[data-replay-unmask]` | With `mask_all_text`: text inside matching elements stays readable, unless `mask_text_selector` matches it. Input values are never affected. |
 | `privacy.block_selector` | `[data-replay-block]` | Elements recorded as an empty box of the same size. |
 | `privacy.ignore_selector` | `[data-replay-ignore]` | Elements whose input events are not recorded. |

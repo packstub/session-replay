@@ -56,10 +56,9 @@ class ReplaySession extends ReplayModel
 
     protected static function booted(): void
     {
-        // The rows go with the foreign keys; the files have to be removed by hand.
-        static::deleting(function (self $session): void {
-            app(ReplayStorage::class)->deleteSession($session->id);
-        });
+        // The rows go with the foreign keys; the files have to be removed by hand. Files that could not be removed
+        // keep the row (the delete is cancelled), or nothing would find them again.
+        static::deleting(fn (self $session): bool => app(ReplayStorage::class)->deleteSession($session->id));
     }
 
     public function user(): MorphTo

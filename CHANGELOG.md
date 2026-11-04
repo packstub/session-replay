@@ -4,10 +4,14 @@ All notable changes to `packstub/session-replay` are documented here.
 
 ## Unreleased
 
-### Changed
+Memory and load, after a report of a panel tab that grew all day. Run `php artisan migrate`: two indexes for the lists at scale.
 
-- **Docs.** The README opens with a banner and an animation of a replay: a rage click, the server error's details and "Open in logs". Docs sync to packstub.dev on every change to `docs/` (`docs-sync.yml`).
-- **A demo app.** [packstub/session-replay-demo](https://github.com/packstub/session-replay-demo) is a small Laravel shop wired to the package (the gate, `recordWhen()`, `logUrlUsing()` with Log Viewer, `SessionReplay.send()` behind "Report a problem"), with a Playwright script that makes real recordings to watch. The README, the docs index and Installation link it.
+- A tab that navigates with `wire:navigate` no longer keeps a page snapshot per page change (rrweb 2.2.0): after a minute of navigating the heap is the same with the recorder as without it.
+- Batches waiting behind a slow server, or for a retry, wait compressed, and nothing queued before `stop()` or a withdrawn consent is sent after it.
+- Recording a long table costs less: the mask selector no longer walks every element's ancestors (the default is `[data-replay-mask], [contenteditable]` now), big mutations and page snapshots are sized without being stringified, and the `on_error` window on a 500-row page holds what `max_buffer_mb` says. See [Recording](docs/recording.md#recording-only-when-something-goes-wrong).
+- The server checks a gzip batch without holding what it inflates, bounds the index next to the events (256 KB, metered like the events) and stores at most 5,000 markers per recording. See [Limits](docs/storage.md#limits).
+- A recording whose files the disk could not remove keeps its row and is pruned again next time, instead of leaving its files behind.
+- The README opens with a banner and an animation of a replay, the docs sync to packstub.dev on every change, and a demo app shows the package in a small shop: [packstub/session-replay-demo](https://github.com/packstub/session-replay-demo).
 
 ## 1.0.0 — 2026-10-22
 

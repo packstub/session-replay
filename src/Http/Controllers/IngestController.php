@@ -28,6 +28,9 @@ class IngestController
     /** A stylesheet may inflate to at most this many times ingest.max_asset_kb. */
     protected const ASSET_INFLATE_FACTOR = 8;
 
+    /** The index next to a batch ("meta": markers, counts, the hashes it points at) may be this long, as JSON. */
+    public const MAX_META_BYTES = 256 * 1024;
+
     public function __construct(protected ReplayStorage $storage, protected BatchIngester $ingester) {}
 
     /** POST {path}/ingest — multipart: token, session, seq, meta (JSON), events (file; gzip or JSON), anonymous (optional). */
@@ -56,10 +59,19 @@ class IngestController
             return $body;
         }
 
+        // The index is bounded and metered like the events: it becomes rows (200 markers of up to 8 KB each per
+        // batch), and a batch of nothing with a large index would otherwise pass every limit.
+        $metaJson = $request->input('meta', '{}');
+        $metaJson = is_string($metaJson) ? $metaJson : '{}';
+
+        if (strlen($metaJson) > self::MAX_META_BYTES) {
+            return $this->refuse(422, 'The index next to the events is too large.');
+        }
+
         /** @var ReplaySession|null $session */
         $session = ReplaySession::query()->find($sessionId);
 
-        if ($this->overDailyLimit($context, strlen($body))) {
+        if ($this->overDailyLimit($context, strlen($body) + strlen($metaJson))) {
             return $this->refuse(429, 'The daily upload limit was reached.', stop: true);
         }
 
@@ -93,10 +105,9 @@ class IngestController
             return $this->refuse(422, 'The events could not be read.');
         }
 
-        $meta = $request->input('meta', '{}');
-        $meta = is_string($meta) ? json_decode($meta, true) : null;
+        $meta = json_decode($metaJson, true);
 
-        $result = $this->ingester->ingest($sessionId, (int) $seq, $gzip, is_array($meta) ? $meta : [], $context, $request->userAgent());
+        $result = $this->ingester->ingest($sessionId, (int) $seq, $gzip, is_array($meta) ? $meta : [], $context, $request->userAgent(), $session);
 
         if ($result['foreign']) {
             return $this->refuse(403, 'This recording belongs to someone else.', stop: true);

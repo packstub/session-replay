@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { activeTime, checkoutInterval, estimateChars, estimateEventChars, isTrigger, trimWindow, windowStart } from '../lib/buffer.js';
+import { activeTime, charsSinceSnapshot, checkoutInterval, countNodes, estimateChars, estimateEventChars, isTrigger, trimWindow, windowStart } from '../lib/buffer.js';
 
 const meta = (timestamp) => ({ type: 4, timestamp, data: { href: 'https://app.test/' } });
 const snapshot = (timestamp) => ({ type: 2, timestamp, data: { node: {} } });
@@ -77,4 +77,22 @@ test('a mutation that changes a lot is measured, the rest estimated, so max_buff
     assert.equal(estimateEventChars(small), 300);
     assert.equal(estimateEventChars({ type: 2, timestamp: 3, data: {} }), 200_000);
     assert.ok(estimateEventChars(big) > 10_000);
+});
+
+test('what a fresh snapshot would let the window drop: everything after the newest one', () => {
+    assert.equal(charsSinceSnapshot([meta(0), snapshot(5), move(1_000), move(2_000)]), 600);
+    assert.equal(charsSinceSnapshot([meta(0), snapshot(5), move(1_000), meta(30_000), snapshot(30_004), move(45_000)]), 300);
+    assert.equal(charsSinceSnapshot([move(1_000), move(2_000)]), 600);
+    assert.equal(charsSinceSnapshot([]), 0);
+});
+
+test('a snapshot is sized by its nodes, so a long table page counts for what it takes, a small page for the 200 kB floor', () => {
+    const element = (childNodes = []) => ({ type: 2, tagName: 'div', attributes: {}, childNodes });
+    const row = () => element([element([{ type: 3, textContent: 'x' }]), element([{ type: 3, textContent: 'y' }])]);
+    const page = { type: 0, childNodes: [element([element(), element(Array.from({ length: 10_000 }, row))])] };
+
+    assert.equal(countNodes(page), 50_004);
+    assert.equal(countNodes(null), 0);
+    assert.equal(estimateEventChars({ type: 2, timestamp: 1, data: { node: page } }), 50_004 * 120);
+    assert.equal(estimateEventChars({ type: 2, timestamp: 1, data: { node: element([element()]) } }), 200_000);
 });

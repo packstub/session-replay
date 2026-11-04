@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { REDACTED, dropHiddenValues, inputMaskOptions, isUnmasked, maskTextAttributes, redactPluginUrls, redactUrl, redactUrlAttributes, redactUrls, textMasker } from '../lib/privacy.js';
+import { dropHiddenValues, inputMaskOptions, isUnmasked, maskTextAttributes, REDACTED, redactPluginUrls, redactUrl, redactUrlAttributes, redactUrls, simplifyMaskSelector, textMasker } from '../lib/privacy.js';
 
 const names = ['token', 'signature', 'code', 'email'];
 
@@ -262,4 +262,12 @@ test('an unmask selector the browser rejects masks', () => {
 
     assert.equal(isUnmasked(throwing, '[bad', null), false);
     assert.equal(isUnmasked(element('[data-replay-unmask]'), '', null), false);
+});
+
+test('the mask selector rrweb gets drops the "X *" parts that only repeat an X it already checks up the tree', () => {
+    assert.equal(simplifyMaskSelector('[data-replay-mask], [data-replay-mask] *, [contenteditable], [contenteditable] *'), '[data-replay-mask], [contenteditable]');
+    assert.equal(simplifyMaskSelector('.secret *, .other'), '.secret *, .other');
+    assert.equal(simplifyMaskSelector(':is(.a, .b) *, :is(.a, .b)'), ':is(.a, .b) *, :is(.a, .b)');
+    assert.equal(simplifyMaskSelector(''), '');
+    assert.equal(simplifyMaskSelector(null), null);
 });

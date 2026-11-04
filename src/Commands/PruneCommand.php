@@ -27,12 +27,13 @@ class PruneCommand extends Command
         }
 
         $sessions = 0;
+        $kept = 0;
 
-        // One by one, so each recording's files go with it (the model's deleting hook).
-        ReplaySession::query()->prunable($days)->chunkById(200, function ($batch) use (&$sessions): void {
+        // One by one, so each recording's files go with it (the model's deleting hook). A recording whose files could
+        // not be removed keeps its row and is tried again next time.
+        ReplaySession::query()->prunable($days)->chunkById(200, function ($batch) use (&$sessions, &$kept): void {
             foreach ($batch as $session) {
-                $session->delete();
-                $sessions++;
+                $session->delete() ? $sessions++ : $kept++;
             }
         });
 
@@ -62,6 +63,10 @@ class PruneCommand extends Command
 
         $this->components->info("Pruned {$sessions} recordings and {$assets} stylesheets older than {$days} days, and {$snapshots} shared snapshots no recording points at.");
 
+        if ($kept > 0) {
+            $this->components->warn("{$kept} recordings kept: their files could not be removed from the disk; the next run tries again.");
+        }
+
         return self::SUCCESS;
     }
 
@@ -76,9 +81,11 @@ class PruneCommand extends Command
                 ->whereColumn('replay_session_assets.hash', 'replay_assets.hash'))
             ->chunkById(200, function ($batch) use (&$deleted, $storage): void {
                 foreach ($batch as $asset) {
-                    $storage->delete($asset->path);
-                    $asset->delete();
-                    $deleted++;
+                    // The file first; a row without its file would be served as missing, a file without its row never found.
+                    if ($storage->delete($asset->path)) {
+                        $asset->delete();
+                        $deleted++;
+                    }
                 }
             });
 

@@ -136,7 +136,7 @@ return [
     'privacy' => [
         'mask_all_inputs' => true,
         'mask_all_text' => false,
-        'mask_text_selector' => '[data-replay-mask], [data-replay-mask] *, [contenteditable], [contenteditable] *',
+        'mask_text_selector' => '[data-replay-mask], [contenteditable]',
         // With mask_all_text: text inside these elements stays readable (the app's own menus and headings), unless
         // mask_text_selector matches it. Input values are never affected.
         'unmask_text_selector' => '[data-replay-unmask]',

@@ -45,7 +45,7 @@ Three attributes cover what the defaults cannot know about:
 
 ```php
 'privacy' => [
-    'mask_text_selector' => '[data-replay-mask], [data-replay-mask] *, .pii, .pii *',
+    'mask_text_selector' => '[data-replay-mask], .pii',
     'block_selector' => '[data-replay-block], .card-form',
 ],
 ```

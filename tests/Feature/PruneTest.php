@@ -133,3 +133,14 @@ it('has the impersonator\'s type on a fresh install, and adds it to an install f
 
     expect(Schema::hasColumn('replay_sessions', 'impersonator_type'))->toBeTrue();
 });
+
+it('keeps a recording whose files the disk could not remove, so the next run tries again', function () {
+    $old = $this->recording(attributes: ['started_at' => now()->subDays(40), 'last_activity_at' => now()->subDays(40)]);
+
+    $this->partialMock(ReplayStorage::class, fn ($mock) => $mock->shouldReceive('deleteSession')->once()->andReturn(false));
+
+    $this->artisan('session-replay:prune')->assertSuccessful()->expectsOutputToContain('1 recordings kept');
+
+    expect(ReplaySession::query()->whereKey($old->id)->exists())->toBeTrue()
+        ->and(ReplayChunk::query()->where('replay_session_id', $old->id)->exists())->toBeTrue();
+});

@@ -30,6 +30,9 @@ class BatchIngester
 {
     public const MAX_MARKERS_PER_BATCH = 200;
 
+    /** Markers stored per recording; past it the counters still count, the rows are not written. */
+    public const MAX_MARKERS_PER_SESSION = 5000;
+
     /** The largest value of an integer column on every supported database (Postgres has no unsigned ones). */
     protected const MAX_INTEGER = 2_147_483_647;
 
@@ -42,9 +45,9 @@ class BatchIngester
      * @param  array<string, mixed>  $meta
      * @return array{session: ReplaySession, created: bool, duplicate: bool, foreign: bool, missing_assets: array<int, string>}
      */
-    public function ingest(string $sessionId, int $seq, string $gzip, array $meta, ContextToken $context, ?string $userAgent): array
+    public function ingest(string $sessionId, int $seq, string $gzip, array $meta, ContextToken $context, ?string $userAgent, ?ReplaySession $found = null): array
     {
-        [$session, $created] = $this->session($sessionId, $meta, $context, $userAgent);
+        [$session, $created] = $this->session($sessionId, $meta, $context, $userAgent, $found);
 
         // Another first batch of this id made the row a moment ago, after the controller looked: check it the same way.
         if (! $created && ! ($context->sameUserAs($session->user_type, $session->user_id) && $context->sameImpersonatorAs($session->impersonator_id, $session->impersonator_type) && $context->sameTenantAs($session->tenant_type, $session->tenant_id))) {
@@ -84,7 +87,13 @@ class BatchIngester
                 ]);
 
                 if ($markers !== []) {
-                    ReplayMarker::query()->insert($markers);
+                    // A page that logs an error in a loop, or a crafted batch, stops adding rows at the cap; the
+                    // counters (error_count, rage_click_count, the vitals) still see every marker.
+                    $room = self::MAX_MARKERS_PER_SESSION - ReplayMarker::query()->where('replay_session_id', $sessionId)->count();
+
+                    if ($room > 0) {
+                        ReplayMarker::query()->insert(array_slice($markers, 0, $room));
+                    }
                 }
 
                 $this->updateCounters($session, $meta, $bytes, $events, $markers);
@@ -130,10 +139,10 @@ class BatchIngester
      * @param  array<string, mixed>  $meta
      * @return array{0: ReplaySession, 1: bool}
      */
-    protected function session(string $sessionId, array $meta, ContextToken $context, ?string $userAgent): array
+    protected function session(string $sessionId, array $meta, ContextToken $context, ?string $userAgent, ?ReplaySession $found = null): array
     {
         /** @var ReplaySession|null $session */
-        $session = ReplaySession::query()->find($sessionId);
+        $session = $found ?? ReplaySession::query()->find($sessionId);
 
         if ($session !== null) {
             return [$session, false];

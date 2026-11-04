@@ -164,7 +164,9 @@ A page costs about its snapshot, and reading it costs next to nothing, so a roug
 
 **On the person's side.** The recorder is 32 KB of JavaScript (gzip), loaded with `defer`. With the CPU slowed down four times, the same scripted work with and without the recorder gave the same interaction latency (75th percentile 40 ms and 32 ms with it, 64 ms and 40 ms without it, which is noise) and about one second more main-thread work over 50 seconds of constant clicking. Uploads are compressed off the main thread by the browser (`CompressionStream`).
 
-The lab behind these numbers ships with the Filament package (`workbench/lab/measure.mjs`), so you can run it against your own pages.
+**Memory.** What the recorder holds is small and short-lived: the events since the last upload (at most `flush_seconds` of them, a long page's snapshot going up at once), the stylesheets' text until the server confirms it has them, and, in mode `on_error`, the window (`on_error.max_buffer_mb`). Batches waiting behind a slow server, or for a retry, wait compressed. Measured the same way (the Filament package's `workbench/lab/memory.mjs`: JS heap, DOM nodes kept alive and the renderer's RSS, with the recorder on and off): on a 50-row table the recorder adds a few MB; on a 500-row table page (6.7 MB of HTML, which Chrome holds at 500 to 700 MB on its own while it polls every two seconds) about 100 MB at the peak and 10 MB after a garbage collection; and a tab that navigates with `wire:navigate` for a minute keeps the same heap with the recorder as without it. Recorder builds before rrweb 2.2.0 (1.0.0 and the betas) grew by one page snapshot per `wire:navigate` for as long as the tab lived, because rrweb kept the buffer of every run it had stopped; that is what a tab left open on a long table all day turned into hundreds of MB.
+
+The lab behind these numbers ships with the Filament package (`workbench/lab/measure.mjs` and `memory.mjs`), so you can run it against your own pages.
 
 ## Limits
 
@@ -173,6 +175,7 @@ The lab behind these numbers ships with the Filament package (`workbench/lab/mea
 | `ingest.max_batch_kb` | 1536 | The browser splits a batch that compresses to more; the server answers 413 to a larger upload. A gzip batch that inflates to more than 40 times this is refused (422). A shared snapshot has the same limits; one that is refused stays inside its batch. |
 | `ingest.max_session_mb` | 50 | The recording is marked `truncated` and the recorder is told to stop. |
 | `ingest.max_asset_kb` | 1536 | The limit on a stylesheet as sent (compressed); it may inflate to eight times this. A larger one is refused and stays missing in the replay. |
+| the index next to a batch (`meta`) | 256 KB | The markers, counts and hashes the browser sends next to the events; larger is refused (422), and it counts toward `daily_mb` like the events. At most 200 markers per batch are stored, and 5,000 per recording: past that the counters (errors, rage clicks, vitals) still see every marker, the rows are not written. |
 | `ingest.requests_per_minute` | 240 | Uploads per minute, per signed-in person, or per rendered page for guests (a value in the signed token). Never per IP address. The recorder backs off on a 429. `null` turns it off. |
 
 **PHP's upload limit.** Both defaults stay under PHP's default `upload_max_filesize` of `2M`; a file above PHP's limit never reaches the package. Typical batches are tens of kilobytes and a typical stylesheet compresses to well under 100 KB. If your `upload_max_filesize` or `post_max_size` is lower than 2M, lower both keys to match; to raise them, raise PHP's limits first.
@@ -184,7 +187,7 @@ php artisan session-replay:prune            # retention.days (default 30)
 php artisan session-replay:prune --days=7
 ```
 
-- Deletes recordings whose last activity is older than the window, one by one, with their files.
+- Deletes recordings whose last activity is older than the window, one by one, with their files. A recording whose files could not be removed (the disk did not answer) keeps its row and is tried again on the next run, so nothing is left on the disk that the index no longer knows.
 - Keeps pinned recordings: `$session->forceFill(['pinned' => true])->save()`.
 - Deletes stylesheets that were last referenced before the window and that no recording that is left points at, so a pinned recording keeps its styling for as long as it stays, without keeping every other stylesheet of its day. Recordings made before the references were stored (1.0.0-beta.5 and earlier) point at nothing: while a pinned one of those is left, stylesheets last seen since it started stay too.
 - Deletes shared snapshots no recording that is left points at, a day after they were last sent. Sending one again moves that date once it is an hour old, so the batch that points at it always has at least 23 hours to arrive.
