@@ -191,7 +191,9 @@ The recorder detects Livewire in the browser; the package itself does not depend
 
 ## Content Security Policy
 
-Both script tags carry a nonce when one is available: the `nonce` option, or `Vite::cspNonce()` automatically when your app calls `Vite::useCspNonce()`. The scripts are served from your own origin, so `script-src 'self'` covers them too. Uploads go to your own origin (`connect-src 'self'`).
+Recording fits a strict policy. Both tags the directive renders carry a nonce when one is available: the `nonce` option, or `Vite::cspNonce()` automatically when your app calls `Vite::useCspNonce()`. The recorder is served from your own origin (`script-src 'self'` covers it too), uploads go to your own origin (`connect-src 'self'`), and the recorder starts no worker and evaluates no code. The `<style>` of the `on_error.ask` dialog, the toast and the notice carries the same nonce, read from the recorder's own tag, so a `style-src` that names it lets them through.
+
+Watching is the other side: the player rebuilds the recorded page from the `<style>` elements and `style` attributes it recorded, which no nonce can cover, so the page a replay is watched on needs `'unsafe-inline'` in its `style-src`. See [Watching](watching.md#content-security-policy).
 
 ## Known limits
 

@@ -4,6 +4,10 @@ All notable changes to `packstub/session-replay` are documented here.
 
 ## Unreleased
 
+### Fixed
+
+- **The `on_error.ask` dialog, the toast and the notice under a strict `style-src`.** Their `<style>` now carries the page's CSP nonce, read from the recorder's own tag, and the built-in viewer's stylesheet carries `Vite::cspNonce()` too. Before, a `style-src` that named a nonce showed the question unstyled at the bottom of the page and the viewer's pages in the browser's default font. Watching a replay still needs `'unsafe-inline'` in the `style-src` of the page the player is on, because rrweb rebuilds the recorded page from inline styles: [Recording](docs/recording.md#content-security-policy) and [Watching](docs/watching.md#content-security-policy) now say what a policy needs on each side, and `CSP=1 composer serve` runs the workbench under a strict one.
+
 ### Changed
 
 - **Docs.** The README opens with a banner and an animation of a replay: a rage click, the server error's details and "Open in logs". Docs sync to packstub.dev on every change to `docs/` (`docs-sync.yml`).

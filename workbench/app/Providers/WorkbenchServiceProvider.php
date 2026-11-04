@@ -7,12 +7,19 @@ use Illuminate\Support\ServiceProvider;
 use Packstub\SessionReplay\Facades\SessionReplay;
 use Packstub\SessionReplay\Models\ReplayMarker;
 use Packstub\SessionReplay\Tests\Fixtures\Models\User;
+use Workbench\App\Http\Middleware\Csp;
 
 /** A page to record and a viewer anyone may open: `composer serve`, click around, then visit /session-replay. */
 class WorkbenchServiceProvider extends ServiceProvider
 {
     public function boot(): void
     {
+        // CSP=1 composer serve: a strict policy with a nonce on script-src and style-src, to see what the recorder,
+        // the question and the player need (?csp=inline and ?csp=both on a page try the other style-src forms).
+        if (env('CSP')) {
+            $this->app['router']->pushMiddlewareToGroup('web', Csp::class);
+        }
+
         config()->set('auth.providers.users.model', User::class);
 
         // The second page looks the same on every visit: its snapshot is stored once, whoever records it.
