@@ -863,6 +863,11 @@ it('takes an upload for a recording only with the write key its browser made', f
     $this->ingest(['token' => $token, 'session' => $legacy->id, 'seq' => 3])->assertForbidden()->assertJson(['stop' => true]);
 
     expect($legacy->fresh()->chunk_count)->toBe(3);
+
+    // Active a moment ago, but started a day ago: whoever kept it active by appending to it is shut out.
+    $legacy->forceFill(['last_activity_at' => now(), 'started_at' => now()->subDay()->subMinute()])->save();
+
+    $this->ingest(['token' => $token, 'session' => $legacy->id, 'seq' => 3])->assertForbidden()->assertJson(['stop' => true]);
 });
 
 it('keeps a recording that names nobody for the browser that made it', function () {
@@ -894,6 +899,6 @@ it('lets no browser claim an error came from the server', function () {
         ['type' => 'error', 'label' => 'TypeError', 'payload' => ['source' => 'https://app.test/js/app.js', 'line' => 3], 'at' => $now],
     ]]])->assertCreated();
 
-    expect(ReplayMarker::query()->where('label', 'Server error: RuntimeException')->sole()->payload)->toBe(['exception' => 'RuntimeException', 'report' => 'x'])
+    expect(ReplayMarker::query()->where('label', 'Server error: RuntimeException')->sole()->payload)->toBe(['exception' => 'RuntimeException'])
         ->and(ReplayMarker::query()->where('label', 'TypeError')->sole()->payload)->toBe(['source' => 'https://app.test/js/app.js', 'line' => 3]);
 });

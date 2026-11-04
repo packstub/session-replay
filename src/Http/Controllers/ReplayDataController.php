@@ -25,7 +25,7 @@ class ReplayDataController
         $startedAt = $session->started_at?->getTimestampMs() ?? 0;
         // One URL built, then a number swapped in per chunk: a long recording has thousands of chunks, and the
         // rows come as plain objects with the four columns the player reads, not hydrated models.
-        $chunkUrl = SessionReplay::route('chunk', ['session' => $session->id, 'seq' => 999999]);
+        $chunkUrl = SessionReplay::route('chunk', ['session' => $session->id, 'seq' => '__seq__']);
 
         return response()->json([
             'id' => $session->id,
@@ -35,7 +35,7 @@ class ReplayDataController
             'truncated' => $session->truncated,
             'chunks' => $session->chunks()->toBase()->get(['seq', 'bytes', 'from_ms', 'to_ms'])->map(fn (object $chunk): array => [
                 'seq' => (int) $chunk->seq,
-                'url' => str_replace('999999', (string) $chunk->seq, $chunkUrl),
+                'url' => str_replace('__seq__', (string) $chunk->seq, $chunkUrl),
                 'bytes' => (int) $chunk->bytes,
                 'from' => (int) $chunk->from_ms,
                 'to' => (int) $chunk->to_ms,

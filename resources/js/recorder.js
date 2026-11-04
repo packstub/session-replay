@@ -87,6 +87,9 @@ let askError = null;
 let kept = new Set();
 // Bumped when a recording ends for a new one on the same page: stylesheet hashing still running belongs to the old one.
 let generation = 0;
+// Bumped by stop(): a batch queued before a stop is never sent after it, even once a recording started again
+// (restart() keeps the era: the batches of the recording it ends still go up).
+let era = 0;
 // start() was called on a page the app does not record (consent given there): it runs on the next page that is.
 let startOnNextPage = false;
 
@@ -734,8 +737,9 @@ async function prepare(batch) {
 }
 
 async function send(batch) {
-    // Stopped meanwhile (consent withdrawn, the server said stop): what was queued before stays here.
-    if (stopped) return false;
+    // Stopped meanwhile (consent withdrawn, the server said stop): what was queued before stays here, also when a
+    // recording started again in the meantime (the batch is of the generation that stopped).
+    if (stopped || batch.era !== era) return false;
 
     await prepare(batch);
 
@@ -870,6 +874,7 @@ function queue(batch) {
     if (queued >= MAX_QUEUED) return Promise.resolve(false);
 
     queued++;
+    batch.era = era;
 
     // Compressed now, while earlier batches are still going up.
     const ready = prepare(batch).catch(() => {});
@@ -1540,11 +1545,15 @@ function stop(remember = false) {
     }
 
     stopRecording = null;
+    era++;
     buffer = [];
     bufferedChars = 0;
     snapshots = 0;
     sinceSnapshotChars = 0;
     markers = [];
+    // The stylesheets waiting for the server to ask for them (hundreds of KB each) go with the recording.
+    pendingAssetText = new Map();
+    assetRetry = new Set();
     clearCookie();
 
     // Stopped for good (consent withdrawn, the server said so, the person declined): nothing stays in the browser,

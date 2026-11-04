@@ -189,9 +189,14 @@ class BatchIngester
 
             $payload = is_array($marker['payload'] ?? null) ? $marker['payload'] : null;
 
-            // "server" is what ServerErrors writes for an exception the app reported; a browser cannot claim it.
-            if ($payload !== null && $marker['type'] === 'error' && ($payload['source'] ?? null) === 'server') {
-                unset($payload['source']);
+            // "server" and the report id are what ServerErrors writes for an exception the app reported; a browser
+            // cannot claim either (the id is what "Open in logs" searches for).
+            if ($payload !== null && $marker['type'] === 'error') {
+                if (($payload['source'] ?? null) === 'server') {
+                    unset($payload['source']);
+                }
+
+                unset($payload['report']);
             }
 
             $payload = $payload === null ? null : json_encode($payload);
