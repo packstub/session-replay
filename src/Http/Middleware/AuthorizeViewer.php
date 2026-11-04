@@ -22,7 +22,12 @@ class AuthorizeViewer
         $session = $request->route('session');
 
         if (is_string($session)) {
-            $session = ReplaySession::query()->findOrFail($session);
+            // An id that is no recording answers like one the gate denies: the viewer of one workspace must not learn
+            // whether an id they came by is a recording of another.
+            $session = ReplaySession::query()->find($session);
+
+            abort_if($session === null, 403);
+
             $request->route()->setParameter('session', $session);
         }
 

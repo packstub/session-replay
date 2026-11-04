@@ -3,6 +3,7 @@
 use Illuminate\Support\Facades\Schema;
 use Illuminate\Support\Facades\Storage;
 use Packstub\SessionReplay\Models\ReplayAsset;
+use Packstub\SessionReplay\Models\ReplayAssetOwner;
 use Packstub\SessionReplay\Models\ReplayChunk;
 use Packstub\SessionReplay\Models\ReplayMarker;
 use Packstub\SessionReplay\Models\ReplaySession;
@@ -143,4 +144,34 @@ it('keeps a recording whose files the disk could not remove, so the next run tri
 
     expect(ReplaySession::query()->whereKey($old->id)->exists())->toBeTrue()
         ->and(ReplayChunk::query()->where('replay_session_id', $old->id)->exists())->toBeTrue();
+});
+
+it('forgets who sent an asset when the asset goes', function () {
+    $orphan = storedAsset('a{}', now()->subDays(60));
+    $kept = storedAsset('b{}', now()->subDays(60));
+
+    ReplayAssetOwner::own(ReplayAssetOwner::tenantKey('team', '1'), [$orphan->hash, $kept->hash]);
+    ReplayAssetOwner::own(ReplayAssetOwner::tenantKey(null, null), [$orphan->hash]);
+    $this->recording()->snapshotReferences()->create(['hash' => $kept->hash, 'created_at' => now()]);
+
+    $this->artisan('session-replay:prune')->assertSuccessful();
+
+    expect(ReplayAsset::query()->pluck('hash')->all())->toBe([$kept->hash])
+        ->and(ReplayAssetOwner::query()->pluck('hash')->all())->toBe([$kept->hash]);
+});
+
+it('has the write key column on a fresh install, and adds it to an install from before it only once', function () {
+    $migration = require __DIR__.'/../../database/migrations/2026_10_26_000001_add_write_key_to_replay_sessions_table.php';
+
+    expect(Schema::hasColumn('replay_sessions', 'write_key'))->toBeTrue();
+
+    $migration->up();
+
+    Schema::table('replay_sessions', fn ($table) => $table->dropColumn('write_key'));
+
+    expect(Schema::hasColumn('replay_sessions', 'write_key'))->toBeFalse();
+
+    $migration->up();
+
+    expect(Schema::hasColumn('replay_sessions', 'write_key'))->toBeTrue();
 });

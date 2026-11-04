@@ -14,6 +14,7 @@ use Packstub\SessionReplay\Events\ReplayReported;
 use Packstub\SessionReplay\Events\ReplaySessionStarted;
 use Packstub\SessionReplay\Facades\SessionReplay;
 use Packstub\SessionReplay\Models\ReplayAsset;
+use Packstub\SessionReplay\Models\ReplayAssetOwner;
 use Packstub\SessionReplay\Models\ReplayChunk;
 use Packstub\SessionReplay\Models\ReplayMarker;
 use Packstub\SessionReplay\Models\ReplaySession;
@@ -45,12 +46,12 @@ class BatchIngester
      * @param  array<string, mixed>  $meta
      * @return array{session: ReplaySession, created: bool, duplicate: bool, foreign: bool, missing_assets: array<int, string>}
      */
-    public function ingest(string $sessionId, int $seq, string $gzip, array $meta, ContextToken $context, ?string $userAgent, ?ReplaySession $found = null): array
+    public function ingest(string $sessionId, int $seq, string $gzip, array $meta, ContextToken $context, ?string $userAgent, ?string $writeKey = null, ?ReplaySession $found = null): array
     {
-        [$session, $created] = $this->session($sessionId, $meta, $context, $userAgent, $found);
+        [$session, $created] = $this->session($sessionId, $meta, $context, $userAgent, $writeKey, $found);
 
         // Another first batch of this id made the row a moment ago, after the controller looked: check it the same way.
-        if (! $created && ! ($context->sameUserAs($session->user_type, $session->user_id) && $context->sameImpersonatorAs($session->impersonator_id, $session->impersonator_type) && $context->sameTenantAs($session->tenant_type, $session->tenant_id))) {
+        if (! $created && ! ($session->acceptsWriteKey($writeKey) && $context->sameUserAs($session->user_type, $session->user_id) && $context->sameImpersonatorAs($session->impersonator_id, $session->impersonator_type) && $context->sameTenantAs($session->tenant_type, $session->tenant_id))) {
             return ['session' => $session, 'created' => false, 'duplicate' => false, 'foreign' => true, 'missing_assets' => []];
         }
 
@@ -65,13 +66,18 @@ class BatchIngester
         $events = $this->clamp(Arr::get($meta, 'events'), self::MAX_INTEGER);
         $markers = $this->markers($sessionId, (array) Arr::get($meta, 'markers', []));
         $stylesheets = $this->hashes((array) Arr::get($meta, 'assets', []), 100);
-        // Only stylesheets count as known: whether a shared snapshot exists is never told to a browser.
-        $knownStylesheets = $stylesheets === [] ? [] : ReplayAsset::query()->whereIn('hash', $stylesheets)->where('kind', ReplayAsset::STYLESHEET)->pluck('hash')->all();
+        // A recording points only at what its workspace sent itself (ReplayAssetOwner): a hash learned elsewhere, of
+        // another workspace's theme or page, opens nothing. The rest is asked for, stored or not, and the upload that
+        // answers names the recording and verifies the content; only then does the recording point at it.
+        $tenantKey = ReplayAssetOwner::tenantKey($session->tenant_type, $session->tenant_id);
+        // Only stylesheets count: a shared snapshot the workspace sent is asked for as a stylesheet all the same, so
+        // its bytes become one (the kind), and whether another workspace stored anything is never told to a browser.
+        $ownedStylesheets = $stylesheets === [] ? [] : ReplayAsset::query()->whereIn('hash', ReplayAssetOwner::ownedBy($tenantKey, $stylesheets))->where('kind', ReplayAsset::STYLESHEET)->pluck('hash')->all();
 
         // The chunk row, its markers, the counters and the snapshot references land together or not at all, so a
         // retry after a failure stores the batch again instead of finding a chunk row and answering "duplicate".
         try {
-            $first = $this->connection()->transaction(function () use ($session, $sessionId, $seq, $meta, $bytes, $from, $to, $events, $markers, $stylesheets): bool {
+            $first = $this->connection()->transaction(function () use ($session, $sessionId, $seq, $meta, $bytes, $from, $to, $events, $markers, $ownedStylesheets, $tenantKey): bool {
                 // The row exists by now, so locking it is safe on every database. It also orders two batches of one
                 // recording stored at once: exactly one of them finds no chunk yet.
                 $stored = (int) ReplaySession::query()->whereKey($sessionId)->lockForUpdate()->value('chunk_count');
@@ -97,11 +103,8 @@ class BatchIngester
                 }
 
                 $this->updateCounters($session, $meta, $bytes, $events, $markers);
-                $this->referenceSnapshots($sessionId, (array) Arr::get($meta, 'snapshots', []));
-                // Every stylesheet the batch points at, stored or still to come: the browser uploads a missing one
-                // right after this answer, without naming the recording, and the first recording of a new CSS build
-                // would otherwise point at nothing and lose it to prune while pinned.
-                $this->reference($sessionId, $stylesheets);
+                $this->referenceSnapshots($sessionId, $tenantKey, (array) Arr::get($meta, 'snapshots', []));
+                $this->reference($sessionId, $ownedStylesheets);
 
                 return $stored === 0;
             });
@@ -126,7 +129,7 @@ class BatchIngester
             'created' => $created,
             'duplicate' => false,
             'foreign' => false,
-            'missing_assets' => $this->missingAssets($stylesheets, $knownStylesheets),
+            'missing_assets' => $this->missingAssets($stylesheets, $ownedStylesheets),
         ];
     }
 
@@ -139,7 +142,7 @@ class BatchIngester
      * @param  array<string, mixed>  $meta
      * @return array{0: ReplaySession, 1: bool}
      */
-    protected function session(string $sessionId, array $meta, ContextToken $context, ?string $userAgent, ?ReplaySession $found = null): array
+    protected function session(string $sessionId, array $meta, ContextToken $context, ?string $userAgent, ?string $writeKey, ?ReplaySession $found = null): array
     {
         /** @var ReplaySession|null $session */
         $session = $found ?? ReplaySession::query()->find($sessionId);
@@ -155,6 +158,9 @@ class BatchIngester
             'tenant_id' => $context->tenantId,
             'impersonator_type' => $context->impersonatorType,
             'impersonator_id' => $context->impersonatorId,
+            // The browser made the key with the id and sends it with every upload; a recorder from before write keys
+            // sends none, and its recording is open to any upload its identity allows, as before.
+            'write_key' => $writeKey === null ? null : hash('sha256', $writeKey),
             'properties' => $context->properties ?: null,
             'entry_url' => Str::limit((string) Arr::get($meta, 'url', ''), 2000, '') ?: null,
             'user_agent' => $userAgent === null || ! config('session-replay.privacy.store_user_agent', true) ? null : Str::limit($userAgent, 500, ''),
@@ -181,7 +187,14 @@ class BatchIngester
                 continue;
             }
 
-            $payload = is_array($marker['payload'] ?? null) ? json_encode($marker['payload']) : null;
+            $payload = is_array($marker['payload'] ?? null) ? $marker['payload'] : null;
+
+            // "server" is what ServerErrors writes for an exception the app reported; a browser cannot claim it.
+            if ($payload !== null && $marker['type'] === 'error' && ($payload['source'] ?? null) === 'server') {
+                unset($payload['source']);
+            }
+
+            $payload = $payload === null ? null : json_encode($payload);
 
             $rows[] = [
                 'replay_session_id' => $sessionId,
@@ -319,32 +332,34 @@ class BatchIngester
     }
 
     /**
-     * Of the stylesheet hashes this batch references, the ones not stored yet;
-     * the ones that are get their last-seen date moved (at most once a day),
+     * Of the stylesheet hashes this batch references, the ones the recording's
+     * workspace has not sent yet (stored by another workspace or not at all);
+     * the ones it has get their last-seen date moved (at most once a day),
      * which is what keeps a stylesheet from being pruned while recordings
      * from before the references were stored may still need it.
      *
      * @param  array<int, string>  $hashes
-     * @param  array<int, string>  $known
+     * @param  array<int, string>  $owned
      * @return array<int, string>
      */
-    protected function missingAssets(array $hashes, array $known): array
+    protected function missingAssets(array $hashes, array $owned): array
     {
-        if ($known !== []) {
-            ReplayAsset::query()->whereIn('hash', $known)->where(fn ($query) => $query->whereNull('last_seen_at')->orWhere('last_seen_at', '<', now()->subDay()))->update(['last_seen_at' => now()]);
+        if ($owned !== []) {
+            ReplayAsset::query()->whereIn('hash', $owned)->where(fn ($query) => $query->whereNull('last_seen_at')->orWhere('last_seen_at', '<', now()->subDay()))->update(['last_seen_at' => now()]);
         }
 
-        return array_values(array_diff($hashes, $known));
+        return array_values(array_diff($hashes, $owned));
     }
 
     /**
-     * Remember which shared snapshots the recording points at, the ones that
-     * are stored; the viewer serves only those, and prune keeps them. Nothing
-     * of this goes back to the browser.
+     * Remember which shared snapshots the recording points at, of the ones its
+     * workspace sent itself (the snapshot upload, content verified); the viewer
+     * serves only those, and prune keeps them. Nothing of this goes back to
+     * the browser.
      *
      * @param  array<int, mixed>  $hashes
      */
-    protected function referenceSnapshots(string $sessionId, array $hashes): void
+    protected function referenceSnapshots(string $sessionId, string $tenantKey, array $hashes): void
     {
         $hashes = $this->hashes($hashes, 20);
 
@@ -352,18 +367,17 @@ class BatchIngester
             return;
         }
 
-        $this->reference($sessionId, ReplayAsset::query()->whereIn('hash', $hashes)->pluck('hash')->all());
+        $this->reference($sessionId, ReplayAssetOwner::ownedBy($tenantKey, $hashes));
     }
 
     /**
-     * The recording points at these assets (stylesheets, stored or about to
-     * be uploaded, and stored shared snapshots): prune keeps an asset while a
-     * recording that is left references it, a pinned one years on included,
-     * and a reference to a hash that never arrives keeps nothing.
+     * The recording points at these assets (stylesheets and shared snapshots
+     * its workspace sent): prune keeps an asset while a recording that is
+     * left references it, a pinned one years on included.
      *
      * @param  array<int, string>  $hashes
      */
-    protected function reference(string $sessionId, array $hashes): void
+    public function reference(string $sessionId, array $hashes): void
     {
         if ($hashes === []) {
             return;

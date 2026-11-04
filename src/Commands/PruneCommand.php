@@ -6,6 +6,7 @@ use Illuminate\Console\Command;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Support\Carbon;
 use Packstub\SessionReplay\Models\ReplayAsset;
+use Packstub\SessionReplay\Models\ReplayAssetOwner;
 use Packstub\SessionReplay\Models\ReplaySession;
 use Packstub\SessionReplay\Models\ReplaySessionAsset;
 use Packstub\SessionReplay\Support\ReplayStorage;
@@ -87,6 +88,9 @@ class PruneCommand extends Command
                         $deleted++;
                     }
                 }
+
+                // Who sent them goes with them: a workspace that meets the content again uploads it and owns it anew.
+                ReplayAssetOwner::query()->whereIn('hash', $batch->pluck('hash'))->delete();
             });
 
         return $deleted;

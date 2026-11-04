@@ -197,15 +197,20 @@ class SessionReplayServiceProvider extends PackageServiceProvider
             });
 
             Route::middleware([...$this->viewerMiddleware(), AuthorizeViewer::class])->group(function () use ($uuid): void {
+                // An id that is no recording answers 403, like one the gate denies (see AuthorizeViewer, which does the same
+                // when the binding has not run yet): a viewer of one workspace must not learn whether an id they came by
+                // is a recording of another.
+                $missing = fn () => abort(403);
+
                 // The data routes stay when the pages are turned off: the player component needs them.
-                Route::get('{session}/manifest', [ReplayDataController::class, 'manifest'])->where('session', $uuid)->name('manifest');
-                Route::get('{session}/chunks/{seq}', [ReplayDataController::class, 'chunk'])->where('session', $uuid)->whereNumber('seq')->name('chunk');
-                Route::get('{session}/assets/{hash}', [ReplayDataController::class, 'asset'])->where('session', $uuid)->where('hash', '[a-f0-9]{64}|__hash__')->name('asset');
-                Route::get('{session}/snapshots/{hash}', [ReplayDataController::class, 'snapshot'])->where('session', $uuid)->where('hash', '[a-f0-9]{64}|__hash__')->name('snapshot');
+                Route::get('{session}/manifest', [ReplayDataController::class, 'manifest'])->where('session', $uuid)->missing($missing)->name('manifest');
+                Route::get('{session}/chunks/{seq}', [ReplayDataController::class, 'chunk'])->where('session', $uuid)->whereNumber('seq')->missing($missing)->name('chunk');
+                Route::get('{session}/assets/{hash}', [ReplayDataController::class, 'asset'])->where('session', $uuid)->where('hash', '[a-f0-9]{64}|__hash__')->missing($missing)->name('asset');
+                Route::get('{session}/snapshots/{hash}', [ReplayDataController::class, 'snapshot'])->where('session', $uuid)->where('hash', '[a-f0-9]{64}|__hash__')->missing($missing)->name('snapshot');
 
                 if (config('session-replay.viewer.enabled', true)) {
                     Route::get('/', [ViewerController::class, 'index'])->name('index');
-                    Route::get('{session}', [ViewerController::class, 'show'])->where('session', $uuid)->name('show');
+                    Route::get('{session}', [ViewerController::class, 'show'])->where('session', $uuid)->missing($missing)->name('show');
                 }
             });
         });

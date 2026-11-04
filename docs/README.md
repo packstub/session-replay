@@ -13,7 +13,7 @@ In a Filament panel, [Filament Session Replay](https://github.com/packstub/filam
 
 - **[One Blade directive](recording.md#the-directive)**: `@sessionReplay` before `</body>` records the page, with nothing to build or publish.
 - **[Private by default](privacy.md)**: every input masked, no IP address stored, consent and an anonymous mode when you need them.
-- **[Recordings stay with you](storage.md)**: gzip chunks on any filesystem disk (local, S3, R2), the index in five tables on your connection.
+- **[Recordings stay with you](storage.md)**: gzip chunks on any filesystem disk (local, S3, R2), the index in six tables on your connection.
 - **[Markers on the timeline](recording.md#markers)**: errors, failed Livewire requests, web vitals, rage clicks, page views and your own moments.
 - **[Only when something goes wrong](recording.md#recording-only-when-something-goes-wrong)**: keep the last minute in the browser and upload it on an error, after asking if you like.
 - **[Small recordings](storage.md#sizes)**: stylesheets stored once, unused attributes dropped, batches gzipped in the browser.

@@ -2,19 +2,20 @@
 
 All notable changes to `packstub/session-replay` are documented here.
 
-## Unreleased
+## 1.1.0 — 2026-11-04
 
-Memory and load, after a report of a panel tab that grew all day. Run `php artisan migrate`: two indexes for the lists at scale.
+A security release, with the memory fixes for a panel tab that grew all day. Run `php artisan migrate`: a table, a column and two indexes.
 
-- A tab that navigates with `wire:navigate` no longer keeps a page snapshot per page change (rrweb 2.2.0): after a minute of navigating the heap is the same with the recorder as without it.
-- Batches waiting behind a slow server, or for a retry, wait compressed, and nothing queued before `stop()` or a withdrawn consent is sent after it.
-- Recording a long table costs less: the mask selector no longer walks every element's ancestors (the default is `[data-replay-mask], [contenteditable]` now), big mutations and page snapshots are sized without being stringified, and the `on_error` window on a 500-row page holds what `max_buffer_mb` says. See [Recording](docs/recording.md#recording-only-when-something-goes-wrong).
-- The server checks a gzip batch without holding what it inflates, bounds the index next to the events (256 KB, metered like the events) and stores at most 5,000 markers per recording. See [Limits](docs/storage.md#limits).
-- A recording whose files the disk could not remove keeps its row and is pruned again next time, instead of leaving its files behind.
-- **Fixed:** the `on_error.ask` dialog, the toast and the notice carry the page's CSP nonce (read from the recorder's own tag), and so does the built-in viewer's stylesheet; a `style-src` that names a nonce no longer leaves them unstyled. Watching a replay still needs `'unsafe-inline'` in the `style-src` of the page the player is on, as rrweb rebuilds the recorded page from inline styles: [Recording](docs/recording.md#content-security-policy) and [Watching](docs/watching.md#content-security-policy) say what a policy needs on each side, and `CSP=1 composer serve` runs the workbench under a strict one
-- The README opens with a banner and an animation of a replay; the docs sync to packstub.dev on every change
-- A demo app, [packstub/session-replay-demo](https://github.com/packstub/session-replay-demo): a small Laravel shop with real recordings to watch
-- Jumping to a marker on another page no longer flashes that page unstyled in Chrome: the player waits for its styles (at most 0.4 s)
+**Security:** reported privately on 2026-10-26, from reading the source. A viewer of one workspace's recording could read a stylesheet or a shared page snapshot stored for another workspace, given its hash, and a recording that names nobody could be appended to by anyone holding its id. Recordings from before 1.0.0-beta.5 replay without their stylesheets. Details in [Storage](docs/storage.md#the-tables) and [Error tracking](docs/error-tracking.md#how-it-works).
+
+- A stylesheet or a shared snapshot is served only to a recording whose own workspace uploaded it: the new `replay_asset_owners` table says who proved the content, storage stays once per hash
+- Every recording gets a write key, made by its browser and sent with every upload and in the log-context cookie; a recording from before write keys closes to uploads twice `idle_minutes` after its last activity
+- An id that is no recording answers 403 like one the gate denies, and a browser cannot mark an error as the server's
+- A tab that navigates with `wire:navigate` no longer keeps a page snapshot per page change (rrweb 2.2.0); batches waiting for a slow server or a retry wait compressed
+- Recording a long table costs less: the mask selector no longer walks every element's ancestors (default `[data-replay-mask], [contenteditable]`), big mutations are sized without being stringified, and the `on_error` window holds what `max_buffer_mb` says. See [Recording](docs/recording.md#recording-only-when-something-goes-wrong)
+- The server checks a gzip batch without holding what it inflates, bounds the index next to the events and stores at most 5,000 markers per recording ([Limits](docs/storage.md#limits)); a recording whose files the disk could not remove is pruned again next time
+- **Fixed:** the `on_error.ask` dialog, the toast and the built-in viewer's stylesheet carry the page's CSP nonce; what a policy needs on each side is in [Recording](docs/recording.md#content-security-policy) and [Watching](docs/watching.md#content-security-policy)
+- The README opens with a banner and an animation of a replay, the docs sync to packstub.dev on every change, and a demo app, [packstub/session-replay-demo](https://github.com/packstub/session-replay-demo), shows the package in a small shop
 
 ## 1.0.0 — 2026-10-22
 
