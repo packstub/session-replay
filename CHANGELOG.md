@@ -14,6 +14,7 @@ Memory and load, after a report of a panel tab that grew all day. Run `php artis
 - **Fixed:** the `on_error.ask` dialog, the toast and the notice carry the page's CSP nonce (read from the recorder's own tag), and so does the built-in viewer's stylesheet; a `style-src` that names a nonce no longer leaves them unstyled. Watching a replay still needs `'unsafe-inline'` in the `style-src` of the page the player is on, as rrweb rebuilds the recorded page from inline styles: [Recording](docs/recording.md#content-security-policy) and [Watching](docs/watching.md#content-security-policy) say what a policy needs on each side, and `CSP=1 composer serve` runs the workbench under a strict one
 - The README opens with a banner and an animation of a replay; the docs sync to packstub.dev on every change
 - A demo app, [packstub/session-replay-demo](https://github.com/packstub/session-replay-demo): a small Laravel shop with real recordings to watch
+- Jumping to a marker on another page no longer flashes that page unstyled in Chrome: the player waits for its styles (at most 0.4 s)
 
 ## 1.0.0 — 2026-10-22
 

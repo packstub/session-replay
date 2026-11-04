@@ -239,6 +239,60 @@ function markerList(manifest, startedAt, seek, text) {
 // wire:navigate swapped it out.
 const mounted = new Map();
 
+/**
+ * A seek to another page rebuilds the replayed document from its snapshot, and Chrome can paint that new
+ * document for a few frames before its stylesheets apply, though they are already in it: the page flashes
+ * unstyled, icons at full size. The frame stays hidden from the rebuild until an inline SVG in it has its
+ * styled size (the giveaway: an unstyled icon fills the page), at most COVER_MS. Returns what stops it.
+ */
+const COVER_MS = 400;
+
+function coverRebuilds(player) {
+    const replayer = player.getReplayer?.();
+
+    if (!replayer?.on || !replayer.iframe) return null;
+
+    let pending = 0;
+
+    const cover = () => {
+        const frame = replayer.iframe;
+        const doc = frame.contentDocument;
+        const until = performance.now() + COVER_MS;
+
+        cancelAnimationFrame(pending);
+        frame.style.visibility = 'hidden';
+
+        const styled = () => {
+            const view = doc?.defaultView;
+            const icons = doc?.querySelectorAll('svg') ?? [];
+
+            if (!view || !icons.length) return true;
+
+            // An unstyled inline SVG with no width attribute is 300px wide or as wide as its container.
+            return [...icons].slice(0, 20).every((icon) => icon.hasAttribute('width') || icon.getBoundingClientRect().width < 200);
+        };
+
+        const check = () => {
+            if (styled() || performance.now() > until) {
+                pending = requestAnimationFrame(() => (frame.style.visibility = ''));
+
+                return;
+            }
+
+            pending = requestAnimationFrame(check);
+        };
+
+        pending = requestAnimationFrame(check);
+    };
+
+    replayer.on('fullsnapshot-rebuilded', cover);
+
+    return () => {
+        cancelAnimationFrame(pending);
+        replayer.off?.('fullsnapshot-rebuilded', cover);
+    };
+}
+
 // How long (replay time) a stretch of the mouse trail stays, and how thick it is in recorded pixels.
 const TRAIL_MS = 1500;
 const TRAIL_WIDTH = 5;
@@ -524,6 +578,10 @@ async function mount(root, options = {}) {
 
     frame?.contentDocument?.open();
     frame?.contentDocument?.close();
+
+    const stopCover = coverRebuilds(player);
+
+    if (stopCover) state.stops.push(stopCover);
 
     gapBands(player, stage, manifest, startedAt, text);
 
