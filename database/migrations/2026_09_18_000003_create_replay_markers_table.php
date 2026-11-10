@@ -28,6 +28,7 @@ return new class extends Migration
             $table->timestamp('created_at')->nullable();
 
             $table->index(['replay_session_id', 'at_ms']);
+            $table->index(['replay_session_id', 'type']); // "reported" (a report marker exists) per row of a list, without reading every marker of the recording
             $table->index(['type', 'created_at']);
         });
     }

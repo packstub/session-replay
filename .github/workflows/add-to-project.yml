@@ -1,0 +1,23 @@
+name: Add to Plugins board
+
+# New issues and pull requests land on the Plugins project (github.com/orgs/packstub/projects/1).
+# PROJECTS_TOKEN is a fine-grained personal access token with read and write on Projects, set per repo (resource owner packstub, org permission Projects).
+
+on:
+  issues:
+    types: [opened, reopened]
+  # Fork PRs get no secrets on pull_request. Safe only because this job never checks out or runs the PR's code: keep it so.
+  pull_request_target:
+    types: [opened, reopened]
+
+permissions: {}
+
+jobs:
+  add:
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - uses: actions/add-to-project@5afcf98fcd03f1c2f92c3c83f58ae24323cc57fd # v2.0.0
+        with:
+          project-url: https://github.com/orgs/packstub/projects/1
+          github-token: ${{ secrets.PROJECTS_TOKEN }}

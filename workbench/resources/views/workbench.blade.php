@@ -3,7 +3,8 @@
 <head>
     <meta charset="utf-8">
     <title>Session Replay workbench</title>
-    <style>
+    {{-- The nonce is set with CSP=1 composer serve (a strict policy, see Workbench\App\Http\Middleware\Csp); empty otherwise. --}}
+    <style nonce="{{ \Illuminate\Support\Facades\Vite::cspNonce() }}">
         {{-- Enough real rules for the stylesheet to be stored once by hash instead of inside every snapshot. --}}
         @for ($i = 0; $i < 300; $i++) .u-{{ $i }} { margin: {{ $i }}px; padding: {{ $i % 7 }}px; color: hsl({{ $i }} 60% 40%); } @endfor
         body { font: 16px/1.5 system-ui; max-width: 40rem; margin: 3rem auto; padding: 0 1rem; }
@@ -22,13 +23,27 @@
         <p data-replay-block>This whole box is blocked.</p>
     </div>
 
-    <button id="error" onclick="setTimeout(() => { throw new Error('Workbench exploded') })">Throw an error</button>
-    <button id="log" onclick="console.error('Something logged', { code: 7 })">console.error</button>
-    <button id="boom" onclick="fetch('/boom')">Server error</button>
-    <button id="mark" onclick="SessionReplay.mark('Checkout started', { cart: 3 })">Custom marker</button>
-    <button id="report" onclick="SessionReplay.send('Reported from the workbench').then((sent) => console.log('sent', sent))">Report a problem</button>
-    <button id="add" onclick="document.getElementById('list').insertAdjacentHTML('beforeend', '<li wire:key=x>Item ' + Date.now() + '</li>')">Add a row</button>
+    <button id="error">Throw an error</button>
+    <button id="log">console.error</button>
+    <button id="boom">Server error</button>
+    <button id="mark">Custom marker</button>
+    <button id="report">Report a problem</button>
+    <button id="add">Add a row</button>
     <ul id="list"></ul>
+
+    {{-- Listeners instead of onclick attributes: a strict script-src allows no inline handlers, nonce or not. --}}
+    <script nonce="{{ \Illuminate\Support\Facades\Vite::cspNonce() }}">
+        const actions = {
+            error: () => setTimeout(() => { throw new Error('Workbench exploded') }),
+            log: () => console.error('Something logged', { code: 7 }),
+            boom: () => fetch('/boom'),
+            mark: () => SessionReplay.mark('Checkout started', { cart: 3 }),
+            report: () => SessionReplay.send('Reported from the workbench').then((sent) => console.log('sent', sent)),
+            add: () => document.getElementById('list').insertAdjacentHTML('beforeend', '<li wire:key=x>Item ' + Date.now() + '</li>'),
+        };
+
+        for (const [id, action] of Object.entries(actions)) document.getElementById(id).addEventListener('click', action);
+    </script>
 
     @sessionReplay
 </body>

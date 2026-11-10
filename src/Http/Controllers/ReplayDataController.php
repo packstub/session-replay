@@ -23,6 +23,9 @@ class ReplayDataController
     public function manifest(ReplaySession $session): JsonResponse
     {
         $startedAt = $session->started_at?->getTimestampMs() ?? 0;
+        // One URL built, then a number swapped in per chunk: a long recording has thousands of chunks, and the
+        // rows come as plain objects with the four columns the player reads, not hydrated models.
+        $chunkUrl = SessionReplay::route('chunk', ['session' => $session->id, 'seq' => '__seq__']);
 
         return response()->json([
             'id' => $session->id,
@@ -30,12 +33,12 @@ class ReplayDataController
             'durationMs' => $session->durationMs(),
             'live' => $session->isLive(),
             'truncated' => $session->truncated,
-            'chunks' => $session->chunks->map(fn ($chunk): array => [
-                'seq' => $chunk->seq,
-                'url' => SessionReplay::route('chunk', ['session' => $session->id, 'seq' => $chunk->seq]),
-                'bytes' => $chunk->bytes,
-                'from' => $chunk->from_ms,
-                'to' => $chunk->to_ms,
+            'chunks' => $session->chunks()->toBase()->get(['seq', 'bytes', 'from_ms', 'to_ms'])->map(fn (object $chunk): array => [
+                'seq' => (int) $chunk->seq,
+                'url' => str_replace('__seq__', (string) $chunk->seq, $chunkUrl),
+                'bytes' => (int) $chunk->bytes,
+                'from' => (int) $chunk->from_ms,
+                'to' => (int) $chunk->to_ms,
             ])->all(),
             'assetUrl' => SessionReplay::route('asset', ['session' => $session->id, 'hash' => '__hash__']),
             'snapshotUrl' => SessionReplay::route('snapshot', ['session' => $session->id, 'hash' => '__hash__']),

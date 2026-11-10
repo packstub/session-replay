@@ -33,7 +33,7 @@ npm run test:e2e            # Playwright: Assist between two Chromium browsers o
 ## Conventions
 
 - PHP 8.3+, Laravel 12 and 13. Every change needs a test and a `CHANGELOG.md` line.
-- Changelog headings are `## <version> — <date>`; the tag is `v<version>` on `main`.
+- Changelog headings are `## <version> — <date>`; the tag is `v<version>` on `main`. The section becomes the GitHub release and `release.yml` appends GitHub's list of merged pull requests under it, so keep it short and human: an optional lead sentence, then at most about six one-line bullets saying what a user gets, in plain words (class or method names only when a user needs the name, never lists of them). Always keep breaking changes with an `**Upgrading:**` line, security or privacy fixes, new minimum PHP/Laravel versions and migrations to run; leave out CI, tests and refactors.
 - Nothing here may import from `Filament\` or `Livewire\`; what needs a panel belongs in `packstub/filament-session-replay`. The recorder may *detect* Livewire in the browser.
 - Privacy defaults only ever get stricter inside a major. Every privacy control stays in this free package.
 - Strings live in `resources/lang/{en,de,es,ro,ru}/viewer.php` and `player.php` (`session-replay::viewer.*`); the player gets its strings from the Blade component as `data-labels`. A new string goes into all five languages; `ViewerTest` compares the key sets.

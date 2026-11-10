@@ -115,6 +115,16 @@ A middleware list that names a guard itself (`auth:staff`) is left as it is.
 
 The viewer's own pages are never recorded.
 
+### Content Security Policy
+
+The player rebuilds the recorded page inside an iframe from the `<style>` elements and `style` attributes rrweb recorded, and lays out its own controls with `style` attributes too. A nonce covers none of that: a `style-src` that names a nonce blocks every inline style without one, and browsers ignore `'unsafe-inline'` once a nonce or a hash stands next to it. So the pages a replay is watched on, the built-in viewer and your own page with `<x-session-replay::player>`, need a `style-src` without a nonce and with `'unsafe-inline'`; under a nonce-only policy the player stays blank and the viewer's pages lose their styling:
+
+```
+style-src 'self' 'unsafe-inline'
+```
+
+With one policy for the whole app, that is the app's policy; with a policy per route group, give the package's routes (everything under `path`) their own. Everything else fits a strict policy: the player's script and stylesheet are served from your origin and carry `Vite::cspNonce()` (`@sessionReplayPlayerAssets` included), the viewer's own stylesheet carries it too, the manifest, chunks and stylesheets are fetched from your origin (`connect-src 'self'`), and the replay runs no script (the iframe is sandboxed without `allow-scripts`), so `script-src` stays as strict as the rest of the app.
+
 ## The player
 
 Markers sit on the timeline in their colour and in a list next to the player; a click jumps to one second before the moment.

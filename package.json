@@ -11,11 +11,11 @@
     "devDependencies": {
         "@packstub/calls": "github:packstub/calls-js",
         "@playwright/test": "^1.64.1",
-        "@rrweb/record": "^2.1.6",
-        "@rrweb/replay": "^2.1.6",
-        "@rrweb/rrweb-plugin-console-record": "^2.1.6",
+        "@rrweb/record": "^2.2.0",
+        "@rrweb/replay": "^2.2.0",
+        "@rrweb/rrweb-plugin-console-record": "^2.2.0",
         "esbuild": "^0.28.2",
-        "rrweb-player": "^2.1.6",
+        "rrweb-player": "^2.2.0",
         "web-vitals": "^6.2.2"
     }
 }

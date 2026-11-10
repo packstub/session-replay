@@ -3,6 +3,7 @@
 use Illuminate\Support\Arr;
 use Illuminate\Support\Facades\Blade;
 use Illuminate\Support\Facades\Gate;
+use Illuminate\Support\Facades\Vite;
 use Illuminate\Support\Str;
 use Packstub\SessionReplay\Facades\SessionReplay;
 use Packstub\SessionReplay\Models\ReplayMarker;
@@ -358,6 +359,18 @@ it('serves a stylesheet only to a recording that points at it; the hash alone op
 
     $this->get(route('session-replay.asset', [$session, hash('sha256', $css)]))->assertOk();
     $this->get(route('session-replay.asset', [$session, hash('sha256', $other)]))->assertNotFound();
+});
+
+it('gives the viewer stylesheet the CSP nonce when the app uses one', function () {
+    Gate::define('viewSessionReplay', fn ($user) => true);
+    $this->actingAs($this->user());
+
+    expect($this->get(route('session-replay.index'))->assertOk()->getContent())->toContain('<style>');
+
+    Vite::useCspNonce('abc123');
+
+    expect($this->get(route('session-replay.index'))->assertOk()->getContent())->toContain('<style nonce="abc123">')
+        ->and($this->get(route('session-replay.show', $this->recording()))->assertOk()->getContent())->toContain('<style nonce="abc123">');
 });
 
 it('answers an id that is no recording like one the gate denies', function () {

@@ -59,10 +59,9 @@ class ReplaySession extends ReplayModel
 
     protected static function booted(): void
     {
-        // The rows go with the foreign keys; the files have to be removed by hand.
-        static::deleting(function (self $session): void {
-            app(ReplayStorage::class)->deleteSession($session->id);
-        });
+        // The rows go with the foreign keys; the files have to be removed by hand. Files that could not be removed
+        // keep the row (the delete is cancelled), or nothing would find them again.
+        static::deleting(fn (self $session): bool => app(ReplayStorage::class)->deleteSession($session->id));
     }
 
     public function user(): MorphTo
@@ -109,10 +108,15 @@ class ReplaySession extends ReplayModel
      * A recording without a write key is still being made, as far as its browser is concerned: the recorder starts a
      * new recording after idle_minutes without activity, so one idle twice that long (room for a slow browser clock
      * and a retried upload) is finished, and no longer open to anyone who holds a token for its person and its id.
+     * Every accepted upload moves the activity on, so a day after it started it closes whatever its activity:
+     * nobody can keep it open by appending to it.
      */
     public function openWithoutKey(): bool
     {
-        return $this->last_activity_at !== null && $this->last_activity_at->gt(now()->subMinutes(2 * SessionReplay::idleMinutes()));
+        return $this->last_activity_at !== null
+            && $this->last_activity_at->gt(now()->subMinutes(2 * SessionReplay::idleMinutes()))
+            && $this->started_at !== null
+            && $this->started_at->gt(now()->subDay());
     }
 
     /** The stylesheets and shared snapshots this recording points at (by hash); named when only snapshots were. */

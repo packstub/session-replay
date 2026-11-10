@@ -107,6 +107,8 @@ See [Privacy](docs/privacy.md) for masking, consent and wording for your privacy
 
 Assist's help-request queue works with this package alone. Its live view runs on [Calls for Laravel](https://github.com/packstub/calls) (`packstub/calls`), and in a Filament panel also on [Filament Calls](https://github.com/packstub/filament-calls); both are released separately, so see their READMEs for how to install them.
 
+Guide: [Session replay in Laravel and Filament, on your own server](https://packstub.dev/guides/laravel-session-replay-self-hosted), a walkthrough from the first recording to watching it behind your own gate, with measured storage sizes.
+
 ## In a Filament panel
 
 [packstub/filament-session-replay](https://github.com/packstub/filament-session-replay/tree/main/docs) puts the sessions inside a Filament v5 panel: a filterable resource, the player with timeline tabs, a relation manager for your users, masking declared on the form field. It requires this package and records through it.

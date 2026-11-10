@@ -1,9 +1,9 @@
 import { record } from '@rrweb/record';
 import { getRecordConsolePlugin } from '@rrweb/rrweb-plugin-console-record';
 import { onCLS, onINP, onLCP } from 'web-vitals';
-import { dropHiddenValues, inputMaskOptions, isUnmasked, maskTextAttributes, redactPluginUrls, redactUrl, redactUrlAttributes, redactUrls, textMasker } from './lib/privacy.js';
+import { dropHiddenValues, inputMaskOptions, isUnmasked, maskTextAttributes, redactPluginUrls, redactUrl, redactUrlAttributes, redactUrls, simplifyMaskSelector, textMasker } from './lib/privacy.js';
 import { EVENT_FULL_SNAPSHOT, assetPlaceholder, attributeMatcher, referencedAssets, renameVolatileIds, shareSnapshot, sharedSnapshots, skipNodes, stripAttributes, styleSlots } from './lib/process.js';
-import { ACTIVE_SOURCES, activeTime, checkoutInterval, estimateChars, estimateEventChars, isTrigger, trimWindow, windowStart } from './lib/buffer.js';
+import { ACTIVE_SOURCES, activeTime, charsSinceSnapshot, checkoutInterval, estimateChars, estimateEventChars, isTrigger, trimWindow, windowStart } from './lib/buffer.js';
 import { lastingPlugin, navigationPause } from './lib/navigation.js';
 import { hasHeader, observe, requestMarker } from './lib/requests.js';
 import { MAX_RETRIES, pendingFate, retryDelay } from './lib/pending.js';
@@ -61,12 +61,15 @@ const unshared = new WeakSet();
 let stopped = false;
 let buffer = [];
 let bufferedChars = 0;
+// Full snapshots in the buffer, and the estimated size of what followed the newest: over the memory ceiling a fresh
+// snapshot is worth taking when it lets the window drop an older one or a good share of events (see holdWindow).
+let snapshots = 0;
+let sinceSnapshotChars = 0;
 let markers = [];
 let assets = new Set();
 let pendingAssetText = new Map();
 // Stylesheets whose upload failed: tried again after the next batch, or the replay shows the page unstyled.
 let assetRetry = new Set();
-let hashCache = new Map();
 let pendingAsync = 0;
 let sending = Promise.resolve(false);
 let queued = 0;
@@ -85,6 +88,9 @@ let askError = null;
 let kept = new Set();
 // Bumped when a recording ends for a new one on the same page: stylesheet hashing still running belongs to the old one.
 let generation = 0;
+// Bumped by stop(): a batch queued before a stop is never sent after it, even once a recording started again
+// (restart() keeps the era: the batches of the recording it ends still go up).
+let era = 0;
 // start() was called on a page the app does not record (consent given there): it runs on the next page that is.
 let startOnNextPage = false;
 // rrweb ids of the elements carrying data-replay-skip on this page (see skipNodes).
@@ -271,19 +277,12 @@ function report(label, payload = {}) {
     return flush();
 }
 
+// Hashed every time: a cache keyed by the text kept up to 30 stylesheets (a panel's is hundreds of kB each) alive
+// for the whole page, to save a few ms of hashing off the main thread per snapshot.
 async function sha256(text) {
-    const cached = hashCache.get(text);
-
-    if (cached) return cached;
-
     const digest = await window.crypto.subtle.digest('SHA-256', new TextEncoder().encode(text));
-    const hash = [...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, '0')).join('');
 
-    if (hashCache.size > 30) hashCache.clear();
-
-    hashCache.set(text, hash);
-
-    return hash;
+    return [...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, '0')).join('');
 }
 
 /** Swap stylesheet text for its hash; the text is uploaded once, only if the server does not have it. */
@@ -301,8 +300,18 @@ async function dedupeStyles(event, slots) {
 }
 
 function push(event) {
+    // Estimated once: a large mutation is sized by walking what it adds.
+    const chars = estimateEventChars(event);
+
     buffer.push(event);
-    bufferedChars += estimateEventChars(event);
+    bufferedChars += chars;
+
+    if (event.type === EVENT_FULL_SNAPSHOT) {
+        snapshots++;
+        sinceSnapshotChars = 0;
+    } else {
+        sinceSnapshotChars += chars;
+    }
 
     if (session?.phase === 'buffering') {
         holdWindow(event);
@@ -332,8 +341,13 @@ function holdWindow(event) {
 
     if (bufferedChars >= maxWindowChars) overWindow = true;
 
+    // Over the ceiling a fresh snapshot lets the window drop what came before it: an older snapshot, or the events
+    // since the newest once they amount to half the ceiling. On a page whose snapshot alone is over the ceiling that
+    // keeps it to the snapshot and half a ceiling of events, never a snapshot per event.
+    const worth = snapshots > 1 || sinceSnapshotChars >= maxWindowChars / 2;
+
     // Incremental events only: the meta event of a snapshot still being hashed must not ask for another one.
-    if (event.type === EVENT_INCREMENTAL && (overWindow || (lastSnapshotAt && event.timestamp - lastSnapshotAt > checkoutMs && !asking))) checkout();
+    if (event.type === EVENT_INCREMENTAL && ((overWindow && worth) || (lastSnapshotAt && event.timestamp - lastSnapshotAt > checkoutMs && !asking))) checkout();
 }
 
 function checkout() {
@@ -362,6 +376,8 @@ function trimBuffer(cutoff) {
     buffer = kept.events;
     markers = kept.markers;
     bufferedChars = estimateChars(buffer);
+    snapshots = buffer.filter((event) => event.type === EVENT_FULL_SNAPSHOT).length;
+    sinceSnapshotChars = charsSinceSnapshot(buffer);
     activeMs = activeTime(buffer);
 
     // Stylesheets of dropped snapshots: forget their text, unless a snapshot still being hashed may need it.
@@ -587,6 +603,8 @@ function takeBatch() {
 
     buffer = [];
     bufferedChars = 0;
+    snapshots = 0;
+    sinceSnapshotChars = 0;
     markers = [];
     assets = new Set();
     activeMs = 0;
@@ -712,11 +730,33 @@ async function shareSnapshots(batch) {
     batch.meta.snapshots = sharedSnapshots(batch.events);
 }
 
-async function send(batch) {
-    // Before the gzip is made and cached: a retry or a batch kept from an earlier page keeps what it has.
-    if (config.snapshots && canHash && !batch.blob && batch.events.some((event) => event.type === EVENT_FULL_SNAPSHOT && !unshared.has(event))) await shareSnapshots(batch);
+/**
+ * What a batch needs before it goes up, done when it is queued rather than
+ * when its turn comes: the snapshots shared, the events gzipped and, once the
+ * gzip is small enough for one request, the events let go of. A batch that
+ * waits behind a slow server then holds a gzip (a tenth of the JSON), not the
+ * event objects (several times the JSON). Too big for one upload, the events
+ * stay for send() to split. A retry or a batch kept from an earlier page keeps
+ * what it has.
+ */
+async function prepare(batch) {
+    if (!batch.blob) {
+        if (config.snapshots && canHash && batch.events.some((event) => event.type === EVENT_FULL_SNAPSHOT && !unshared.has(event))) await shareSnapshots(batch);
 
-    const blob = batch.blob || (batch.blob = await gzip(JSON.stringify(batch.events)));
+        batch.blob = await gzip(JSON.stringify(batch.events));
+    }
+
+    if (batch.blob.size <= config.maxBatchBytes || batch.events.length <= 1) batch.events = [];
+}
+
+async function send(batch) {
+    // Stopped meanwhile (consent withdrawn, the server said stop): what was queued before stays here, also when a
+    // recording started again in the meantime (the batch is of the generation that stopped).
+    if (stopped || batch.era !== era) return false;
+
+    await prepare(batch);
+
+    const blob = batch.blob;
 
     if (blob.size > config.maxBatchBytes && batch.events.length > 1) {
         // Too big for one upload: split and send the halves in order.
@@ -850,7 +890,13 @@ function queue(batch) {
     if (queued >= MAX_QUEUED) return Promise.resolve(false);
 
     queued++;
+    batch.era = era;
+
+    // Compressed now, while earlier batches are still going up.
+    const ready = prepare(batch).catch(() => {});
+
     sending = sending
+        .then(() => ready)
         .then(() => send(batch))
         .catch(() => false)
         .finally(() => queued--);
@@ -1245,7 +1291,7 @@ function recordOptions() {
         // By tag, not rrweb's list of input types (see inputMaskOptions).
         maskAllInputs: false,
         maskInputOptions: inputMaskOptions(config.privacy.maskAllInputs),
-        maskTextSelector: config.privacy.maskAllText ? '*' : config.privacy.maskTextSelector || undefined,
+        maskTextSelector: config.privacy.maskAllText ? '*' : simplifyMaskSelector(config.privacy.maskTextSelector) || undefined,
         // mask_all_text with an unmask selector: rrweb hands every text it masks to this, with its element.
         maskTextFn: config.privacy.maskAllText && config.privacy.unmaskTextSelector ? textMasker(config.privacy.unmaskTextSelector, config.privacy.maskTextSelector) : undefined,
         blockSelector: config.privacy.blockSelector || undefined,
@@ -1481,6 +1527,8 @@ function restart(fresh) {
     generation++;
     buffer = [];
     bufferedChars = 0;
+    snapshots = 0;
+    sinceSnapshotChars = 0;
     markers = [];
     assets = new Set();
     activeMs = 0;
@@ -1527,9 +1575,15 @@ function stop(remember = false) {
     }
 
     stopRecording = null;
+    era++;
     buffer = [];
     bufferedChars = 0;
+    snapshots = 0;
+    sinceSnapshotChars = 0;
     markers = [];
+    // The stylesheets waiting for the server to ask for them (hundreds of KB each) go with the recording.
+    pendingAssetText = new Map();
+    assetRetry = new Set();
     clearCookie();
 
     // Stopped for good (consent withdrawn, the server said so, the person declined): nothing stays in the browser,

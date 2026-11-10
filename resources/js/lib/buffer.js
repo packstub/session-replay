@@ -79,21 +79,43 @@ export function trimWindow(events, markers, start) {
     return { events: kept, markers: keptMarkers };
 }
 
+// JSON characters per serialized node of a page snapshot, measured on Filament pages (90 to 130).
+const CHARS_PER_NODE = 120;
+
+/** Nodes in a serialized tree, the element and its descendants. */
+export function countNodes(node) {
+    let count = 0;
+    const stack = node ? [node] : [];
+
+    while (stack.length) {
+        const current = stack.pop();
+
+        count++;
+
+        if (current.childNodes) for (const child of current.childNodes) stack.push(child);
+    }
+
+    return count;
+}
+
 /**
- * Rough size of one event, the estimate the recorder flushes and bounds its window by: a snapshot counts as
- * 200 kB, a mutation that changes a lot (a Livewire morph of a long table) is measured, anything else is 300.
+ * Rough size of one event, the estimate the recorder flushes and bounds its window by: a snapshot is sized by
+ * its nodes (at least 200 kB; a 500-row table page has 46,000 of them and takes 5 MB), a mutation that changes
+ * a lot (a Livewire morph of a long table) by what it adds and changes, anything else is 300.
  */
 export function estimateEventChars(event) {
-    if (event.type === EVENT_FULL_SNAPSHOT) return 200_000;
+    if (event.type === EVENT_FULL_SNAPSHOT) return Math.max(200_000, countNodes(event.data?.node) * CHARS_PER_NODE);
 
     const data = event.type === EVENT_INCREMENTAL && event.data?.source === 0 ? event.data : null;
 
     if (data && ((data.adds?.length || 0) > 10 || (data.texts?.length || 0) > 20 || (data.attributes?.length || 0) > 20)) {
-        try {
-            return JSON.stringify(event).length;
-        } catch {
-            return 300;
-        }
+        // Counted, not stringified: a morph of a long table came through here every time, and its JSON was only
+        // ever made to be measured.
+        let chars = 300 + (data.texts?.length || 0) * 80 + (data.attributes?.length || 0) * CHARS_PER_NODE + (data.removes?.length || 0) * 30;
+
+        for (const add of data.adds || []) chars += countNodes(add?.node) * CHARS_PER_NODE;
+
+        return chars;
     }
 
     return 300;
@@ -104,6 +126,18 @@ export function estimateChars(events) {
     let chars = 0;
 
     for (const event of events) chars += estimateEventChars(event);
+
+    return chars;
+}
+
+/** Rough size of what came after the newest full snapshot (all of it without one): what a fresh snapshot would let the window drop. */
+export function charsSinceSnapshot(events) {
+    let chars = 0;
+
+    for (const event of events) {
+        if (event.type === EVENT_FULL_SNAPSHOT) chars = 0;
+        else chars += estimateEventChars(event);
+    }
 
     return chars;
 }

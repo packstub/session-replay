@@ -91,6 +91,7 @@ Sign in, open a recorded page, click around for a few seconds, then open `/sessi
 - **A disk every server sees.** The default `local` disk is fine on one server. With several servers, Laravel Cloud, Vapor or containers that are replaced on deploy, set `SESSION_REPLAY_DISK` to a private shared disk (S3, R2); see [Storage](storage.md#the-disk).
 - **The gate.** Outside `local` the viewer answers 403 until `viewSessionReplay` lets someone in.
 - **The clean-up** is scheduled (above).
+- **A Content Security Policy**, if the app sends one. Recording fits a strict policy (the directive's tags carry `Vite::cspNonce()`); the pages where replays are watched need `'unsafe-inline'` in their `style-src`, because the player rebuilds the recorded page from inline styles. See [Recording](recording.md#content-security-policy) and [Watching](watching.md#content-security-policy).
 - **Your privacy policy** says what is recorded; [Privacy](privacy.md#wording-for-your-privacy-policy) has wording to start from.
 
 ## When nothing shows up
