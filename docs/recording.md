@@ -81,7 +81,7 @@ A page served from a full-page cache (a response cache, a CDN, a static export) 
 ],
 ```
 
-`guest_tokens_expire` only ever applies to a token with no person, no workspace and no impersonator in it; a token that names someone always expires. Uploads with such a token are size-limited like every other and refused while `guests` is off. Guests are throttled per rendered page, so everyone served the same cached copy shares one `ingest.requests_per_minute` budget: on a busy cached page, raise it (each open tab uploads about 12 times a minute), and keep `ingest.guest_daily_mb` above a day of guest traffic. Cache only guest pages: a cached page with a person's token in it would attribute every visitor's recording to that person.
+`guest_tokens_expire` only ever applies to a token with no person, no workspace and no impersonator in it; a token that names someone always expires. Uploads with such a token are size-limited like every other and refused while `guests` is off. Guests are throttled per rendered page, so everyone served the same cached copy shares one `ingest.requests_per_minute` budget: on a busy cached page, raise it (each open tab uploads about 12 times a minute; with [Assist](assist.md) on, a visible tab adds a heartbeat about 4 times a minute, and a tab with a help request going polls it 20 to 30 times a minute, all counted on the same key), and keep `ingest.guest_daily_mb` above a day of guest traffic. Cache only guest pages: a cached page with a person's token in it would attribute every visitor's recording to that person.
 
 ## Sessions, idle time and sampling
 

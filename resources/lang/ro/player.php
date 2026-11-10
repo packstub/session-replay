@@ -18,6 +18,7 @@ return [
         'vital' => 'Vital',
         'custom' => 'Personalizat',
         'report' => 'Raportare',
+        'assist' => 'Asistență',
     ],
     'copy_link' => 'Copiază linkul către acest moment',
     'link_copied' => 'Link copiat',
@@ -44,6 +45,9 @@ return [
         'rating' => 'Evaluare',
         'x' => 'X',
         'y' => 'Y',
+        'opened_by' => 'Deschisă de',
+        'reason' => 'Motiv',
+        'granted' => 'Permis',
     ],
 
 ];

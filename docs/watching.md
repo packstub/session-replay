@@ -88,7 +88,7 @@ SessionReplay::check($session, $user);  // for someone else
 
 ## The built-in viewer
 
-`/session-replay` lists recordings, newest first: person, start, length, pages, errors and rage clicks, the vitals rating, the first page. Filters: **User ID**, **From**, **To**, **With errors**, **Reported a problem** (recordings with a `report` marker, from [`SessionReplay.send()`](recording.md#the-browser-api); they also carry a "reported" badge). A recording that received events in the last two minutes is marked live.
+`/session-replay` lists recordings, newest first: person, start, length, pages, errors and rage clicks, the vitals rating, the first page. Filters: **User ID**, **From**, **To**, **With errors**, **Reported a problem** (recordings with a `report` marker, from [`SessionReplay.send()`](recording.md#the-browser-api); they also carry a "reported" badge). A recording that received events in the last two minutes is marked live, with when its page was last heard from ("last seen 40 s ago"), and the **Live now** tab lists only those (`?live=1`, most recently active first). With [Assist](assist.md) on and Calls installed, a live recording has **Offer help**.
 
 `/session-replay/{session}` shows the facts of one recording and the player with its marker list.
 
@@ -259,7 +259,7 @@ ReplaySession::query()->forTenant($team)->poorVitals()->count();
 | `poorVitals()` | with LCP over 4000 ms, INP over 500 ms or CLS over 0.25 |
 | `prunable($days)` | older than the window and not pinned |
 
-Helpers: `durationMs()`, `durationForHumans()` ("4m 12s"), `isLive()`, `vitalsRating()` (`good`, `needs-improvement`, `poor` or `null`). Filter on markers through the relation:
+Helpers: `durationMs()`, `durationForHumans()` ("4m 12s"), `isLive()` (and the `live()` scope), `lastSeenSeconds()`, `vitalsRating()` (`good`, `needs-improvement`, `poor` or `null`). Filter on markers through the relation:
 
 ```php
 ReplaySession::query()

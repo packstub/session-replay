@@ -2,6 +2,7 @@
 
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\Route;
+use Packstub\Calls\Facades\Calls;
 use Packstub\SessionReplay\Tests\Fixtures\Models\User;
 
 Route::middleware('web')->group(function () {
@@ -15,4 +16,16 @@ Route::middleware('web')->group(function () {
     // A server error on the replay: the "Server error" button fetches it (a failed request and an error marker).
     Route::get('boom', fn () => throw new RuntimeException('The workbench could not save https://workbench.test/orders?token=abc'));
     Route::get('login', fn () => redirect('/'))->name('login');
+
+    // Assist's agent, in another browser than the visitor on /: the Requests page as Ana Support.
+    Route::get('agent', function () {
+        Auth::login(User::query()->firstOrCreate(['email' => 'ana@example.com'], ['name' => 'Ana Support', 'password' => 'secret']));
+
+        return redirect()->route('session-replay.assist.index');
+    });
+
+    // The live stage runs its own Calls client over Calls' routes, as a plain app registers them.
+    if (class_exists(Calls::class)) {
+        Calls::routes();
+    }
 });

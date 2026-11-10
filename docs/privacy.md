@@ -39,7 +39,12 @@ Three attributes cover what the defaults cannot know about:
 
 {{-- The element is recorded, typing into it is not. --}}
 <input type="text" name="notes" data-replay-ignore>
+
+{{-- Left out entirely, with everything inside it: no box, no events. --}}
+<div data-replay-skip>@include('partials.chat-widget')</div>
 ```
+
+`data-replay-skip` (not configurable) must be on the element when it is inserted; adding it later does not take an element out. The Assist widget uses it.
 
 `data-replay-mask` applies to the element and everything inside it. The selectors are configurable (`privacy.mask_text_selector`, `privacy.block_selector`, `privacy.ignore_selector`), so existing classes can be reused:
 

@@ -13,13 +13,14 @@ In a Filament panel, [Filament Session Replay](https://github.com/packstub/filam
 
 - **[One Blade directive](recording.md#the-directive)**: `@sessionReplay` before `</body>` records the page, with nothing to build or publish.
 - **[Private by default](privacy.md)**: every input masked, no IP address stored, consent and an anonymous mode when you need them.
-- **[Recordings stay with you](storage.md)**: gzip chunks on any filesystem disk (local, S3, R2), the index in six tables on your connection.
+- **[Recordings stay with you](storage.md)**: gzip chunks on any filesystem disk (local, S3, R2), the index in seven tables on your connection.
 - **[Markers on the timeline](recording.md#markers)**: errors, failed Livewire requests, web vitals, rage clicks, page views and your own moments.
 - **[Only when something goes wrong](recording.md#recording-only-when-something-goes-wrong)**: keep the last minute in the browser and upload it on an error, after asking if you like.
 - **[Small recordings](storage.md#sizes)**: stylesheets stored once, unused attributes dropped, batches gzipped in the browser.
 - **[A gate decides who watches](watching.md#the-gate)**: `viewSessionReplay` guards the list, the player and every file behind them.
 - **[Identity without a session](recording.md#who-is-recorded)**: who is signed in travels in a signed token, so any guard and any tenancy setup works.
 - **[A link in every log line](error-tracking.md)**: the recording's id and URL in Laravel's `Context`.
+- **[Help requests](assist.md)**: a visitor asks for help, support takes it from a list or offers it from a live recording; with Calls for Laravel, the two are put on a call.
 
 ## Guides
 
@@ -31,4 +32,5 @@ In a Filament panel, [Filament Session Replay](https://github.com/packstub/filam
 | [Watching replays](watching.md) | The `viewSessionReplay` gate, the built-in viewer, the player component, links, models and scopes |
 | [Storage](storage.md) | Disk layout, the tables, multi-tenant apps, sizes and limits, pruning, S3 |
 | [Error tracking](error-tracking.md) | The recording in Laravel's `Context`, and where it shows up |
+| [Assist](assist.md) | Help requests in both directions, who may help, the routes, the timeouts, the events, with and without Calls |
 | [Configuration](configuration.md) | Every key in `config/session-replay.php` |

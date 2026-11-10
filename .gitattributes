@@ -19,3 +19,4 @@
 /resources/js       export-ignore
 /workbench          export-ignore
 /testbench.yaml     export-ignore
+/playwright.config.js export-ignore

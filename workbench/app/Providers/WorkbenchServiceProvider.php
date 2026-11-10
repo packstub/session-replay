@@ -4,14 +4,34 @@ namespace Workbench\App\Providers;
 
 use Illuminate\Support\Facades\Gate;
 use Illuminate\Support\ServiceProvider;
+use Packstub\Calls\CallsServiceProvider;
 use Packstub\SessionReplay\Facades\SessionReplay;
 use Packstub\SessionReplay\Models\ReplayMarker;
 use Packstub\SessionReplay\Tests\Fixtures\Models\User;
 use Workbench\App\Http\Middleware\Csp;
 
-/** A page to record and a viewer anyone may open: `composer serve`, click around, then visit /session-replay. */
+/**
+ * A page to record and a viewer anyone may open: `composer serve`, click around, then visit /session-replay.
+ * Assist is on, with the "Get help" button; with packstub/calls installed (see AGENTS.md) the live stage works
+ * too: ask for help on /, then open /agent in another browser (Ana Support) and claim the request.
+ */
 class WorkbenchServiceProvider extends ServiceProvider
 {
+    public function register(): void
+    {
+        // Before the package boots: Assist's routes and its Calls listener are registered at boot.
+        config()->set('session-replay.assist.enabled', (bool) env('SESSION_REPLAY_ASSIST', true));
+        config()->set('session-replay.assist.button', (bool) env('SESSION_REPLAY_ASSIST_BUTTON', true));
+
+        // The visitor's page and the agent's stage poll at once (PHP_CLI_SERVER_WORKERS): wait for a lock, never fail.
+        config()->set('database.connections.sqlite.busy_timeout', 10000);
+        config()->set('database.connections.sqlite.journal_mode', 'wal');
+
+        if (class_exists(CallsServiceProvider::class)) {
+            $this->app->register(CallsServiceProvider::class);
+        }
+    }
+
     public function boot(): void
     {
         // CSP=1 composer serve: a strict policy with a nonce on script-src and style-src, to see what the recorder,

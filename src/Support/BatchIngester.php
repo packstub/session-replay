@@ -183,7 +183,8 @@ class BatchIngester
         $rows = [];
 
         foreach (array_slice($markers, 0, self::MAX_MARKERS_PER_BATCH) as $marker) {
-            if (! is_array($marker) || ! in_array($marker['type'] ?? null, ReplayMarker::TYPES, true)) {
+            // "assist" is what the server writes when an assist request ends; a browser cannot claim one.
+            if (! is_array($marker) || ! in_array($marker['type'] ?? null, ReplayMarker::TYPES, true) || $marker['type'] === ReplayMarker::ASSIST) {
                 continue;
             }
 

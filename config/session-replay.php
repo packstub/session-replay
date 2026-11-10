@@ -320,6 +320,69 @@ return [
 
     /*
     |--------------------------------------------------------------------------
+    | Assist
+    |--------------------------------------------------------------------------
+    |
+    | Help requests: a visitor asks for help from the page, an agent claims
+    | the request from the viewer's Requests list, or offers help from a
+    | live recording. With packstub/calls installed the two are put on a
+    | Calls call (kind "assist"); without it the requests are a plain queue
+    | (open, claimed, ended by the agent) and AssistClaimed is where your
+    | app reaches out. Off by default: on, the visitor routes take requests
+    | from every recorded page. Who may help is SessionReplay::canAssistUsing()
+    | (default: whoever may watch the recording). In a plain app the viewer's
+    | guard and packstub-calls.guard must be the same; claiming refuses
+    | otherwise.
+    |
+    */
+
+    'assist' => [
+        'enabled' => (bool) env('SESSION_REPLAY_ASSIST', false),
+        // false: never create Calls calls, even with packstub/calls installed (the queue alone).
+        'calls' => (bool) env('SESSION_REPLAY_ASSIST_CALLS', true),
+        // true: the visitor accepts before the agent joins, also for a request they opened themselves. Accepting an
+        // agent's offer always counts as that consent.
+        'watch_consent' => (bool) env('SESSION_REPLAY_ASSIST_WATCH_CONSENT', false),
+        // New requests per hour per person (for guests: per rendered page); null turns it off.
+        'requests_per_hour' => env('SESSION_REPLAY_ASSIST_REQUESTS_PER_HOUR', 6),
+        // Requests that may be going at once per workspace (tenant; no workspace counts as one): past it a new one
+        // is refused (429), so a script cannot flood the list. null turns it off.
+        'max_open_requests' => env('SESSION_REPLAY_ASSIST_MAX_OPEN_REQUESTS', 100),
+        // Guests (nobody signed in, recorded with session-replay.guests) may ask for help. false: signed-in people only.
+        'guests' => (bool) env('SESSION_REPLAY_ASSIST_GUESTS', true),
+        // New requests per hour from all guests of a workspace together, on top of requests_per_hour (which counts
+        // per rendered page for guests, a nonce anyone can mint). While set, a guest asks only from a recording
+        // that has events on the server. null turns both off.
+        'guest_requests_per_hour' => env('SESSION_REPLAY_ASSIST_GUEST_REQUESTS_PER_HOUR', 20),
+        // A claim the visitor's page has not acknowledged by then goes back to the list.
+        'claim_timeout_seconds' => 30,
+        // An agent's offer nobody answered expires.
+        'proposal_timeout_seconds' => 60,
+        // A request whose page has not polled for this long expires (the tab was closed); a live one ends.
+        'visitor_timeout_seconds' => 60,
+        // An assist ends after this many minutes, whatever is going on.
+        'max_duration_minutes' => (int) env('SESSION_REPLAY_ASSIST_MAX_DURATION_MINUTES', 120),
+        // A floating "Get help" button on every recorded page; off: ask from your own UI with
+        // SessionReplay.assist.request({ message }).
+        'button' => (bool) env('SESSION_REPLAY_ASSIST_BUTTON', false),
+        // Let the agent type into fields they see masked (every field with privacy.mask_all_inputs), after a
+        // separate question to the visitor. Off: unmasked fields only; password fields never.
+        'control_masked' => (bool) env('SESSION_REPLAY_ASSIST_CONTROL_MASKED', false),
+        // A visible tab's sign of life, which also brings an agent's offer to a page that uploads nothing.
+        'heartbeat_seconds' => 15,
+        // How often the page polls its request: while it waits, and during an assist (the call's heartbeat;
+        // Calls holds a side for 5 seconds).
+        'poll' => [
+            'waiting_ms' => 3000,
+            'active_ms' => 2000,
+        ],
+        // The name prefix of Calls' routes (Calls::routes(as: …)), which the agent's live stage polls: in a plain app,
+        // register Calls::routes() in routes/web.php (the `web` middleware and the viewer's guard).
+        'calls_routes' => 'calls.',
+    ],
+
+    /*
+    |--------------------------------------------------------------------------
     | Log context
     |--------------------------------------------------------------------------
     |

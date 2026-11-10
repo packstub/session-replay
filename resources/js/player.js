@@ -26,6 +26,7 @@ const COLORS = {
     vital: '#10b981',
     custom: '#64748b',
     report: '#e11d48',
+    assist: '#0ea5e9',
 };
 
 function labels(root) {

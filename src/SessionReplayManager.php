@@ -3,6 +3,7 @@
 namespace Packstub\SessionReplay;
 
 use Closure;
+use Illuminate\Contracts\Auth\Authenticatable;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Http\Request;
@@ -11,8 +12,10 @@ use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Vite;
 use Illuminate\Support\HtmlString;
 use Illuminate\Support\Str;
+use Packstub\SessionReplay\Models\AssistRequest;
 use Packstub\SessionReplay\Models\ReplayMarker;
 use Packstub\SessionReplay\Models\ReplaySession;
+use Packstub\SessionReplay\Support\Assist;
 use Packstub\SessionReplay\Support\ContextToken;
 
 /** What the app told the package (through the SessionReplay facade) and the decisions built on it. */
@@ -44,6 +47,8 @@ class SessionReplayManager
     protected ?Closure $logUrlUsing = null;
 
     protected ?Closure $visibleUsing = null;
+
+    protected ?Closure $canAssistUsing = null;
 
     /** Narrow who is recorded: fn (?Model $user, Request $request): bool. */
     public function recordWhen(Closure $callback): static
@@ -153,6 +158,56 @@ class SessionReplayManager
         }
 
         return $query;
+    }
+
+    /**
+     * Who may help with an assist request (claim it, offer help from a live session, and later watch and control):
+     * fn (Authenticatable $agent, ?ReplaySession $session, AssistRequest $request): bool. Without it, whoever may
+     * watch the recording (check()), or the list for a request without one. Asked on every agent endpoint.
+     */
+    public function canAssistUsing(Closure $callback): static
+    {
+        $this->canAssistUsing = $callback;
+
+        return $this;
+    }
+
+    /**
+     * Whether a request without a recording may be shown to agents at all: nothing there for visibleUsing() to look at,
+     * so while that rule narrows the list, only a canAssistUsing() rule decides (fail closed).
+     */
+    public function assistsWithoutRecording(): bool
+    {
+        return $this->visibleUsing === null || $this->canAssistUsing !== null;
+    }
+
+    /** The workspace the app's tenantUsing() names for this request, or null (no rule, or none). */
+    public function tenantFor(?Request $request = null): ?Model
+    {
+        if ($this->tenantUsing === null) {
+            return null;
+        }
+
+        $tenant = ($this->tenantUsing)($request ?? request());
+
+        return $tenant instanceof Model ? $tenant : null;
+    }
+
+    /**
+     * Whether this agent may help with this request. Nobody assists their own visit: a request of the agent's own
+     * recording is refused whatever the rule says.
+     */
+    public function canAssist(mixed $agent, ?ReplaySession $session, AssistRequest $request): bool
+    {
+        if (! $agent instanceof Authenticatable) {
+            return false;
+        }
+
+        if ($request->user_id !== null && $agent instanceof Model && $request->user_type === $agent->getMorphClass() && $request->user_id === (string) $agent->getKey()) {
+            return false;
+        }
+
+        return $this->canAssistUsing ? (bool) ($this->canAssistUsing)($agent, $session, $request) : $this->check($session, $agent);
     }
 
     public function enabled(): bool
@@ -312,6 +367,7 @@ class SessionReplayManager
             'onError' => $this->onErrorConfig($token),
             // The debug error page is titled with the app's name; the question leaves that title out.
             'appName' => (string) config('app.name', ''),
+            'assist' => $this->assistConfig(),
         ];
 
         $nonce = $options['nonce'] ?? Vite::cspNonce();
@@ -452,6 +508,49 @@ class SessionReplayManager
                 'failed' => __('session-replay::recorder.ask.failed'),
                 'sent' => __('session-replay::recorder.ask.sent'),
             ] : null,
+        ];
+    }
+
+    /**
+     * What the recorder needs for Assist (assist.enabled): the visitor's routes, the timings, the button and the
+     * strings. Null when Assist is off, so the page carries nothing of it.
+     *
+     * @return array<string, mixed>|null
+     */
+    protected function assistConfig(): ?array
+    {
+        $assist = app(Assist::class);
+
+        if (! $assist->enabled()) {
+            return null;
+        }
+
+        // A route with a uuid constraint is generated with a nil uuid and handed to the browser with __ID__.
+        $nil = '00000000-0000-0000-0000-000000000000';
+        $routes = ['store' => $this->route('assist.store'), 'heartbeat' => $this->route('assist.heartbeat')];
+
+        foreach (['poll', 'accept', 'decline', 'cancel', 'hangup', 'leave', 'signal', 'grants'] as $name) {
+            $routes[$name] = str_replace($nil, '__ID__', $this->route('assist.'.$name, ['id' => $nil]));
+        }
+
+        $calls = $assist->callsAvailable();
+
+        return [
+            'routes' => $routes,
+            // The rest of Assist (the calls engine, the visitor's UI): an ES module the recorder imports the first time
+            // it is needed, from the same origin as the recorder, with the package's version.
+            'module' => $this->scriptUrl('assist.js'),
+            'calls' => $calls,
+            'video' => $calls && $assist->videoAllowed(),
+            'button' => (bool) config('session-replay.assist.button', false),
+            'controlMasked' => (bool) config('session-replay.assist.control_masked', false),
+            'heartbeatMs' => max(5, (int) config('session-replay.assist.heartbeat_seconds', 15)) * 1000,
+            'poll' => [
+                'waiting' => max(1000, (int) config('session-replay.assist.poll.waiting_ms', 3000)),
+                // Under Calls' hold, or the side is let go between two polls.
+                'active' => max(500, min($assist->callsPollCeilingMs(), (int) config('session-replay.assist.poll.active_ms', 2000))),
+            ],
+            'labels' => (array) __('session-replay::recorder.assist'),
         ];
     }
 

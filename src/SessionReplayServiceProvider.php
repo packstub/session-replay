@@ -5,6 +5,7 @@ namespace Packstub\SessionReplay;
 use Illuminate\Cache\RateLimiting\Limit;
 use Illuminate\Contracts\Debug\ExceptionHandler;
 use Illuminate\Contracts\Http\Kernel;
+use Illuminate\Foundation\Http\Middleware\TrimStrings;
 use Illuminate\Http\Request;
 use Illuminate\Routing\Events\RouteMatched;
 use Illuminate\Support\Arr;
@@ -13,7 +14,10 @@ use Illuminate\Support\Facades\Event;
 use Illuminate\Support\Facades\RateLimiter;
 use Illuminate\Support\Facades\Route;
 use Illuminate\Support\ServiceProvider;
+use Packstub\Calls\Events\CallEnded;
 use Packstub\SessionReplay\Commands\PruneCommand;
+use Packstub\SessionReplay\Http\Controllers\AssistAgentController;
+use Packstub\SessionReplay\Http\Controllers\AssistController;
 use Packstub\SessionReplay\Http\Controllers\IngestController;
 use Packstub\SessionReplay\Http\Controllers\ReplayDataController;
 use Packstub\SessionReplay\Http\Controllers\ScriptController;
@@ -21,6 +25,7 @@ use Packstub\SessionReplay\Http\Controllers\ViewerController;
 use Packstub\SessionReplay\Http\Middleware\AddReplayContext;
 use Packstub\SessionReplay\Http\Middleware\AuthorizeViewer;
 use Packstub\SessionReplay\Http\Middleware\ThrottleIngest;
+use Packstub\SessionReplay\Support\Assist;
 use Packstub\SessionReplay\Support\ContextToken;
 use Packstub\SessionReplay\Support\ReplayStorage;
 use Packstub\SessionReplay\Support\ServerErrors;
@@ -86,6 +91,7 @@ class SessionReplayServiceProvider extends PackageServiceProvider
 
         $this->app->singleton(SessionReplayManager::class);
         $this->app->singleton(ReplayStorage::class);
+        $this->app->singleton(Assist::class);
         // Per request: which recording a request belongs to must not leak into the next one (Octane, queue workers).
         $this->app->scoped(ServerErrors::class);
     }
@@ -157,7 +163,9 @@ class SessionReplayServiceProvider extends PackageServiceProvider
 
             // Per person when the token names one, per rendered page for guests (a value the client cannot choose);
             // never per IP (an edge proxy hides it). A request without a valid token is refused right after.
-            $key = ContextToken::decode($request->input('token'))?->throttleKey() ?? 'invalid';
+            // The token from the body only, like the endpoints themselves: never a URL, which logs and proxies keep.
+            $token = $request->isMethodSafe() ? null : ($request->isJson() ? $request->json('token') : ($request->request->all()['token'] ?? null));
+            $key = ContextToken::decode(is_string($token) ? $token : null)?->throttleKey() ?? 'invalid';
 
             return Limit::perMinute((int) $perMinute)->by('session-replay|'.$key);
         });
@@ -172,7 +180,28 @@ class SessionReplayServiceProvider extends PackageServiceProvider
             }
         });
 
+        $this->bootAssist();
+
         $this->app->booted(fn () => $this->registerRoutes());
+    }
+
+    /**
+     * Assist: a WebRTC description ends in CRLF and the parser wants it there, so the signals route is never trimmed
+     * (Calls' own skip matches its routes only); an assist call that ends ends its request.
+     */
+    protected function bootAssist(): void
+    {
+        if (! config('session-replay.assist.enabled', false)) {
+            return;
+        }
+
+        $path = trim((string) config('session-replay.path', 'session-replay'), '/');
+
+        TrimStrings::skipWhen(fn (Request $request): bool => $request->is($path.'/assist/requests/*/signals'));
+
+        if (class_exists(CallEnded::class)) {
+            Event::listen(CallEnded::class, fn (CallEnded $event) => $this->app->make(Assist::class)->callEnded($event->call));
+        }
     }
 
     protected function registerRoutes(): void
@@ -196,6 +225,10 @@ class SessionReplayServiceProvider extends PackageServiceProvider
                 Route::post('ingest/snapshot', [IngestController::class, 'snapshot'])->name('ingest.snapshot');
             });
 
+            if (config('session-replay.assist.enabled', false)) {
+                $this->registerAssistRoutes($uuid);
+            }
+
             Route::middleware([...$this->viewerMiddleware(), AuthorizeViewer::class])->group(function () use ($uuid): void {
                 // An id that is no recording answers 403, like one the gate denies (see AuthorizeViewer, which does the same
                 // when the binding has not run yet): a viewer of one workspace must not learn whether an id they came by
@@ -212,6 +245,45 @@ class SessionReplayServiceProvider extends PackageServiceProvider
                     Route::get('/', [ViewerController::class, 'index'])->name('index');
                     Route::get('{session}', [ViewerController::class, 'show'])->where('session', $uuid)->missing($missing)->name('show');
                 }
+            });
+        });
+    }
+
+    /**
+     * The visitor's routes, stateless and throttled like ingest (the token, the triple or the request's secret), and
+     * the agent's, behind the viewer's middleware and gate. Names session-replay.assist.*.
+     */
+    protected function registerAssistRoutes(string $uuid): void
+    {
+        Route::prefix('assist')->as('assist.')->group(function () use ($uuid): void {
+            Route::middleware([...(array) config('session-replay.ingest.middleware', []), ThrottleIngest::class.':session-replay'])->group(function () use ($uuid): void {
+                Route::post('requests', [AssistController::class, 'store'])->name('store');
+                Route::post('heartbeat', [AssistController::class, 'heartbeat'])->name('heartbeat');
+                // A POST, like every visitor route: the secret and the token travel in the body, never in a URL that access
+                // logs, proxies and error trackers keep.
+                Route::post('requests/{id}', [AssistController::class, 'show'])->where('id', $uuid)->name('poll');
+
+                foreach (['accept', 'decline', 'cancel', 'hangup', 'leave', 'grants'] as $action) {
+                    Route::post('requests/{id}/'.$action, [AssistController::class, $action])->where('id', $uuid)->name($action);
+                }
+
+                Route::post('requests/{id}/signals', [AssistController::class, 'signal'])->where('id', $uuid)->name('signal');
+            });
+
+            Route::middleware([...$this->viewerMiddleware(), AuthorizeViewer::class])->group(function () use ($uuid): void {
+                if (config('session-replay.viewer.enabled', true)) {
+                    Route::get('/', [AssistAgentController::class, 'index'])->name('index');
+                    // The agent's live stage of a request they hold (the built-in viewer's page).
+                    Route::get('requests/{id}/stage', [AssistAgentController::class, 'stage'])->where('id', $uuid)->name('stage');
+                }
+
+                Route::get('queue', [AssistAgentController::class, 'queue'])->name('queue');
+                Route::get('requests/{id}/status', [AssistAgentController::class, 'status'])->where('id', $uuid)->name('status');
+                Route::post('requests/{id}/claim', [AssistAgentController::class, 'claim'])->where('id', $uuid)->name('claim');
+                Route::post('requests/{id}/withdraw', [AssistAgentController::class, 'withdraw'])->where('id', $uuid)->name('withdraw');
+                Route::post('requests/{id}/end', [AssistAgentController::class, 'end'])->where('id', $uuid)->name('end');
+                Route::post('requests/{id}/asks', [AssistAgentController::class, 'ask'])->where('id', $uuid)->name('asks');
+                Route::post('sessions/{session}/propose', [AssistAgentController::class, 'propose'])->where('session', $uuid)->missing(fn () => abort(403))->name('propose');
             });
         });
     }
