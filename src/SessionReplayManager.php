@@ -547,8 +547,8 @@ class SessionReplayManager
             'heartbeatMs' => max(5, (int) config('session-replay.assist.heartbeat_seconds', 15)) * 1000,
             'poll' => [
                 'waiting' => max(1000, (int) config('session-replay.assist.poll.waiting_ms', 3000)),
-                // Under Calls' hold of 5 seconds, or the side is let go between two polls.
-                'active' => max(500, min(4000, (int) config('session-replay.assist.poll.active_ms', 2000))),
+                // Under Calls' hold, or the side is let go between two polls.
+                'active' => max(500, min($assist->callsPollCeilingMs(), (int) config('session-replay.assist.poll.active_ms', 2000))),
             ],
             'labels' => (array) __('session-replay::recorder.assist'),
         ];

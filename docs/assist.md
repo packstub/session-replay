@@ -42,6 +42,12 @@ With a database per tenant, `session-replay.storage.connection` points at the ce
 
 An assist call has the kind `assist`: the Calls widget, which polls for `kind=call`, never sees it. An agent helps one visitor at a time: starting another call ends the assist.
 
+**One call at a time per person, whatever its kind.** Calls keeps a person on a single call (one microphone, one camera), across kinds: starting a call leaves the one you are on. So an agent who is on a Calls widget call with a colleague leaves it when a visitor's page picks up their claim, and a colleague who rings an agent during an assist hears they are busy. Ask agents to hang up before they claim, or check `Calls::openCallsOf($agentId)` in your own UI first.
+
+**ICE servers for both ends.** The visitor's page gets its ICE servers in its own request, outside any panel, so it reads Calls' config (`packstub-calls.ice_servers`, the `CALLS_TURN_*` variables), not a Filament panel's `->iceServers()`. Put a TURN server in the config, not only on the panel, or a visitor behind a strict NAT (and every visitor with `ice_transport_policy` set to `relay`) cannot connect. The visitor's browser receives those TURN credentials, like any caller's; mention the STUN or TURN provider in your privacy notice when it is a third party.
+
+**Versions.** Calls for Laravel needs Laravel 12.69+ or 13.30+, and Filament Calls needs Filament 5.8.3+ (or 4.13.3+), which is more than Session Replay alone asks for.
+
 ### Without Calls
 
 A request goes `open`, then `claimed` by an agent, then `ended` by the agent. `AssistClaimed` is where your app reaches out (a chat message, an email). Offering help from a live recording needs Calls.
@@ -161,7 +167,7 @@ use Packstub\Calls\Facades\Calls;
 Calls::routes();
 ```
 
-With another name prefix (`Calls::routes(as: 'support.calls.')`), set `session-replay.assist.calls_routes` to it. The stage polls Calls during the call as often as Calls' own `poll.active` says (`CALLS_POLL_ACTIVE`, 1000 ms; kept between 250 ms and 10 s). Without the routes the stage says so instead of trying to connect. Calls' guard must be the viewer's (see [With Calls](#with-calls)).
+With another name prefix (`Calls::routes(as: 'support.calls.')`), set `session-replay.assist.calls_routes` to it. The stage polls Calls during the call as often as Calls' own `poll.active` says (`CALLS_POLL_ACTIVE`, 1000 ms; kept between 250 ms and a second under Calls' hold of 5 seconds, so the agent's side is never let go between two polls). Without the routes the stage says so instead of trying to connect. Calls' guard must be the viewer's (see [With Calls](#with-calls)).
 
 `stage.js` and `stage.css` come from the package's script route, like the player (about 240 KB: rrweb's replayer and the calls engine), only on the stage page.
 

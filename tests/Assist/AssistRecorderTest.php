@@ -1,6 +1,7 @@
 <?php
 
 use Packstub\SessionReplay\Facades\SessionReplay;
+use Packstub\SessionReplay\Support\Assist;
 
 function assistConfig(string $html): ?array
 {
@@ -38,6 +39,14 @@ it('keeps the active poll under Calls\' hold and turns on the button and masked 
     expect($assist['button'])->toBeTrue()
         ->and($assist['controlMasked'])->toBeTrue()
         ->and($assist['poll']['active'])->toBe(4000);
+});
+
+it('keeps the agent\'s stage polling Calls under its hold, however slow Calls\' own active poll is set', function () {
+    config()->set('packstub-calls.poll.active', 8000);
+    expect(app(Assist::class)->callsPollMs())->toBe(4000);
+
+    config()->set('packstub-calls.poll.active', 1500);
+    expect(app(Assist::class)->callsPollMs())->toBe(1500);
 });
 
 it('puts nothing of Assist on the page while it is off', function () {

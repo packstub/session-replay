@@ -65,12 +65,23 @@ class Assist
         return (bool) config('session-replay.assist.enabled', false);
     }
 
-    /** How often the agent's stage polls Calls during the call: Calls' own `poll.active` (ms), kept between 250 ms and 10 s. */
+    /** How often the agent's stage polls Calls during the call: Calls' own `poll.active` (ms), kept between 250 ms and a second under Calls' hold. */
     public function callsPollMs(): int
     {
         $ms = config('packstub-calls.poll.active');
 
-        return is_numeric($ms) ? (int) min(10_000, max(250, (int) $ms)) : 1000;
+        return is_numeric($ms) ? (int) min($this->callsPollCeilingMs(), max(250, (int) $ms)) : 1000;
+    }
+
+    /**
+     * The longest gap between two polls of a side in a call: a second under Calls' hold (a window that
+     * stops polling for `Call::HOLD_SECONDS` lets go of its side, and the other end sees it reconnecting).
+     */
+    public function callsPollCeilingMs(): int
+    {
+        $hold = class_exists(Call::class) ? Call::HOLD_SECONDS : 5;
+
+        return max(500, ($hold - 1) * 1000);
     }
 
     /** Whether Calls lets a call carry video (its `video` setting, through the context). */
