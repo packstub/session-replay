@@ -5,15 +5,15 @@ namespace Packstub\SessionReplay\Tests;
 use Illuminate\Support\Facades\Gate;
 use Illuminate\Support\Str;
 use Illuminate\Testing\TestResponse;
-use Packstub\Calls\CallsServiceProvider;
-use Packstub\Calls\Facades\Calls;
+use Packstub\Holler\Facades\Holler;
+use Packstub\Holler\HollerServiceProvider;
 use Packstub\SessionReplay\Models\ReplaySession;
 use Packstub\SessionReplay\Tests\Fixtures\Models\Team;
 use Packstub\SessionReplay\Tests\Fixtures\Models\User;
 
 /**
- * Assist on (the routes register at boot), with packstub/calls booted when it is installed: a dev install links it
- * from ../calls (see AGENTS.md). Tests that need Calls call needsCalls() and are skipped without it.
+ * Assist on (the routes register at boot), with packstub/holler booted when it is installed: a dev install links it
+ * from ../holler (see AGENTS.md). Tests that need Holler call needsCalls() and are skipped without it.
  */
 abstract class AssistTestCase extends TestCase
 {
@@ -21,7 +21,7 @@ abstract class AssistTestCase extends TestCase
     {
         return [
             ...parent::getPackageProviders($app),
-            ...(class_exists(CallsServiceProvider::class) ? [CallsServiceProvider::class] : []),
+            ...(class_exists(HollerServiceProvider::class) ? [HollerServiceProvider::class] : []),
         ];
     }
 
@@ -34,12 +34,12 @@ abstract class AssistTestCase extends TestCase
 
     protected function needsCalls(): void
     {
-        if (! class_exists(CallsServiceProvider::class)) {
-            $this->markTestSkipped('packstub/calls is not installed.');
+        if (! class_exists(HollerServiceProvider::class)) {
+            $this->markTestSkipped('packstub/holler is not installed.');
         }
     }
 
-    /** The queue alone, as without packstub/calls. */
+    /** The queue alone, as without packstub/holler. */
     protected function withoutCalls(): void
     {
         config()->set('session-replay.assist.calls', false);
@@ -142,19 +142,19 @@ abstract class AssistTestCase extends TestCase
 
     /**
      * The visitor's page on the call and the agent's stage with it, then the agent leaves the live view: their side stops
-     * polling Calls while the page keeps polling, until Calls drops the agent (packstub-calls.reconnect_timeout).
+     * polling Holler while the page keeps polling, until Holler drops the agent (holler.reconnect_timeout).
      *
      * @return array{0: array{session: ReplaySession, token: string, key: string}, 1: array{id: string, secret: string}, 2: User, 3: int, 4: TestResponse}
      */
     protected function agentLeavesTheLiveView(): array
     {
-        config()->set('packstub-calls.reconnect_timeout', 6);
+        config()->set('holler.reconnect_timeout', 6);
         $this->freezeSecond();
 
         [$browser, $asked, $agent] = $this->claimed();
 
         $call = $this->poll($asked['id'], $asked['secret'], $browser['token'], ['tab' => 'tab-1'])->assertJson(['status' => 'active'])->json('call.id');
-        Calls::poll((string) $agent->id, 0, $call, 'agent-tab', hold: true, kind: 'assist');
+        Holler::poll((string) $agent->id, 0, $call, 'agent-tab', hold: true, kind: 'assist');
 
         // The agent navigates away; the visitor's page goes on polling every 2 s.
         for ($i = 0; $i < 4; $i++) {

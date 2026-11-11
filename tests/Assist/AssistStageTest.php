@@ -1,7 +1,7 @@
 <?php
 
 use Illuminate\Testing\TestResponse;
-use Packstub\Calls\Facades\Calls;
+use Packstub\Holler\Facades\Holler;
 use Packstub\SessionReplay\Facades\SessionReplay;
 use Packstub\SessionReplay\Models\AssistRequest;
 use Packstub\SessionReplay\Models\ReplaySession;
@@ -47,7 +47,7 @@ it('shows a Live tab with the recordings that uploaded in the last two minutes, 
     $this->get(route('session-replay.index', ['live' => 1]))->assertSee('Nobody is on a recorded page right now.');
 });
 
-it('offers help on live recordings only, never on the agent\'s own, and only with Calls', function () {
+it('offers help on live recordings only, never on the agent\'s own, and only with Holler', function () {
     $this->needsCalls();
 
     $live = $this->browser();
@@ -113,7 +113,7 @@ it('goes on to the stage after a claim from the Requests page, which links to it
 it('renders the stage with what its script needs: the request, the agent routes and Calls\' own routes', function () {
     $this->needsCalls();
 
-    Calls::routes(middleware: ['web', 'auth']);
+    Holler::routes(middleware: ['web', 'auth']);
 
     [, $asked, $agent] = $this->claimed();
 
@@ -137,15 +137,15 @@ it('renders the stage with what its script needs: the request, the agent routes 
             'list' => route('session-replay.assist.index'),
         ])
         ->and($config['calls']['available'])->toBeTrue()
-        ->and($config['calls']['routes']['poll'])->toBe(route('calls.poll'))
-        ->and($config['calls']['routes']['signal'])->toBe(route('calls.signal', ['call' => '__ID__']))
-        ->and($config['calls']['routes']['ice'])->toBe(route('calls.ice'))
+        ->and($config['calls']['routes']['poll'])->toBe(route('holler.poll'))
+        ->and($config['calls']['routes']['signal'])->toBe(route('holler.signal', ['call' => '__ID__']))
+        ->and($config['calls']['routes']['ice'])->toBe(route('holler.ice'))
         ->and($config['calls']['iceTransportPolicy'])->toBe('all')
         ->and($config['video'])->toBeTrue()
         ->and($config['labels']['buttons']['control'])->toBe('Request control')
         ->and($config['csrf'])->toBeString();
 
-    config()->set('packstub-calls.video', false);
+    config()->set('holler.video', false);
 
     expect(stageConfig($this->get(route('session-replay.assist.stage', $asked['id'])))['video'])->toBeFalse();
 });
@@ -159,7 +159,7 @@ it('tells the agent when Calls\' routes are not registered, instead of a stage t
 
     expect($config['calls']['available'])->toBeTrue()
         ->and($config['calls']['routes'])->toBeNull()
-        ->and($config['labels']['status']['no_routes'])->toContain('Calls::routes()');
+        ->and($config['labels']['status']['no_routes'])->toContain('Holler::routes()');
 });
 
 it('opens the stage to the agent who holds the request only, asking the gate and canAssist again', function () {
@@ -223,16 +223,16 @@ it('serves the stage script and stylesheet', function () {
     $this->get(SessionReplay::scriptUrl('stage.css'))->assertOk()->assertHeader('Content-Type', 'text/css; charset=utf-8');
 });
 
-it('polls Calls from the stage as often as Calls says', function () {
+it('polls Holler from the stage as often as Holler says', function () {
     $this->needsCalls();
 
     [, $asked, $agent] = $this->claimed();
     $stage = route('session-replay.assist.stage', $asked['id']);
 
-    config()->set('packstub-calls.poll.active', 1500);
+    config()->set('holler.poll.active', 1500);
     expect(stageConfig($this->actingAs($agent)->get($stage))['calls']['pollMs'])->toBe(1500);
 
     // Kept in a sane range.
-    config()->set('packstub-calls.poll.active', 5);
+    config()->set('holler.poll.active', 5);
     expect(stageConfig($this->get($stage))['calls']['pollMs'])->toBe(250);
 });

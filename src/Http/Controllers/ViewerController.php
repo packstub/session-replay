@@ -68,7 +68,7 @@ class ViewerController
 
     /**
      * What the pages show about Assist for these recordings, or null while it is off: whether help can be offered
-     * (Calls installed), the request going for each recording, and who is looking (their own requests open the stage).
+     * (Holler installed), the request going for each recording, and who is looking (their own requests open the stage).
      *
      * @param  array<int, ReplaySession>  $sessions
      * @return array{offer: bool, stage: bool, agent: ?string, holds: \Closure(AssistRequest): bool, requests: Collection<string, AssistRequest>}|null

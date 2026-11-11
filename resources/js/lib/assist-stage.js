@@ -499,7 +499,7 @@ export function stageStop(data) {
 
 /**
  * One word for where the stage is, for a host that colours its own status badge (the
- * `session-replay:stage` event carries it): `ended`, `unavailable` (no Calls, no routes or
+ * `session-replay:stage` event carries it): `ended`, `unavailable` (no Holler, no routes or
  * another protocol version), `waiting` (an offer or a claim the visitor's page has not taken up
  * yet), `connecting`, `reconnecting` (also while the agent is back on the live view after
  * leaving it and the new call is on its way), `hidden` (live, the visitor's tab in the background) or `live`.

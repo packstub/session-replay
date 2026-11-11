@@ -9,7 +9,7 @@ use Illuminate\Http\JsonResponse;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Route;
-use Packstub\Calls\Calls;
+use Packstub\Holler\Holler;
 use Packstub\SessionReplay\Exceptions\AssistRefused;
 use Packstub\SessionReplay\Facades\SessionReplay;
 use Packstub\SessionReplay\Models\AssistRequest;
@@ -84,7 +84,7 @@ class AssistAgentController
         ]);
     }
 
-    /** POST {path}/assist/requests/{id}/claim — the form goes on to the stage (with Calls), the JSON stays JSON. */
+    /** POST {path}/assist/requests/{id}/claim — the form goes on to the stage (with Holler), the JSON stays JSON. */
     public function claim(Request $http, string $id): JsonResponse|RedirectResponse
     {
         if ($http->expectsJson() || ! $this->hasStage()) {
@@ -153,21 +153,21 @@ class AssistAgentController
             : back()->with('session-replay.assist', __('session-replay::viewer.assist.flash.proposed'));
     }
 
-    /** The built-in stage needs the viewer's pages and Calls (without it there is no live view to go to). */
+    /** The built-in stage needs the viewer's pages and Holler (without it there is no live view to go to). */
     protected function hasStage(): bool
     {
         return Route::has('session-replay.assist.stage') && $this->assist->callsAvailable();
     }
 
     /**
-     * What the stage's script needs: the request as the agent sees it, the agent routes, Calls' own routes (the
+     * What the stage's script needs: the request as the agent sees it, the agent routes, Holler's own routes (the
      * stage runs its own CallClient as the agent, kind=assist) and the strings.
      *
      * @return array<string, mixed>
      */
     protected function stageConfig(AssistRequest $request, Authenticatable $agent): array
     {
-        $prefix = (string) config('session-replay.assist.calls_routes', 'calls.');
+        $prefix = (string) config('session-replay.assist.calls_routes', 'holler.');
         $calls = $this->assist->callsAvailable();
         $routes = null;
         $policy = 'all';
@@ -183,7 +183,7 @@ class AssistAgentController
                 'leave' => route($prefix.'leave', ['call' => '__ID__']),
                 'ice' => route($prefix.'ice'),
             ];
-            $policy = app(Calls::class)->rtcConfiguration()['iceTransportPolicy'];
+            $policy = app(Holler::class)->rtcConfiguration()['iceTransportPolicy'];
         }
 
         return [
@@ -199,7 +199,7 @@ class AssistAgentController
                 'available' => $calls,
                 'routes' => $routes,
                 'iceTransportPolicy' => $policy,
-                'reconnectTimeout' => (int) config('packstub-calls.reconnect_timeout', 15) * 1000,
+                'reconnectTimeout' => (int) config('holler.reconnect_timeout', 15) * 1000,
                 'pollMs' => $this->assist->callsPollMs(),
             ],
             'video' => $this->assist->videoAllowed(),

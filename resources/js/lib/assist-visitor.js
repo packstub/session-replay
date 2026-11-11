@@ -24,9 +24,9 @@ import { STATE_KEY, randomId, storedRequest } from './assist-hook.js';
  * hidden tab's own timers slow to once a minute, which would lose the call
  * (lib/assist-client.js, shared with the agent's stage).
  *
- * The call is a @packstub/calls CallClient with media 'none' and the channel
+ * The call is a @packstub/holler CallClient with media 'none' and the channel
  * "assist"; its signaling is AssistSignaling over Session Replay's visitor
- * routes, never Calls' own (they sit behind auth). The engine comes in as
+ * routes, never Holler's own (they sit behind auth). The engine comes in as
  * `env.Client` and `env.drain`: the bundle (resources/js/assist.js) passes the
  * real one, the node tests a fake, so this file never imports the package.
  */
@@ -60,7 +60,7 @@ export function installAssist(recorder, env) {
     const Client = env.Client;
     const drain = env.drain;
     const now = env.now || (() => Date.now());
-    // This page's window on the call (Calls holds a side per window); a reload is a new one.
+    // This page's window on the call (Holler holds a side per window); a reload is a new one.
     const tab = randomId();
     const ui = env.ui || createUi({ labels });
     // Offers this tab answered or declined: the knock repeats with every upload while one is open.

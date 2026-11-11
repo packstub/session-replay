@@ -1,7 +1,7 @@
 import { Replayer } from '@rrweb/replay';
 import '@rrweb/replay/dist/style.css';
 import './stage.css';
-import { HttpSignaling, drain } from '@packstub/calls';
+import { HttpSignaling, drain } from '@packstub/holler';
 import { AssistClient, workerTimers } from './lib/assist-client.js';
 import { AGENT_RATE, CHANNEL_LABEL, Endpoint, FROM_VISITOR } from './lib/assist-protocol.js';
 import { AgentState, FINISHED, Gesture, LiveFeed, ago, editable, handleVisitorMessage, reasonKey, stageDelta, stagePhase, stagePoint, stageStop } from './lib/assist-stage.js';
@@ -11,9 +11,9 @@ import { AgentState, FINISHED, Gesture, LiveFeed, ago, editable, handleVisitorMe
  * the visitor's page mirrored from the recorder's own events (rrweb's Replayer in
  * live mode, its controller hidden, the iframe with rrweb's default sandbox, no
  * scripts), remote control through an overlay, annotations, audio (and video
- * where Calls allows it), screen share either way, and the end of the assist.
+ * where Holler allows it), screen share either way, and the end of the assist.
  *
- * The stage runs its own CallClient over Calls' own routes (kind=assist polls,
+ * The stage runs its own CallClient over Holler's own routes (kind=assist polls,
  * the ICE servers from the `ice` route) with media 'none' and the `assist`
  * data channel; the protocol Endpoint is attached synchronously in the
  * `datachannel` event so the visitor's hello is never missed. The request's
@@ -350,7 +350,7 @@ function mountStage(root) {
         if (stop === 'not_mine') note('not_allowed');
         if (stop) return finish();
 
-        // A client on a call the request no longer has (Calls dropped this side while the stage was away, and the
+        // A client on a call the request no longer has (Holler dropped this side while the stage was away, and the
         // visitor's page made a new one when it came back): the new call replaces it.
         if (client && clientCall !== data.call) {
             closeChannel('replaced');

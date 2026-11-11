@@ -1,5 +1,5 @@
 {{--
-    Assist on a live recording: "Offer help" (the agent's proposal, with Calls), the stage of the agent's own request,
+    Assist on a live recording: "Offer help" (the agent's proposal, with Holler), the stage of the agent's own request,
     or what the request going for it is. $assist is null while Assist is off.
 --}}
 @if ($assist && $session->isLive())

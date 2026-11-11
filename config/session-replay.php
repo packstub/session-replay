@@ -325,20 +325,20 @@ return [
     |
     | Help requests: a visitor asks for help from the page, an agent claims
     | the request from the viewer's Requests list, or offers help from a
-    | live recording. With packstub/calls installed the two are put on a
-    | Calls call (kind "assist"); without it the requests are a plain queue
+    | live recording. With packstub/holler installed the two are put on a
+    | Holler call (kind "assist"); without it the requests are a plain queue
     | (open, claimed, ended by the agent) and AssistClaimed is where your
     | app reaches out. Off by default: on, the visitor routes take requests
     | from every recorded page. Who may help is SessionReplay::canAssistUsing()
     | (default: whoever may watch the recording). In a plain app the viewer's
-    | guard and packstub-calls.guard must be the same; claiming refuses
+    | guard and holler.guard must be the same; claiming refuses
     | otherwise.
     |
     */
 
     'assist' => [
         'enabled' => (bool) env('SESSION_REPLAY_ASSIST', false),
-        // false: never create Calls calls, even with packstub/calls installed (the queue alone).
+        // false: never create Holler calls, even with packstub/holler installed (the queue alone).
         'calls' => (bool) env('SESSION_REPLAY_ASSIST_CALLS', true),
         // true: the visitor accepts before the agent joins, also for a request they opened themselves. Accepting an
         // agent's offer always counts as that consent.
@@ -371,14 +371,14 @@ return [
         // A visible tab's sign of life, which also brings an agent's offer to a page that uploads nothing.
         'heartbeat_seconds' => 15,
         // How often the page polls its request: while it waits, and during an assist (the call's heartbeat;
-        // Calls holds a side for 5 seconds).
+        // Holler holds a side for 5 seconds).
         'poll' => [
             'waiting_ms' => 3000,
             'active_ms' => 2000,
         ],
-        // The name prefix of Calls' routes (Calls::routes(as: …)), which the agent's live stage polls: in a plain app,
-        // register Calls::routes() in routes/web.php (the `web` middleware and the viewer's guard).
-        'calls_routes' => 'calls.',
+        // The name prefix of Holler's routes (Holler::routes(as: …)), which the agent's live stage polls: in a plain app,
+        // register Holler::routes() in routes/web.php (the `web` middleware and the viewer's guard).
+        'calls_routes' => 'holler.',
     ],
 
     /*

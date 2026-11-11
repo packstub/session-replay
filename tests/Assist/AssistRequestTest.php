@@ -534,7 +534,7 @@ it('never lets a browser write an assist marker', function () {
     expect(ReplayMarker::query()->where('type', 'assist')->count())->toBe(0);
 });
 
-it('refuses an offer of help without packstub/calls', function () {
+it('refuses an offer of help without packstub/holler', function () {
     $browser = $this->browser();
 
     $this->actingAs($this->staff())->postJson(route('session-replay.assist.propose', $browser['session']))->assertStatus(422)->assertJson(['reason' => 'no_calls']);

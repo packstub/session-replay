@@ -1,9 +1,9 @@
 <?php
 
 use Illuminate\Support\Facades\Event;
-use Packstub\Calls\Calls as CallsService;
-use Packstub\Calls\Facades\Calls;
-use Packstub\Calls\Models\Call;
+use Packstub\Holler\Facades\Holler;
+use Packstub\Holler\Holler as CallsService;
+use Packstub\Holler\Models\Call;
 use Packstub\SessionReplay\Events\AssistEnded;
 use Packstub\SessionReplay\Events\AssistStarted;
 use Packstub\SessionReplay\Facades\SessionReplay;
@@ -41,7 +41,7 @@ it('creates the call when the page acknowledges the claim, not before', function
     Event::assertDispatchedTimes(AssistStarted::class, 1);
 
     // What the page's RTCPeerConnection needs comes with the call, not before.
-    expect($poll->json('rtc'))->toBe(['iceServers' => Calls::rtcConfiguration()['iceServers'], 'iceTransportPolicy' => 'all']);
+    expect($poll->json('rtc'))->toBe(['iceServers' => Holler::rtcConfiguration()['iceServers'], 'iceTransportPolicy' => 'all']);
 
     // Polls after it reuse the call, held by the tab.
     $this->poll($asked['id'], $asked['secret'], $browser['token'], ['tab' => 'tab-1'])->assertJson(['status' => 'active', 'call' => ['id' => $call->id, 'held' => false]]);
@@ -49,13 +49,13 @@ it('creates the call when the page acknowledges the claim, not before', function
     expect(Call::query()->count())->toBe(1);
 });
 
-it('keeps the assist call away from the Calls widget, which polls for kind=call', function () {
+it('keeps the assist call away from the Holler widget, which polls for kind=call', function () {
     [$browser, $asked, $agent] = $this->claimed();
 
     $this->poll($asked['id'], $asked['secret'], $browser['token'], ['tab' => 'tab-1'])->assertJson(['status' => 'active']);
 
-    expect(Calls::poll((string) $agent->id, kind: 'call')['call'])->toBeNull()
-        ->and(Calls::poll((string) $agent->id, kind: 'assist')['call']['kind'])->toBe('assist');
+    expect(Holler::poll((string) $agent->id, kind: 'call')['call'])->toBeNull()
+        ->and(Holler::poll((string) $agent->id, kind: 'assist')['call']['kind'])->toBe('assist');
 });
 
 it('relays signals both ways, with a session description left as it was sent', function () {
@@ -66,13 +66,13 @@ it('relays signals both ways, with a session description left as it was sent', f
 
     $this->visitorPost('signal', $asked['id'], $asked['secret'], $browser['token'], ['type' => 'offer', 'payload' => ['type' => 'offer', 'sdp' => $sdp]])->assertCreated();
 
-    $theirs = Calls::poll((string) $agent->id, 0, $call, 'agent-tab', hold: true, kind: 'assist');
+    $theirs = Holler::poll((string) $agent->id, 0, $call, 'agent-tab', hold: true, kind: 'assist');
 
     expect($theirs['signals'])->toHaveCount(1)
         ->and($theirs['signals'][0]['payload']['sdp'])->toBe($sdp)
         ->and($theirs['signals'][0]['from'])->toBe('guest:'.$asked['id']);
 
-    Calls::signal(Call::query()->with('participants')->find($call), (string) $agent->id, 'answer', ['type' => 'answer', 'sdp' => 'v=0']);
+    Holler::signal(Call::query()->with('participants')->find($call), (string) $agent->id, 'answer', ['type' => 'answer', 'sdp' => 'v=0']);
 
     $mine = $this->poll($asked['id'], $asked['secret'], $browser['token'], ['tab' => 'tab-1'])->assertOk();
 
@@ -85,8 +85,8 @@ it('relays signals both ways, with a session description left as it was sent', f
     $this->visitorPost('signal', $asked['id'], 'wrong', $browser['token'], ['type' => 'ice', 'payload' => ['candidate' => 'x']])->assertForbidden();
 });
 
-it('caps a signal\'s size the way Calls does', function () {
-    config()->set('packstub-calls.max_signal_kb', 1);
+it('caps a signal\'s size the way Holler does', function () {
+    config()->set('holler.max_signal_kb', 1);
 
     [$browser, $asked] = $this->claimed();
 
@@ -104,7 +104,7 @@ it('ends the request with Calls\' reason when the agent hangs up', function () {
 
     $call = $this->poll($asked['id'], $asked['secret'], $browser['token'], ['tab' => 'tab-1'])->json('call.id');
 
-    Calls::hangup(Call::query()->with('participants')->find($call), (string) $agent->id);
+    Holler::hangup(Call::query()->with('participants')->find($call), (string) $agent->id);
 
     expect(AssistRequest::query()->sole())->status->toBe('ended')->end_reason->toBe('hung_up');
 
@@ -142,9 +142,9 @@ it('frees the guest\'s side when the page unloads, so the next page takes it', f
     $this->poll($asked['id'], $asked['secret'], $browser['token'], ['tab' => 'tab-2'])->assertJson(['call' => ['held' => false]]);
 });
 
-it('refuses a claim when the viewer and Calls see different people', function () {
+it('refuses a claim when the viewer and Holler see different people', function () {
     config()->set('auth.guards.calls', ['driver' => 'session', 'provider' => 'users']);
-    config()->set('packstub-calls.guard', 'calls');
+    config()->set('holler.guard', 'calls');
 
     $asked = $this->asked($this->browser());
 
@@ -297,7 +297,7 @@ it('ends the assist when the agent starts another call, since an agent helps one
 
     $this->poll($asked['id'], $asked['secret'], $browser['token'], ['tab' => 'tab-1'])->assertJson(['status' => 'active']);
 
-    Calls::start($agent, $this->user());
+    Holler::start($agent, $this->user());
 
     expect(AssistRequest::query()->sole()->status)->toBe('ended');
 });
@@ -314,7 +314,7 @@ it('rings the agent on the guard they claimed through, not the default guard of 
 
     expect((string) $admin->id)->toBe((string) $customer->id);
 
-    // The agent's request: the panel made its guard the default (Filament does), the viewer and Calls follow it.
+    // The agent's request: the panel made its guard the default (Filament does), the viewer and Holler follow it.
     $this->actingAs($admin, 'admin')->postJson(route('session-replay.assist.claim', $asked['id']))->assertOk();
 
     expect(AssistRequest::query()->sole())
@@ -336,12 +336,12 @@ it('rings the agent on the guard they claimed through, not the default guard of 
     // The panel's poll (its scope) sees the call; the visitor's own default guard never named anyone in it.
     auth()->shouldUse('admin');
 
-    expect(Calls::poll((string) $admin->id, kind: 'assist')['call']['id'])->toBe($call->id);
+    expect(Holler::poll((string) $admin->id, kind: 'assist')['call']['id'])->toBe($call->id);
 });
 
-it('refuses claims and offers while Calls sits on another database than Session Replay', function () {
+it('refuses claims and offers while Holler sits on another database than Session Replay', function () {
     config()->set('session-replay.storage.connection', 'sqlite');
-    config()->set('packstub-calls.connection', null);
+    config()->set('holler.connection', null);
 
     $live = $this->browser();
     $asked = $this->asked($this->browser());
@@ -352,7 +352,7 @@ it('refuses claims and offers while Calls sits on another database than Session 
 
     expect(AssistRequest::query()->sole()->status)->toBe('open');
 
-    config()->set('packstub-calls.connection', 'sqlite');
+    config()->set('holler.connection', 'sqlite');
 
     $this->postJson(route('session-replay.assist.claim', $asked['id']))->assertOk();
 });
@@ -420,7 +420,7 @@ it('keeps the request when the agent leaves the live view, and puts both on a ne
         ->and($second->id)->not->toBe($first)
         ->and($second->status)->toBe('active')
         ->and($second->kind)->toBe('assist')
-        ->and(Calls::poll((string) $agent->id, kind: 'assist')['call']['id'])->toBe($second->id);
+        ->and(Holler::poll((string) $agent->id, kind: 'assist')['call']['id'])->toBe($second->id);
 
     $request->refresh();
 
@@ -458,8 +458,8 @@ it('counts max_duration from the start of the assist while it waits for the agen
     $this->poll($asked['id'], $asked['secret'], $browser['token'], ['tab' => 'tab-1'])->assertJson(['status' => 'ended', 'end_reason' => 'max_duration']);
 });
 
-it('still ends the request when it is the visitor\'s page that Calls drops', function () {
-    config()->set('packstub-calls.reconnect_timeout', 6);
+it('still ends the request when it is the visitor\'s page that Holler drops', function () {
+    config()->set('holler.reconnect_timeout', 6);
     $this->freezeSecond();
 
     [$browser, $asked, $agent] = $this->claimed();
@@ -469,7 +469,7 @@ it('still ends the request when it is the visitor\'s page that Calls drops', fun
     // The page is gone; the agent's stage polls on.
     for ($i = 0; $i < 4; $i++) {
         $this->travel(2)->seconds();
-        Calls::poll((string) $agent->id, 0, $call, 'agent-tab', hold: true, kind: 'assist');
+        Holler::poll((string) $agent->id, 0, $call, 'agent-tab', hold: true, kind: 'assist');
     }
 
     expect(AssistRequest::query()->sole())->status->toBe('ended')->end_reason->toBe('dropped');

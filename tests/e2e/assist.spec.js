@@ -179,7 +179,7 @@ test('an agent claims a request and helps on the live stage: mirror, control, an
     await agentContext.close();
 });
 
-test('an agent who leaves the live view for longer than Calls waits comes back to the same request on a new call', async ({ browser }) => {
+test('an agent who leaves the live view for longer than Holler waits comes back to the same request on a new call', async ({ browser }) => {
     const visitorContext = await browser.newContext();
     const agentContext = await browser.newContext();
 
@@ -211,7 +211,7 @@ test('an agent who leaves the live view for longer than Calls waits comes back t
     const callOf = async () => (await agent.evaluate(async (url) => (await (await fetch(url.replace(/\/stage$/, '/status'), { headers: { Accept: 'application/json' } })).json()).call, stageUrl));
     const firstCall = await callOf();
 
-    // Ana leaves the live view for longer than Calls waits for a side (CALLS_RECONNECT_TIMEOUT=6 in this run).
+    // Ana leaves the live view for longer than Holler waits for a side (HOLLER_RECONNECT_TIMEOUT=6 in this run).
     await agent.goto('/agent');
     await expect(visitor.getByText(/stepped away and is reconnecting/)).toBeVisible({ timeout: 30_000 });
     await agent.waitForTimeout(3_000);

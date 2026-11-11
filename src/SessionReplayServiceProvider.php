@@ -14,7 +14,7 @@ use Illuminate\Support\Facades\Event;
 use Illuminate\Support\Facades\RateLimiter;
 use Illuminate\Support\Facades\Route;
 use Illuminate\Support\ServiceProvider;
-use Packstub\Calls\Events\CallEnded;
+use Packstub\Holler\Events\CallEnded;
 use Packstub\SessionReplay\Commands\PruneCommand;
 use Packstub\SessionReplay\Http\Controllers\AssistAgentController;
 use Packstub\SessionReplay\Http\Controllers\AssistController;
@@ -187,7 +187,7 @@ class SessionReplayServiceProvider extends PackageServiceProvider
 
     /**
      * Assist: a WebRTC description ends in CRLF and the parser wants it there, so the signals route is never trimmed
-     * (Calls' own skip matches its routes only); an assist call that ends ends its request.
+     * (Holler's own skip matches its routes only); an assist call that ends ends its request.
      */
     protected function bootAssist(): void
     {

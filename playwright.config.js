@@ -1,7 +1,7 @@
 // End-to-end: Assist for real between two browsers on the workbench (`composer serve`'s app): a visitor whose
 // page records and asks for help, and an agent who claims the request and works on the live stage. Headless
 // Chromium with a fake microphone and camera; WebRTC over loopback. `npm run test:e2e` (the server is started
-// here, with packstub/calls installed from the sibling checkout as AGENTS.md describes).
+// here, with packstub/holler installed from the sibling checkout as AGENTS.md describes).
 
 import { defineConfig, devices } from '@playwright/test';
 import { writeFileSync } from 'node:fs';
@@ -58,9 +58,9 @@ export default defineConfig({
     projects: [{ name: 'chromium', use: { ...devices['Desktop Chrome'] } }],
 
     webServer: {
-        // Several PHP workers: the visitor's page and the agent's stage poll at the same time. Calls drops a side
+        // Several PHP workers: the visitor's page and the agent's stage poll at the same time. Holler drops a side
         // after 6 s instead of 15, so the test of an agent leaving the live view and coming back is quick.
-        command: `php vendor/bin/testbench workbench:build && CALLS_RECONNECT_TIMEOUT=6 PHP_CLI_SERVER_WORKERS=8 php vendor/bin/testbench serve --port=${PORT}`,
+        command: `php vendor/bin/testbench workbench:build && HOLLER_RECONNECT_TIMEOUT=6 PHP_CLI_SERVER_WORKERS=8 php vendor/bin/testbench serve --port=${PORT}`,
         url: `${BASE_URL}/login`,
         reuseExistingServer: !process.env.CI,
         timeout: 180_000,

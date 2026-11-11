@@ -6,7 +6,7 @@ use Illuminate\Foundation\Events\Dispatchable;
 use Packstub\SessionReplay\Models\AssistRequest;
 
 /**
- * An agent took a visitor's request ($request->agent_id). Without packstub/calls this is where an app reaches out
+ * An agent took a visitor's request ($request->agent_id). Without packstub/holler this is where an app reaches out
  * through its own channels (chat, email): there is no live part.
  */
 class AssistClaimed

@@ -2,7 +2,7 @@
 
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\Route;
-use Packstub\Calls\Facades\Calls;
+use Packstub\Holler\Facades\Holler;
 use Packstub\SessionReplay\Tests\Fixtures\Models\User;
 
 Route::middleware('web')->group(function () {
@@ -24,8 +24,8 @@ Route::middleware('web')->group(function () {
         return redirect()->route('session-replay.assist.index');
     });
 
-    // The live stage runs its own Calls client over Calls' routes, as a plain app registers them.
-    if (class_exists(Calls::class)) {
-        Calls::routes();
+    // The live stage runs its own Holler client over Holler's routes, as a plain app registers them.
+    if (class_exists(Holler::class)) {
+        Holler::routes();
     }
 });

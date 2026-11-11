@@ -6,8 +6,8 @@ use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Http\Response;
 use Illuminate\Support\Str;
-use Packstub\Calls\Exceptions\CallException;
-use Packstub\Calls\Models\CallSignal;
+use Packstub\Holler\Exceptions\CallException;
+use Packstub\Holler\Models\CallSignal;
 use Packstub\SessionReplay\Exceptions\AssistRefused;
 use Packstub\SessionReplay\Http\Concerns\ReadsRecorderToken;
 use Packstub\SessionReplay\Models\AssistRequest;
@@ -360,7 +360,7 @@ class AssistController
         return null;
     }
 
-    /** The window's id, as Calls takes it: letters, digits, dashes and underscores, up to 64. */
+    /** The window's id, as Holler takes it: letters, digits, dashes and underscores, up to 64. */
     protected function tab(Request $request): ?string
     {
         $tab = $request->input('tab');

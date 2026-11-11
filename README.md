@@ -102,10 +102,10 @@ See [Privacy](docs/privacy.md) for masking, consent and wording for your privacy
 | [Watching replays](docs/watching.md) | The gate, the built-in viewer, the player component, models and scopes |
 | [Storage](docs/storage.md) | Disk layout, tables, multi-tenant apps, sizes and limits, pruning |
 | [Error tracking](docs/error-tracking.md) | The recording's id and URL in Laravel's `Context` |
-| [Assist](docs/assist.md) | Help requests: a visitor asks (`SessionReplay.assist.request()` or a "Get help" button), support claims it or offers help from the Live tab; with Calls for Laravel, a live stage in the viewer: the visitor's page mirrored as it happens, remote control, annotations, audio and screen share, each with the visitor's consent |
+| [Assist](docs/assist.md) | Help requests: a visitor asks (`SessionReplay.assist.request()` or a "Get help" button), support claims it or offers help from the Live tab; with Holler for Laravel, a live stage in the viewer: the visitor's page mirrored as it happens, remote control, annotations, audio and screen share, each with the visitor's consent |
 | [Configuration](docs/configuration.md) | Every key in `config/session-replay.php` |
 
-Assist's help-request queue works with this package alone. Its live view runs on [Calls for Laravel](https://github.com/packstub/calls) (`packstub/calls`), and in a Filament panel also on [Filament Calls](https://github.com/packstub/filament-calls); both are released separately, so see their READMEs for how to install them.
+Assist's help-request queue works with this package alone. Its live view runs on [Holler for Laravel](https://github.com/packstub/holler) (`packstub/holler`), and in a Filament panel also on [Filament Holler](https://github.com/packstub/filament-holler); both are released separately, so see their READMEs for how to install them.
 
 Guide: [Session replay in Laravel and Filament, on your own server](https://packstub.dev/guides/laravel-session-replay-self-hosted), a walkthrough from the first recording to watching it behind your own gate, with measured storage sizes.
 
@@ -125,7 +125,7 @@ composer lint     # Pint
 npm test          # the recorder's and the stage's pure functions
 npm run build     # resources/js -> resources/dist
 composer serve    # a page to record and the viewer, on :8000 (/agent signs in as support for Assist)
-npm run test:e2e  # Assist end to end in two Chromium browsers (needs packstub/calls, see AGENTS.md)
+npm run test:e2e  # Assist end to end in two Chromium browsers (needs packstub/holler, see AGENTS.md)
 ```
 
 ## Credits

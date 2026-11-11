@@ -1,7 +1,7 @@
 /**
  * Timers for Assist's poll loops: setTimeout in a Web Worker. A hidden tab's
  * own timers slow to once a minute, which would lose the side of the call
- * Calls holds for a window (5 s) and look like a drop to the other side.
+ * Holler holds for a window (5 s) and look like a drop to the other side.
  * No package imports here: the node tests load the visitor's code without
  * node_modules.
  */

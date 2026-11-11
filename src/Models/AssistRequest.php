@@ -21,7 +21,7 @@ use Packstub\SessionReplay\Support\ContextToken;
  *   open     → declined   "Not now" on an agent's proposal
  *   open|claimed → expired     a proposal unanswered, or a page that stopped polling
  *   open     → withdrawn  the agent takes the proposal back, or may not help any more when the visitor accepts
- *   claimed|active → ended     the call ended (with Calls' reason), the agent ended it, max_duration
+ *   claimed|active → ended     the call ended (with Holler's reason), the agent ended it, max_duration
  *
  * @property string $id
  * @property string|null $secret_hash
@@ -152,7 +152,7 @@ class AssistRequest extends ReplayModel
         return $this->status === self::CLAIMED && $this->started_at !== null;
     }
 
-    /** The id the visitor has on the Calls call: always this, also for a signed-in visitor. */
+    /** The id the visitor has on the Holler call: always this, also for a signed-in visitor. */
     public function guestId(): string
     {
         return 'guest:'.$this->id;

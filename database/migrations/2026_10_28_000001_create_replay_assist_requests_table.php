@@ -49,7 +49,7 @@ return new class extends Migration
             }
 
             // The agent as the request they claimed or proposed from saw them: the viewer guard's key, the morph class of
-            // that guard's user, the guard's name and Calls' scope there. The call is created later in the visitor's
+            // that guard's user, the guard's name and Holler's scope there. The call is created later in the visitor's
             // request, where no panel is active: the agent is loaded and rung from these, never from the default guard.
             $table->string('agent_id', 64)->nullable();
             $table->string('agent_type')->nullable();

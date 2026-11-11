@@ -140,7 +140,7 @@ Help requests, off by default; see [Assist](assist.md#configuration) for what ea
 | Key | Default | Meaning |
 | --- | --- | --- |
 | `assist.enabled` | `false` | `SESSION_REPLAY_ASSIST`. The visitor's and the agent's routes, the Requests page, the knock in the upload answer. |
-| `assist.calls` | `true` | `SESSION_REPLAY_ASSIST_CALLS`. Use `packstub/calls` when installed. |
+| `assist.calls` | `true` | `SESSION_REPLAY_ASSIST_CALLS`. Use `packstub/holler` when installed. |
 | `assist.watch_consent` | `false` | `SESSION_REPLAY_ASSIST_WATCH_CONSENT`. The visitor accepts before the agent joins. |
 | `assist.requests_per_hour` | `6` | `SESSION_REPLAY_ASSIST_REQUESTS_PER_HOUR`. New requests per person (guests: per page) per hour. |
 | `assist.max_open_requests` | `100` | `SESSION_REPLAY_ASSIST_MAX_OPEN_REQUESTS`. Requests going at once per workspace (no workspace counts as one); past it, 429. |
@@ -154,7 +154,7 @@ Help requests, off by default; see [Assist](assist.md#configuration) for what ea
 | `assist.control_masked` | `false` | `SESSION_REPLAY_ASSIST_CONTROL_MASKED`. Remote typing into masked fields, after its own question. |
 | `assist.heartbeat_seconds` | `15` | A visible tab's heartbeat, which brings an agent's offer. |
 | `assist.poll.waiting_ms` / `assist.poll.active_ms` | `3000` / `2000` | How often the visitor's page polls its request while it waits / during an assist. |
-| `assist.calls_routes` | `calls.` | The name prefix of Calls' routes (`Calls::routes(as: …)`) that the agent's live stage polls. |
+| `assist.calls_routes` | `calls.` | The name prefix of Holler's routes (`Holler::routes(as: …)`) that the agent's live stage polls. |
 
 ## Log context
 

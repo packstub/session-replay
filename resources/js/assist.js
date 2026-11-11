@@ -1,4 +1,4 @@
-import { drain } from '@packstub/calls';
+import { drain } from '@packstub/holler';
 import { AssistClient } from './lib/assist-client.js';
 import { installAssist as install } from './lib/assist-visitor.js';
 
@@ -7,7 +7,7 @@ import { installAssist as install } from './lib/assist-visitor.js';
  * resources/dist/assist.js): the visitor's code (lib/assist-visitor.js) with
  * the calls engine handed in. The visitor's code takes the engine by
  * injection, so its node tests run on a fake and never need the
- * @packstub/calls package.
+ * @packstub/holler package.
  */
 export function installAssist(recorder, env = {}) {
     return install(recorder, { Client: AssistClient, drain, ...env });

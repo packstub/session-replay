@@ -41,11 +41,11 @@ it('keeps the active poll under Calls\' hold and turns on the button and masked 
         ->and($assist['poll']['active'])->toBe(4000);
 });
 
-it('keeps the agent\'s stage polling Calls under its hold, however slow Calls\' own active poll is set', function () {
-    config()->set('packstub-calls.poll.active', 8000);
+it('keeps the agent\'s stage polling Holler under its hold, however slow Calls\' own active poll is set', function () {
+    config()->set('holler.poll.active', 8000);
     expect(app(Assist::class)->callsPollMs())->toBe(4000);
 
-    config()->set('packstub-calls.poll.active', 1500);
+    config()->set('holler.poll.active', 1500);
     expect(app(Assist::class)->callsPollMs())->toBe(1500);
 });
 

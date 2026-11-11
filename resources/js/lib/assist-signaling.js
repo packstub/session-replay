@@ -1,7 +1,7 @@
 /**
- * The visitor's signaling for an assist call: the @packstub/calls signaling
- * interface over Session Replay's visitor routes instead of the Calls routes
- * (which sit behind `auth`). The request's poll is the guest's Calls poll, so
+ * The visitor's signaling for an assist call: the @packstub/holler signaling
+ * interface over Session Replay's visitor routes instead of the Holler routes
+ * (which sit behind `auth`). The request's poll is the guest's Holler poll, so
  * `poll()` also hands the request's own state (status, agent, consent) to
  * `onPoll`. Every request is a POST with the secret and the token in the body:
  * never in a URL, which access logs and proxies keep.
@@ -113,10 +113,10 @@ export class AssistSignaling {
         return this.request(this.routes.heartbeat, this.body({}, { recording: true, secret: false }));
     }
 
-    // ---- the @packstub/calls signaling interface ----------------------------
+    // ---- the @packstub/holler signaling interface ----------------------------
 
     /**
-     * The request's poll, which is the guest's Calls poll once a call exists.
+     * The request's poll, which is the guest's Holler poll once a call exists.
      * Carries the recording's triple when `rebind` says the tab's recording
      * changed, so the request follows it.
      */

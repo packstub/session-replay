@@ -9,7 +9,7 @@
         "test:e2e": "playwright test"
     },
     "devDependencies": {
-        "@packstub/calls": "github:packstub/calls-js",
+        "@packstub/holler": "github:packstub/holler-js",
         "@playwright/test": "^1.64.1",
         "@rrweb/record": "^2.2.0",
         "@rrweb/replay": "^2.2.0",

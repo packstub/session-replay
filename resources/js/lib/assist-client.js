@@ -1,4 +1,4 @@
-import { CallClient } from '@packstub/calls';
+import { CallClient } from '@packstub/holler';
 import { workerTimers } from './worker-timers.js';
 
 export { workerTimers };
@@ -6,7 +6,7 @@ export { workerTimers };
 /**
  * What both sides of Assist run the engine with: a CallClient whose poll loop
  * sits on a Web Worker timer. A hidden tab's own timers slow to once a minute,
- * which would lose the side of the call Calls holds for a window (5 s) and
+ * which would lose the side of the call Holler holds for a window (5 s) and
  * look like a drop to the other side. The visitor's page (assist.js) and the
  * agent's stage (stage.js) both use it.
  */

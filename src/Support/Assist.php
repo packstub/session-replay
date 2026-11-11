@@ -14,11 +14,11 @@ use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Str;
-use Packstub\Calls\Calls;
-use Packstub\Calls\Contracts\CallContext;
-use Packstub\Calls\Models\Call;
-use Packstub\Calls\Models\CallParticipant;
-use Packstub\Calls\Participant;
+use Packstub\Holler\Contracts\CallContext;
+use Packstub\Holler\Holler;
+use Packstub\Holler\Models\Call;
+use Packstub\Holler\Models\CallParticipant;
+use Packstub\Holler\Participant;
 use Packstub\SessionReplay\Events\AssistClaimed;
 use Packstub\SessionReplay\Events\AssistEnded;
 use Packstub\SessionReplay\Events\AssistRequested;
@@ -33,19 +33,19 @@ use Throwable;
 
 /**
  * Assist requests: a visitor asks for help, an agent claims it, or an agent
- * offers help from a live session; with packstub/calls installed the visitor's
- * page and the agent are put on a Calls call (kind "assist") when the page
+ * offers help from a live session; with packstub/holler installed the visitor's
+ * page and the agent are put on a Holler call (kind "assist") when the page
  * acknowledges. The timeouts run inside the visitor's poll and the agent's
- * queue poll, the way Calls expires calls inside its poll: no scheduler.
+ * queue poll, the way Holler expires calls inside its poll: no scheduler.
  *
- * Everything about Calls is behind callsAvailable(): without the package a
+ * Everything about Holler is behind callsAvailable(): without the package a
  * request is a plain queue (open, claimed, ended by the agent).
  *
  * @internal Wired by the package; the routes and the Filament package use it.
  */
 class Assist
 {
-    /** The Calls kind of an assist call, so the Calls widget (which polls kind=call) never sees it. */
+    /** The Holler kind of an assist call, so the Holler widget (which polls kind=call) never sees it. */
     public const KIND = 'assist';
 
     /**
@@ -65,16 +65,16 @@ class Assist
         return (bool) config('session-replay.assist.enabled', false);
     }
 
-    /** How often the agent's stage polls Calls during the call: Calls' own `poll.active` (ms), kept between 250 ms and a second under Calls' hold. */
+    /** How often the agent's stage polls Holler during the call: Holler's own `poll.active` (ms), kept between 250 ms and a second under Holler's hold. */
     public function callsPollMs(): int
     {
-        $ms = config('packstub-calls.poll.active');
+        $ms = config('holler.poll.active');
 
         return is_numeric($ms) ? (int) min($this->callsPollCeilingMs(), max(250, (int) $ms)) : 1000;
     }
 
     /**
-     * The longest gap between two polls of a side in a call: a second under Calls' hold (a window that
+     * The longest gap between two polls of a side in a call: a second under Holler's hold (a window that
      * stops polling for `Call::HOLD_SECONDS` lets go of its side, and the other end sees it reconnecting).
      */
     public function callsPollCeilingMs(): int
@@ -84,17 +84,17 @@ class Assist
         return max(500, ($hold - 1) * 1000);
     }
 
-    /** Whether Calls lets a call carry video (its `video` setting, through the context). */
+    /** Whether Holler lets a call carry video (its `video` setting, through the context). */
     public function videoAllowed(): bool
     {
         return $this->callsAvailable() && app(CallContext::class)->hasVideo();
     }
 
-    /** packstub/calls is installed and booted, and assist.calls leaves it on. */
+    /** packstub/holler is installed and booted, and assist.calls leaves it on. */
     public function callsAvailable(): bool
     {
         return (bool) config('session-replay.assist.calls', true)
-            && class_exists(Calls::class)
+            && class_exists(Holler::class)
             && app()->bound(CallContext::class);
     }
 
@@ -220,7 +220,7 @@ class Assist
 
     /**
      * The visitor's poll: the page is here, the timeouts run, a claim is acknowledged (the call is created), and
-     * once a call exists the page's Calls poll is made for it (hold: the page keeps the guest's side).
+     * once a call exists the page's Holler poll is made for it (hold: the page keeps the guest's side).
      *
      * @return array<string, mixed>
      */
@@ -260,7 +260,7 @@ class Assist
         }
 
         if (! $this->callsAvailable()) {
-            throw new AssistRefused(409, 'Live help needs packstub/calls.', 'no_calls');
+            throw new AssistRefused(409, 'Live help needs packstub/holler.', 'no_calls');
         }
 
         // The agent's rights may have changed since they offered or claimed (a role taken away, the person removed):
@@ -315,7 +315,7 @@ class Assist
     }
 
     /**
-     * Queue a WebRTC signal as the guest (Calls::signal()).
+     * Queue a WebRTC signal as the guest (Holler::signal()).
      *
      * @param  array<string, mixed>  $payload
      *
@@ -325,7 +325,7 @@ class Assist
     {
         $call = $this->liveCall($request);
 
-        return app(Calls::class)->signal($call, $request->guestId(), $type, $payload, $to)?->getKey();
+        return app(Holler::class)->signal($call, $request->guestId(), $type, $payload, $to)?->getKey();
     }
 
     /**
@@ -532,7 +532,7 @@ class Assist
     public function propose(Authenticatable $agent, ReplaySession $session): AssistRequest
     {
         if (! $this->callsAvailable()) {
-            throw new AssistRefused(422, 'Offering help needs packstub/calls.', 'no_calls');
+            throw new AssistRefused(422, 'Offering help needs packstub/holler.', 'no_calls');
         }
 
         if (! $session->isLive()) {
@@ -723,8 +723,8 @@ class Assist
                 && $this->finish($request, [AssistRequest::CLAIMED], AssistRequest::ENDED, 'max_duration');
         }
 
-        // Active: Calls drops a side that stops polling (and the CallEnded listener ends the request), but only while
-        // someone polls Calls; a page nobody has heard from past the visitor timeout is gone either way.
+        // Active: Holler drops a side that stops polling (and the CallEnded listener ends the request), but only while
+        // someone polls Holler; a page nobody has heard from past the visitor timeout is gone either way.
         if ($request->started_at?->lt($maxDuration) === true) {
             return $this->finish($request, [AssistRequest::ACTIVE], AssistRequest::ENDED, 'max_duration');
         }
@@ -734,7 +734,7 @@ class Assist
     }
 
     /**
-     * A live request whose Calls call is over (or gone) ends too, with Calls' reason: the CallEnded listener does this
+     * A live request whose Holler call is over (or gone) ends too, with Holler's reason: the CallEnded listener does this
      * as it happens, this catches what it missed (a call ended on another connection, a listener that failed).
      */
     public function reconcile(AssistRequest $request): void
@@ -751,7 +751,7 @@ class Assist
     }
 
     /**
-     * The CallEnded listener: the assist on that call ends with Calls' reason (hung_up, dropped…), unless only the
+     * The CallEnded listener: the assist on that call ends with Holler's reason (hung_up, dropped…), unless only the
      * agent went away (callOver()).
      */
     public function callEnded(Call $call): void
@@ -767,8 +767,8 @@ class Assist
     }
 
     /**
-     * The call of a live request is over. When Calls dropped the agent's side (they left the live view: navigated
-     * away, closed the tab, lost the network for longer than packstub-calls.reconnect_timeout) while the visitor's
+     * The call of a live request is over. When Holler dropped the agent's side (they left the live view: navigated
+     * away, closed the tab, lost the network for longer than holler.reconnect_timeout) while the visitor's
      * page was still on it, the request goes back to claimed without a call: the visitor's page says the agent is
      * reconnecting, and the visitor's poll makes a new call once the agent's stage polls again. An agent who does not
      * come back within claim_timeout_seconds lets the claim lapse, as an unanswered claim does. Anything else ends it.
@@ -786,7 +786,7 @@ class Assist
         $this->finish($request, AssistRequest::PENDING, AssistRequest::ENDED, (string) ($call?->end_reason ?? 'ended'), hangUp: false);
     }
 
-    /** Calls ended the call because the agent's side stopped polling, and the visitor's side was still there. */
+    /** Holler ended the call because the agent's side stopped polling, and the visitor's side was still there. */
     protected function agentWentAway(AssistRequest $request, Call $call): bool
     {
         if ($call->end_reason !== 'dropped' || $request->agent_id === null) {
@@ -824,8 +824,8 @@ class Assist
             $call = Call::query()->find($request->call_id);
 
             if ($call !== null) {
-                // Calls' end_reason is 16 characters.
-                app(Calls::class)->end($call, Str::limit($reason, 16, ''));
+                // Holler's end_reason is 16 characters.
+                app(Holler::class)->end($call, Str::limit($reason, 16, ''));
             }
         }
 
@@ -842,7 +842,7 @@ class Assist
     // ------------------------------------------------------------------
 
     /**
-     * The visitor's view: their request, the agent's name and avatar, and once a call exists the page's Calls poll
+     * The visitor's view: their request, the agent's name and avatar, and once a call exists the page's Holler poll
      * (the call as the guest sees it, the signals for the guest and the cursor). Nobody else's identifiers.
      *
      * @return array<string, mixed>
@@ -852,11 +852,11 @@ class Assist
         $poll = ['call' => null, 'signals' => [], 'cursor' => $after, 'rtc' => null];
 
         if ($request->call_id !== null && $this->callsAvailable()) {
-            $calls = app(Calls::class)->poll($request->guestId(), $after, $request->call_id, $tab, $hold, self::KIND);
+            $calls = app(Holler::class)->poll($request->guestId(), $after, $request->call_id, $tab, $hold, self::KIND);
             // What the page's RTCPeerConnection needs (ICE servers, transport policy): only once there is a call.
-            $poll = ['call' => $calls['call'], 'signals' => $calls['signals'], 'cursor' => $calls['cursor'], 'rtc' => $calls['call'] === null ? null : app(Calls::class)->rtcConfiguration()];
+            $poll = ['call' => $calls['call'], 'signals' => $calls['signals'], 'cursor' => $calls['cursor'], 'rtc' => $calls['call'] === null ? null : app(Holler::class)->rtcConfiguration()];
 
-            // This very poll may have ended the call (Calls drops a side inside its poll): the page hears what became
+            // This very poll may have ended the call (Holler drops a side inside its poll): the page hears what became
             // of the request now, not on its next poll.
             if (($calls['call']['status'] ?? null) === Call::ENDED) {
                 $request->refresh();
@@ -925,13 +925,13 @@ class Assist
     // ------------------------------------------------------------------
 
     /**
-     * Put the visitor and the agent on a Calls call and mark the request active, once: the status moves first (one
-     * UPDATE from $from), and only the poll that moved it creates the call, outside any transaction (Calls may sit on
+     * Put the visitor and the agent on a Holler call and mark the request active, once: the status moves first (one
+     * UPDATE from $from), and only the poll that moved it creates the call, outside any transaction (Holler may sit on
      * another connection, where a rollback here would leave its call behind). A call that cannot be created, or that
      * the request no longer wants, is ended again. The guest answers at once (the visitor asked, or just accepted).
      *
      * This runs in the visitor's request, where no panel is active: the agent is loaded from what the claim or the
-     * proposal stored (their type, guard and Calls scope), never through the default guard.
+     * proposal stored (their type, guard and Holler scope), never through the default guard.
      *
      * @param  array<int, string>  $from
      */
@@ -944,7 +944,7 @@ class Assist
             return false;
         }
 
-        $calls = app(Calls::class);
+        $calls = app(Holler::class);
         $call = null;
 
         try {
@@ -972,7 +972,7 @@ class Assist
                 try {
                     $calls->end($call, 'call_failed');
                 } catch (Throwable) {
-                    // Calls' own timeouts end it.
+                    // Holler's own timeouts end it.
                 }
             }
 
@@ -1092,7 +1092,7 @@ class Assist
 
     /**
      * Under a database per tenant the visitor's request and the agent's panel run on different default connections:
-     * Session Replay's storage.connection points both at the central database, and Calls must sit on the same one,
+     * Session Replay's storage.connection points both at the central database, and Holler must sit on the same one,
      * or the agent's panel polls a calls table the visitor's call never reaches.
      *
      * @throws AssistRefused
@@ -1105,7 +1105,7 @@ class Assist
             return;
         }
 
-        if (config('packstub-calls.connection') !== $storage) {
+        if (config('holler.connection') !== $storage) {
             throw new AssistRefused(409, __('session-replay::viewer.assist.connection_mismatch'), 'connection_mismatch');
         }
     }
@@ -1120,8 +1120,8 @@ class Assist
     }
 
     /**
-     * The agent must be the same person to Calls as to the viewer: Calls rings the id the viewer guard gave, and the
-     * agent's browser polls Calls as Calls' guard sees them. Two different guards would create a call the agent's
+     * The agent must be the same person to Holler as to the viewer: Holler rings the id the viewer guard gave, and the
+     * agent's browser polls Holler as Holler's guard sees them. Two different guards would create a call the agent's
      * client never sees.
      *
      * @throws AssistRefused
@@ -1132,7 +1132,7 @@ class Assist
             return;
         }
 
-        $calls = app(Calls::class);
+        $calls = app(Holler::class);
         $id = (string) $agent->getAuthIdentifier();
         $found = $calls->currentUserId() === $id ? $calls->findUser($id) : null;
 
@@ -1193,11 +1193,11 @@ class Assist
     }
 
     /**
-     * The agent as the visitor sees them, stored on the request when it is claimed or proposed: Calls' name and
-     * avatar for them when Calls is there, so both say the same, or else the model's name.
+     * The agent as the visitor sees them, stored on the request when it is claimed or proposed: Holler's name and
+     * avatar for them when Holler is there, so both say the same, or else the model's name.
      *
      * Also who they are to the place they acted from: the morph class of the viewer guard's user, that guard's name
-     * and Calls' scope there, which the visitor's request (no panel, the default guard) uses to load and ring them.
+     * and Holler's scope there, which the visitor's request (no panel, the default guard) uses to load and ring them.
      *
      * @return array{agent_id: string, agent_type: string, agent_guard: ?string, agent_scope: ?string, agent_name: string, agent_avatar: ?string}
      */
@@ -1207,7 +1207,7 @@ class Assist
         $avatar = null;
 
         if ($this->callsAvailable()) {
-            $who = app(Calls::class)->who($agent);
+            $who = app(Holler::class)->who($agent);
             $name = $who['name'] ?? null;
             $avatar = $who['avatar'] ?? null;
         } elseif ($agent instanceof Model) {
@@ -1222,7 +1222,7 @@ class Assist
             'agent_id' => (string) $agent->getAuthIdentifier(),
             'agent_type' => self::typeOf($agent),
             'agent_guard' => self::guardName(),
-            'agent_scope' => $this->callsAvailable() ? app(Calls::class)->scope() : null,
+            'agent_scope' => $this->callsAvailable() ? app(Holler::class)->scope() : null,
             'agent_name' => $name,
             'agent_avatar' => $avatar,
         ];
