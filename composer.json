@@ -75,7 +75,7 @@
     },
     "minimum-stability": "stable",
     "prefer-stable": true,
-    "homepage": "https://github.com/packstub/session-replay",
+    "homepage": "https://packstub.dev/plugins/session-replay",
     "support": {
         "issues": "https://github.com/packstub/session-replay/issues",
         "source": "https://github.com/packstub/session-replay",
