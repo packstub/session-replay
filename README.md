@@ -129,7 +129,7 @@ composer serve    # a page to record and the viewer, on :8000
 
 Other Packstub packages that sit well next to this one:
 
-- **[Filament Tenancy](https://packstub.dev/plugins/filament-tenancy)** (paid): a database per workspace for Filament panels, built on stancl/tenancy. Session Replay keeps every recording in its workspace and its tables can stay on the central connection, so the two fit together.
+- **[Filament Tenancy](https://packstub.dev/plugins/filament-tenancy)** (paid): a database per tenant for Filament panels, built on stancl/tenancy. Session Replay keeps every recording in its workspace and its tables can stay on the central connection, so the two fit together.
 - **[Account Switcher for Laravel](https://packstub.dev/plugins/account-switcher)**: impersonation, linked accounts and one-click developer logins, with every switch in an audit log.
 - **[Agents for Laravel](https://packstub.dev/plugins/agents)**: an AI agent and an MCP server from one list of tools, under your app's own authorization.
 - **[Filament Flow](https://packstub.dev/plugins/filament-flow)**: visual workflow automations for a Filament panel, with triggers, conditions and actions drawn on a canvas.
