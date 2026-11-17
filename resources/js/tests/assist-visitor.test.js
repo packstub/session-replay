@@ -497,12 +497,34 @@ test('the page tells the stage it takes the pointer, and draws it as the agent\'
 
 test('a control message still does nothing without control: only the pointer was let through', async () => {
     const page = await live();
+    // Everything a control message could do to the page: look an element up, dispatch an event, scroll.
+    const reached = [];
+
+    globalThis.document.elementFromPoint = (x, y) => (reached.push(`elementFromPoint ${x},${y}`), null);
+    globalThis.document.elementsFromPoint = (x, y) => (reached.push(`elementsFromPoint ${x},${y}`), []);
+    globalThis.window.scrollBy = (...args) => reached.push(`scrollBy ${args}`);
+
+    for (const target of [globalThis.document, globalThis.window]) {
+        const dispatch = target.dispatchEvent.bind(target);
+
+        target.dispatchEvent = (event) => (reached.push(`event ${event.type}`), dispatch(event));
+    }
 
     await page.send({ t: 'move', x: 300, y: 120 });
     await page.send({ t: 'click', x: 300, y: 120 });
+    await page.send({ t: 'drag.start', x: 300, y: 120 });
+    await page.send({ t: 'drag', x: 310, y: 130 });
+    await page.send({ t: 'drag.stop' });
+    await page.send({ t: 'scroll', dx: 0, dy: 400 });
 
+    assert.deepEqual(reached, []);
     assert.equal(page.ui.cursorState.mode, null);
     assert.deepEqual(page.said(), []);
+
+    // The pointer beside them is drawn and still reaches nothing on the page.
+    await page.send({ t: 'point', x: 300, y: 120 });
+    assert.equal(page.ui.cursorState.mode, 'point');
+    assert.deepEqual(reached, []);
 });
 
 test('the pointer never sits on a question, and not in a tab nobody sees', async () => {

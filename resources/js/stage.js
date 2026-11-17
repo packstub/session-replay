@@ -4,7 +4,7 @@ import './stage.css';
 import { HttpSignaling, drain } from '@packstub/holler';
 import { AssistClient, workerTimers } from './lib/assist-client.js';
 import { AGENT_RATE, CHANNEL_LABEL, Endpoint, FEATURE_POINT, FROM_VISITOR } from './lib/assist-protocol.js';
-import { AgentState, FINISHED, Gesture, LiveFeed, Pointer, ago, editable, handleVisitorMessage, reasonKey, stageDelta, stagePhase, stagePoint, stageStop } from './lib/assist-stage.js';
+import { AgentState, FINISHED, Gesture, LiveFeed, Pointer, ago, editable, handleVisitorMessage, pointerWhy, reasonKey, stageDelta, stagePhase, stagePoint, stageStop } from './lib/assist-stage.js';
 
 /**
  * The agent's live stage in the built-in viewer ({path}/assist/requests/{id}/stage):
@@ -194,6 +194,8 @@ function mountStage(root) {
                 return t('status.offered');
             case 'claimed':
                 // Back on the live view after leaving it: the visitor's page makes a new call on its next poll.
+                if (request.blocked === 'other_assist') return t('status.other_assist');
+
                 return request.reconnecting ? t('status.reconnecting') : t('status.claimed');
             case 'active':
                 if (held()) return t('status.on_hold');
@@ -207,7 +209,7 @@ function mountStage(root) {
         }
     }
 
-    function setButton(name, { why = null, pressed = null, label = null, hidden = false } = {}) {
+    function setButton(name, { why = null, pressed = null, label = null, hidden = false, hint: said = why } = {}) {
         const button = buttons[name];
 
         if (!button) return;
@@ -221,8 +223,8 @@ function mountStage(root) {
         const hint = root.querySelector(`[data-why="${name}"]`);
 
         if (hint) {
-            hint.textContent = why === null ? '' : t(`why.${why}`);
-            hint.hidden = why === null;
+            hint.textContent = said === null ? '' : t(`why.${said}`);
+            hint.hidden = said === null;
         }
     }
 
@@ -259,7 +261,11 @@ function mountStage(root) {
             label: state.control === 'on' ? t('buttons.release') : state.control === 'asking' ? t('buttons.control_asking') : t('buttons.control'),
         });
         setButton('draw', { why: why('draw'), pressed: drawing });
-        setButton('pointer', { why: why('draw'), pressed: pointing });
+        const noPointer = pointerWhy({ why: why('draw'), connected: state.connected, peerCan: !!endpoint?.peerCan(FEATURE_POINT) });
+
+        // Never pressed while nothing can be sent: an older visitor's page would make it look on. Its own line under
+        // it says only that; the reasons it shares with Draw are said once, under Draw.
+        setButton('pointer', { why: noPointer, pressed: pointing && noPointer !== 'no_pointer', hint: noPointer === 'no_pointer' ? noPointer : null });
         setButton('hold', {
             hidden: !config.calls?.routes?.hold || !config.calls?.routes?.resume,
             why: held() ? null : live && state.connected ? null : state.why('share') ?? 'connecting',

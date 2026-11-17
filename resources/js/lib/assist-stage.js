@@ -208,6 +208,17 @@ export class Pointer {
 }
 
 /**
+ * Why "Show my pointer" cannot be used now, or null: the page view's own reason (`why`: not connected, their screen
+ * instead of the page…), else `no_pointer` when the live view is up and the visitor's page did not name `point` in
+ * its hello (a page still on a build from before the pointer): the button must not look on while nothing is sent.
+ */
+export function pointerWhy({ why = null, connected = false, peerCan = false } = {}) {
+    if (why !== null) return why;
+
+    return connected && !peerCan ? 'no_pointer' : null;
+}
+
+/**
  * Pointer events on the overlay as control messages: a press that does not
  * move is a click where it was pressed, one that moves past `threshold`
  * visitor pixels is a drag (drag.start where it began, drag along the way,
@@ -293,7 +304,8 @@ export function editable(element) {
  *
  * Reasons (label keys under stage.why): no_calls, no_routes, connecting,
  * version, hidden, screen_mode, asking, ended, no_video (and on_hold, which the
- * stage puts in place of connecting while the assist is on hold).
+ * stage puts in place of connecting while the assist is on hold, and no_pointer,
+ * see pointerWhy()).
  */
 export class AgentState {
     constructor({ calls = true, routes = true, video = false } = {}) {

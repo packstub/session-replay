@@ -58,10 +58,11 @@
                         <button type="button" class="primary" data-action="control" aria-pressed="false" aria-describedby="sr-why-control">{{ __($s.'buttons.control') }}</button>
                         <button type="button" data-action="draw" aria-pressed="false" aria-describedby="sr-why-draw">{{ __($s.'buttons.draw') }}</button>
                         {{-- On by default: the visitor sees where the agent points while they watch. --}}
-                        <button type="button" data-action="pointer" aria-pressed="true">{{ __($s.'buttons.pointer') }}</button>
+                        <button type="button" data-action="pointer" aria-pressed="true" aria-describedby="sr-why-pointer">{{ __($s.'buttons.pointer') }}</button>
                     </div>
                     <small class="sr-stage__why" id="sr-why-control" data-why="control" hidden></small>
                     <small class="sr-stage__why" id="sr-why-draw" data-why="draw" hidden></small>
+                    <small class="sr-stage__why" id="sr-why-pointer" data-why="pointer" hidden></small>
                 </div>
 
                 <div class="sr-stage__group">

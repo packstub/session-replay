@@ -360,12 +360,12 @@ class AssistController
         return null;
     }
 
-    /** The window's id, as Holler takes it: letters, digits, dashes and underscores, up to 64. */
+    /** The window's id, as Holler's own routes take it: letters, digits, dashes and underscores, up to 32 (the `tab` column). */
     protected function tab(Request $request): ?string
     {
         $tab = $request->input('tab');
 
-        return is_string($tab) && preg_match('/^[A-Za-z0-9_-]{1,64}$/', $tab) === 1 ? $tab : null;
+        return is_string($tab) && preg_match('/^[A-Za-z0-9_-]{1,32}$/', $tab) === 1 ? $tab : null;
     }
 
     protected function refused(AssistRefused $refused): JsonResponse

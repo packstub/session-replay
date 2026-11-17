@@ -508,6 +508,7 @@ class Assist
 
         $this->assertSamePersonInCalls($agent);
         $this->assertSameDatabaseAsCalls();
+        $this->assertNotInAnotherAssist($agent);
 
         $claimed = $request->transition([AssistRequest::OPEN], AssistRequest::CLAIMED, [
             ...$this->agentAttributes($agent),
@@ -571,6 +572,7 @@ class Assist
 
         $this->assertSamePersonInCalls($agent);
         $this->assertSameDatabaseAsCalls();
+        $this->assertNotInAnotherAssist($agent);
 
         try {
             $request->save();
@@ -760,32 +762,59 @@ class Assist
      * resumed in its place from the Holler widget). The request stays live and the visitor's page says the agent
      * stepped away. Holler keeps a call on hold for as long as any window of that person polls, so a panel tab left
      * open would keep a visitor waiting for good: here the hold lasts while the live view is open. An agent whose
-     * stage has not polled the request's status for `holler.reconnect_timeout` seconds while the assist is on hold
-     * has left the live view, as one whose side Holler dropped has: their side is withdrawn as dropped, and the
-     * request goes back to claimed (callOver()), to be picked up again when they come back or by someone else.
+     * stage has not polled the request's status for holdPatienceSeconds() while the assist is on hold has left the
+     * live view, as one whose side Holler dropped has: their side is withdrawn as dropped, and the request goes back
+     * to claimed (callOver()), to be picked up again when they come back or by someone else.
+     *
+     * Decided on what is stored now, under the call's row lock: an agent who resumed, or whose stage polled, between
+     * the read that brought us here and the lock is left alone (Holler::withdraw() itself takes anyone live).
+     *
+     * @internal public for the tests
      */
-    protected function letGoOfAbandonedHold(AssistRequest $request, Call $call): void
+    public function letGoOfAbandonedHold(AssistRequest $request, Call $call): void
     {
-        $agent = $request->agent_id === null ? null : $call->participant($request->agent_id);
+        $patience = $this->holdPatienceSeconds();
+        $quiet = fn (AssistRequest $request): bool => $request->agent_seen_at === null || $request->agent_seen_at->lt(now()->subSeconds($patience));
 
-        if (! $agent?->isOnHold()) {
+        if ($patience === 0 || $request->agent_id === null || ! $call->participant($request->agent_id)?->isOnHold() || ! $quiet($request)) {
             return;
         }
 
-        $patience = max(1, (int) config('holler.reconnect_timeout', 15));
+        DB::connection((new Call)->getConnectionName())->transaction(function () use ($request, $call, $quiet): void {
+            $fresh = Call::query()->whereKey($call->getKey())->lockForUpdate()->first();
+            $agent = $fresh?->participants()->where('user_id', $request->agent_id)->first();
 
-        if ($request->agent_seen_at !== null && $request->agent_seen_at->gte(now()->subSeconds($patience))) {
-            return;
-        }
+            if ($fresh === null || $fresh->isEnded() || ! $agent?->isOnHold() || ! $quiet($request->refresh())) {
+                return;
+            }
 
-        // CallEnded fires inside (the guest is alone): callEnded() puts the request back to claimed.
-        app(Holler::class)->withdraw($call, $agent, CallParticipant::DROPPED);
+            // CallEnded fires inside (the guest is alone): callEnded() puts the request back to claimed.
+            app(Holler::class)->withdraw($fresh->load('participants'), $agent, CallParticipant::DROPPED);
+        });
+
         $request->refresh();
 
         if ($request->status === AssistRequest::ACTIVE && $request->call_id === $call->getKey()) {
+            $ended = Call::query()->with('participants')->find($call->getKey());
+
             // The listener did not run (events faked, or it failed): the same move here.
-            $this->callOver($request, $call->refresh()->load('participants'));
+            if ($ended === null || $ended->isEnded()) {
+                $this->callOver($request, $ended);
+            }
         }
+    }
+
+    /**
+     * How long an assist on hold waits for its agent's stage to poll again before the agent counts as gone: Holler's
+     * own `hold_timeout` (120 s; what it gives someone on hold whose windows are all closed), never less than its
+     * `reconnect_timeout`. Longer than a dropped side gets on purpose: the agent stepped away, and a browser may
+     * freeze the hidden stage tab for a while. 0 (Holler's "for good") leaves it to assist.max_duration_minutes.
+     */
+    public function holdPatienceSeconds(): int
+    {
+        $hold = (int) config('holler.hold_timeout', 120);
+
+        return $hold <= 0 ? 0 : max($hold, (int) config('holler.reconnect_timeout', 15));
     }
 
     /**
@@ -939,6 +968,10 @@ class Assist
             'visitor_here' => $request->visitorIsHere(),
             'visitor_seen_ago' => $request->visitor_seen_at === null ? null : (int) max(0, $request->visitor_seen_at->diffInSeconds(now())),
             'waiting' => $request->waitingFor(),
+            // Why no call is made for a claimed request although the stage is open: the agent is live on another
+            // assist (`other_assist`), which a new call would end.
+            'blocked' => $request->status === AssistRequest::CLAIMED && $request->agent_id !== null && $this->callsAvailable()
+                && $this->inAnotherAssist((string) $request->agent_id, $request->agent_scope) ? 'other_assist' : null,
             'grants' => $request->grants ?? [],
             'claimed_at' => $request->claimed_at?->toIso8601String(),
             'started_at' => $request->started_at?->toIso8601String(),
@@ -975,6 +1008,13 @@ class Assist
      */
     protected function startCall(AssistRequest $request, array $from, ?string $tab): bool
     {
+        // Holler::start() leaves every call the agent is in: an agent live on another assist (this one was on hold
+        // and lapsed, say, and its live view was opened again) would have that one ended under them and their
+        // visitor. No call here until they put the other assist on hold or end it; the request waits as claimed.
+        if ($this->inAnotherAssist((string) $request->agent_id, $request->agent_scope)) {
+            return false;
+        }
+
         // Back from the agent leaving the live view, the assist keeps its start (max_duration, the marker's duration).
         $rejoining = $request->rejoining();
 
@@ -1028,6 +1068,28 @@ class Assist
         }
 
         return true;
+    }
+
+    /**
+     * Whether this person is in an assist call now (joined, not on hold): a second assist call would make Holler
+     * take them out of that one. An assist they put on hold does not count; it waits for them.
+     */
+    public function inAnotherAssist(string $agentId, ?string $scope = null): bool
+    {
+        if (! $this->callsAvailable()) {
+            return false;
+        }
+
+        return app(Holler::class)->openCallsOf($agentId, $scope)
+            ->contains(fn (Call $call) => $call->kind === self::KIND && ! $call->isEnded() && $call->participant($agentId)?->isJoined() === true);
+    }
+
+    /** @throws AssistRefused 409 `busy`: live on another assist, which taking this one would end */
+    protected function assertNotInAnotherAssist(Authenticatable $agent): void
+    {
+        if ($this->inAnotherAssist((string) $agent->getAuthIdentifier())) {
+            throw new AssistRefused(409, __('session-replay::viewer.assist.busy_assisting'), 'busy');
+        }
     }
 
     /** @throws AssistRefused */

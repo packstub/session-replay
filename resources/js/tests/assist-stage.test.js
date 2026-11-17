@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { Endpoint, FROM_AGENT, FROM_VISITOR, LiveStyles, encodeEvent } from '../lib/assist-protocol.js';
-import { AgentState, Gesture, LIVE_BUFFER_MS, LiveFeed, POINT_INTERVAL_MS, Pointer, ago, editable, handleVisitorMessage, reasonKey, stageDelta, stagePoint } from '../lib/assist-stage.js';
+import { AgentState, Gesture, LIVE_BUFFER_MS, LiveFeed, POINT_INTERVAL_MS, Pointer, ago, editable, handleVisitorMessage, pointerWhy, reasonKey, stageDelta, stagePoint } from '../lib/assist-stage.js';
 
 // ---- fakes ---------------------------------------------------------------------
 
@@ -642,4 +642,27 @@ test('the visitor\'s page takes the pointer through the real channel, and drops 
 
     assert.deepEqual(got.slice(1), [{ t: 'click', x: 1, y: 1 }, { t: 'point', x: 105, y: 200 }]);
     assert.equal(visitor.bad, 0);
+});
+
+test('Show my pointer says so when the visitor\'s page cannot show it, instead of looking on', async () => {
+    // The page view's own reason comes first (not connected yet, their screen instead of the page, over).
+    assert.equal(pointerWhy({ why: 'connecting', connected: false, peerCan: false }), 'connecting');
+    assert.equal(pointerWhy({ why: 'screen_mode', connected: true, peerCan: true }), 'screen_mode');
+    // Live, and the page named `point` in its hello: usable.
+    assert.equal(pointerWhy({ why: null, connected: true, peerCan: true }), null);
+    // Live with a page from before the pointer (an old cached build): disabled, with the reason.
+    assert.equal(pointerWhy({ why: null, connected: true, peerCan: false }), 'no_pointer');
+    assert.equal(pointerWhy(), null);
+
+    // Through the real hello: an old page names nothing, a current one names it.
+    for (const [can, expected] of [[[], 'no_pointer'], [['point'], null]]) {
+        const [a, b] = pair();
+
+        new Endpoint({ channel: a, role: 'visitor', schema: FROM_AGENT, context: { viewport: () => ({ width: 1, height: 1 }), knows: () => true }, drain: async () => {}, can }).start();
+
+        const agent = new Endpoint({ channel: b, role: 'agent', schema: FROM_VISITOR, drain: async () => {} }).start();
+
+        await tick();
+        assert.equal(pointerWhy({ why: null, connected: agent.ready, peerCan: agent.peerCan('point') }), expected);
+    }
 });

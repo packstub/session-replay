@@ -5,6 +5,7 @@ use Packstub\Holler\Facades\Holler;
 use Packstub\Holler\Models\Call;
 use Packstub\Holler\Models\CallParticipant;
 use Packstub\SessionReplay\Models\AssistRequest;
+use Packstub\SessionReplay\Support\Assist;
 
 /*
  * Assist and Holler's hold (a participant status, `on_hold`: someone stepped out of a call without leaving it).
@@ -92,6 +93,7 @@ it('keeps the request live while its agent has the assist on hold, and the visit
 
 it('lets a hold last only while the live view is open: an agent who leaves it with the assist on hold has left', function () {
     config()->set('holler.reconnect_timeout', 6);
+    config()->set('holler.hold_timeout', 6);
 
     [$browser, $asked, $agent, $call] = $this->liveAssist();
 
@@ -235,4 +237,202 @@ it('takes the visitor\'s poll as a claim of the guest\'s side by default, and wi
     expect($guest()->isClaimed())->toBeFalse();
     $this->poll($asked['id'], $asked['secret'], $browser['token'], ['tab' => 'tab-2'])->assertJson(['call' => ['claimed_elsewhere' => false]]);
     expect($guest()->tab)->toBe('tab-2');
+});
+
+it('gives an assist on hold Holler\'s hold_timeout, longer than a dropped side gets: a stage tab the browser froze is not an agent who left', function () {
+    config()->set('holler.reconnect_timeout', 6);
+
+    [$browser, $asked, $agent, $call] = $this->liveAssist();
+
+    Holler::hold($call, (string) $agent->id);
+
+    expect(app(Assist::class)->holdPatienceSeconds())->toBe(120);
+
+    // A minute and a half without the stage's status poll (the tab is hidden and frozen); a panel tab polls Holler.
+    for ($i = 0; $i < 45; $i++) {
+        $this->travel(2)->seconds();
+        Holler::poll((string) $agent->id, kind: 'call');
+        $poll = $this->poll($asked['id'], $asked['secret'], $browser['token'], ['tab' => 'tab-1'])->assertOk();
+    }
+
+    $poll->assertJson(['status' => 'active', 'call' => ['id' => $call->id, 'peers' => [['status' => 'on_hold']]]]);
+
+    // Past it, the agent has left.
+    for ($i = 0; $i < 20; $i++) {
+        $this->travel(2)->seconds();
+        Holler::poll((string) $agent->id, kind: 'call');
+        $poll = $this->poll($asked['id'], $asked['secret'], $browser['token'], ['tab' => 'tab-1'])->assertOk();
+    }
+
+    $poll->assertJson(['status' => 'claimed', 'reconnecting' => true]);
+
+    // Never shorter than Holler's reconnect_timeout, and Holler's "for good" (0) leaves it to max_duration.
+    config()->set('holler.hold_timeout', 3);
+    expect(app(Assist::class)->holdPatienceSeconds())->toBe(6);
+    config()->set('holler.hold_timeout', 0);
+    expect(app(Assist::class)->holdPatienceSeconds())->toBe(0);
+});
+
+it('leaves an agent alone who resumed between the look and the lock', function () {
+    config()->set('holler.reconnect_timeout', 6);
+    config()->set('holler.hold_timeout', 6);
+
+    [, $asked, $agent, $call] = $this->liveAssist();
+
+    Holler::hold($call, (string) $agent->id);
+
+    // What reconcile() read: the agent on hold, the stage quiet for longer than the patience.
+    $this->travel(10)->seconds();
+    $request = AssistRequest::query()->findOrFail($asked['id']);
+    $stale = Call::query()->with('participants')->findOrFail($call->id);
+
+    expect($stale->participant((string) $agent->id)->isOnHold())->toBeTrue();
+
+    // Meanwhile they clicked Resume.
+    Holler::resume($call, (string) $agent->id, 'agent-tab');
+
+    app(Assist::class)->letGoOfAbandonedHold($request, $stale);
+
+    $call->refresh()->load('participants');
+    expect($call->status)->toBe('active')
+        ->and($call->participant((string) $agent->id)->status)->toBe(CallParticipant::JOINED)
+        ->and(AssistRequest::query()->sole())->status->toBe('active')->call_id->toBe($call->id);
+
+    // The same for a stage that polled the status between the two: still on hold, and still theirs.
+    Holler::hold($call, (string) $agent->id);
+    $this->travel(10)->seconds();
+    $request = AssistRequest::query()->findOrFail($asked['id']);
+    $stale = Call::query()->with('participants')->findOrFail($call->id);
+    $this->stagePolls($asked);
+
+    app(Assist::class)->letGoOfAbandonedHold($request, $stale);
+
+    expect($call->refresh()->load('participants')->participant((string) $agent->id)->status)->toBe(CallParticipant::ON_HOLD)
+        ->and(AssistRequest::query()->sole()->status)->toBe('active');
+
+    // And quiet for real, it is let go.
+    $this->travel(10)->seconds();
+    app(Assist::class)->letGoOfAbandonedHold(AssistRequest::query()->findOrFail($asked['id']), Call::query()->with('participants')->findOrFail($call->id));
+
+    expect($call->refresh()->status)->toBe('ended')
+        ->and(AssistRequest::query()->sole()->status)->toBe('claimed');
+});
+
+it('refuses a second assist to an agent who is live on one, and takes it once the first is on hold', function () {
+    [, $first, $agent, $call] = $this->liveAssist();
+
+    $other = $this->browser($this->user(['email' => 'second@example.com']));
+    $second = $this->asked($other);
+
+    // Holler would take the agent out of the first call for the second: refused instead, the first goes on.
+    $this->postJson(route('session-replay.assist.claim', $second['id']))->assertStatus(409)->assertJson(['reason' => 'busy']);
+
+    expect(AssistRequest::query()->findOrFail($second['id'])->status)->toBe('open')
+        ->and($call->refresh()->status)->toBe('active');
+
+    // Nor an offer of help to someone else.
+    $live = $this->browser($this->user(['email' => 'third@example.com']));
+    $this->postJson(route('session-replay.assist.propose', $live['session']))->assertStatus(409)->assertJson(['reason' => 'busy']);
+
+    Holler::hold($call, (string) $agent->id);
+
+    $this->postJson(route('session-replay.assist.claim', $second['id']))->assertOk();
+    $this->poll($second['id'], $second['secret'], $other['token'], ['tab' => 'tab-b'])->assertJson(['status' => 'active']);
+
+    // The first waits on hold, untouched.
+    expect($call->refresh()->load('participants')->participant((string) $agent->id)->status)->toBe(CallParticipant::ON_HOLD)
+        ->and(AssistRequest::query()->findOrFail($first['id'])->status)->toBe('active');
+});
+
+it('never ends the assist an agent is live on when an older one of theirs comes back for a new call', function () {
+    config()->set('holler.reconnect_timeout', 6);
+    config()->set('holler.hold_timeout', 6);
+    config()->set('session-replay.assist.claim_timeout_seconds', 600);
+
+    [$browserA, $a, $agent, $callA] = $this->liveAssist();
+
+    // A on hold, B claimed and live.
+    Holler::hold($callA, (string) $agent->id);
+
+    $browserB = $this->browser($this->user(['email' => 'second@example.com']));
+    $b = $this->asked($browserB);
+    $this->postJson(route('session-replay.assist.claim', $b['id']))->assertOk();
+    $callB = $this->poll($b['id'], $b['secret'], $browserB['token'], ['tab' => 'tab-b'])->assertJson(['status' => 'active'])->json('call.id');
+    Holler::poll((string) $agent->id, 0, $callB, 'agent-tab-b', claim: true, kind: 'assist');
+
+    // Stage A's tab is closed: its hold lapses, A is back to claimed. Stage B and both pages poll on.
+    for ($i = 0; $i < 5; $i++) {
+        $this->travel(2)->seconds();
+        $this->stagePolls($b);
+        Holler::poll((string) $agent->id, 0, $callB, 'agent-tab-b', claim: true, kind: 'assist');
+        $this->poll($b['id'], $b['secret'], $browserB['token'], ['tab' => 'tab-b']);
+        $pollA = $this->poll($a['id'], $a['secret'], $browserA['token'], ['tab' => 'tab-1']);
+    }
+
+    $pollA->assertJson(['status' => 'claimed', 'reconnecting' => true]);
+
+    // The agent opens A's live view again while still live on B: no new call, B untouched, and the stage is told why.
+    $this->travel(2)->seconds();
+    expect($this->stagePolls($a))->toMatchArray(['status' => 'claimed', 'blocked' => 'other_assist']);
+    Holler::poll((string) $agent->id, 0, $callB, 'agent-tab-b', claim: true, kind: 'assist');
+    $this->poll($a['id'], $a['secret'], $browserA['token'], ['tab' => 'tab-1'])->assertJson(['status' => 'claimed', 'call' => null]);
+
+    $live = Call::query()->with('participants')->findOrFail($callB);
+    expect($live->status)->toBe('active')
+        ->and($live->participant((string) $agent->id)->status)->toBe(CallParticipant::JOINED)
+        ->and(AssistRequest::query()->findOrFail($b['id'])->status)->toBe('active')
+        ->and(Call::query()->where('kind', 'assist')->where('status', '!=', 'ended')->count())->toBe(1);
+
+    // B on hold: A's next poll makes its call, and B waits.
+    Holler::hold($live, (string) $agent->id);
+    $this->travel(2)->seconds();
+    expect($this->stagePolls($a)['blocked'])->toBeNull();
+    $this->stagePolls($b);
+    $this->poll($a['id'], $a['secret'], $browserA['token'], ['tab' => 'tab-1'])->assertJson(['status' => 'active', 'reconnecting' => false]);
+
+    expect($live->refresh()->load('participants')->participant((string) $agent->id)->status)->toBe(CallParticipant::ON_HOLD)
+        ->and(AssistRequest::query()->findOrFail($b['id'])->status)->toBe('active');
+});
+
+it('refuses Put on hold while a call in the widget is on hold already: one call on hold per person', function () {
+    Holler::routes(middleware: ['web', 'auth']);
+
+    $browser = $this->browser();
+    $asked = $this->asked($browser);
+    $agent = $this->staff();
+    $colleague = $this->staff(['name' => 'Bo Colleague']);
+
+    $widget = Holler::start($agent, $colleague, 'widget-tab');
+    Holler::answer($widget, (string) $colleague->id, 'their-tab');
+    Holler::hold($widget, (string) $agent->id);
+
+    $this->actingAs($agent)->postJson(route('session-replay.assist.claim', $asked['id']))->assertOk();
+    $assist = $this->poll($asked['id'], $asked['secret'], $browser['token'], ['tab' => 'tab-1'])->json('call.id');
+
+    // The stage's Put on hold is Holler's own route.
+    $this->postJson(route('holler.hold', ['call' => $assist]))
+        ->assertStatus(422)
+        ->assertJson(['message' => 'You already have a call on hold.']);
+
+    expect(Call::query()->with('participants')->findOrFail($assist)->participant((string) $agent->id)->status)->toBe(CallParticipant::JOINED)
+        ->and(AssistRequest::query()->sole()->status)->toBe('active');
+});
+
+it('takes a window id of up to 32 characters, as Holler\'s column and routes do', function () {
+    [$browser, $asked] = $this->claimed();
+
+    // Too long (or not an id at all): no window, so nothing is claimed and nothing fails.
+    $long = str_repeat('a', 33);
+    $poll = $this->poll($asked['id'], $asked['secret'], $browser['token'], ['tab' => $long])->assertOk()->assertJson(['status' => 'active']);
+    $guest = fn () => Call::query()->with('participants')->findOrFail($poll->json('call.id'))->participant('guest:'.$asked['id']);
+
+    expect($guest()->tab)->toBeNull();
+
+    $this->poll($asked['id'], $asked['secret'], $browser['token'], ['tab' => str_repeat('b', 64)])->assertOk();
+    $this->visitorPost('leave', $asked['id'], $asked['secret'], $browser['token'], ['tab' => $long])->assertNoContent();
+    expect($guest()->tab)->toBeNull();
+
+    $exact = str_repeat('c', 32);
+    $this->poll($asked['id'], $asked['secret'], $browser['token'], ['tab' => $exact])->assertOk();
+    expect($guest()->tab)->toBe($exact);
 });
