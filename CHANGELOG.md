@@ -16,6 +16,10 @@ All notable changes to `packstub/session-replay` are documented here.
 - **The stage in a page of your own.** `stage.js` mounts on any `[data-session-replay-stage]` and only looks for `data-ref`, `data-action` and `data-why` inside it, so a host brings its own markup (Filament Session Replay renders the panel's buttons): a button's label goes into its `[data-label]` element when it has one, the root dispatches `session-replay:stage` after every change with the state and a one-word `phase` (`waiting`, `connecting`, `live`, `hidden`, `reconnecting`, `ended`, `unavailable`), and with `wire:navigate` the stage leaves the call on `livewire:navigating` (like an unload; the request stays the agent's) and mounts again on `livewire:navigated`. See [Hosting the stage](docs/assist.md#hosting-the-stage-in-a-page-of-your-own).
 - **`data-replay-skip`.** An element carrying it is left out of the recording with everything inside it (no empty box as with `data-replay-block`), and so are the changes, input and clicks aimed at it.
 
+### Changed
+
+- `composer.json`'s homepage and docs link point at packstub.dev
+
 ## 1.1.0 — 2026-11-04
 
 A security release, with the memory fixes for a panel tab that grew all day. Run `php artisan migrate`: a table, a column and two indexes.

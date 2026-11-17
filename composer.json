@@ -75,11 +75,11 @@
     },
     "minimum-stability": "stable",
     "prefer-stable": true,
-    "homepage": "https://github.com/packstub/session-replay",
+    "homepage": "https://packstub.dev/plugins/session-replay",
     "support": {
         "issues": "https://github.com/packstub/session-replay/issues",
         "source": "https://github.com/packstub/session-replay",
-        "docs": "https://github.com/packstub/session-replay/tree/main/docs"
+        "docs": "https://packstub.dev/docs/session-replay"
     },
     "suggest": {
         "packstub/holler": "Assist: a visitor who asks for help and the agent who takes the request are put on a call (WebRTC, signaling over polled HTTP, no websockets).",
