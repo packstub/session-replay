@@ -34,7 +34,18 @@
         .empty { padding: 3rem 1rem; text-align: center; color: var(--muted); }
         nav.pages { display: flex; justify-content: space-between; gap: 1rem; margin-top: 1rem; }
         dl.facts { display: grid; grid-template-columns: repeat(auto-fit, minmax(11rem, 1fr)); gap: .75rem 1.5rem; padding: 1rem; margin: 0 0 1rem; }
+        td.message { white-space: pre-wrap; min-width: 14rem; max-width: 28rem; }
+        td.actions { display: flex; gap: .4rem; }
+        .flash { padding: .6rem .8rem; margin: 0 0 1rem; } .flash--error { color: var(--danger); }
         dl.facts dt { font-size: .75rem; color: var(--muted); } dl.facts dd { margin: 0; overflow: hidden; text-overflow: ellipsis; }
+        nav.tabs { display: flex; gap: .25rem; margin: 0 0 .75rem; border-bottom: 1px solid var(--border); }
+        nav.tabs a { padding: .4rem .8rem; color: var(--muted); border-bottom: 2px solid transparent; margin-bottom: -1px; }
+        nav.tabs a[aria-current=page] { color: var(--text); border-color: var(--accent); font-weight: 600; }
+        nav.tabs a:hover { text-decoration: none; color: var(--text); }
+        td.actions { align-items: center; } td.actions form, .assist-bar form { margin: 0; }
+        a.button.primary { background: var(--accent); border-color: var(--accent); color: #fff; } a.button:hover { text-decoration: none; }
+        .assist-bar { display: flex; gap: .5rem; align-items: center; margin: 0 0 1rem; }
+        :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
     </style>
     @stack('head')
 </head>

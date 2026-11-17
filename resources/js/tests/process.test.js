@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import {
+    SKIP_ATTRIBUTE,
     assetHash,
     assetPlaceholder,
     attributeMatcher,
@@ -11,6 +12,8 @@ import {
     shareSnapshot,
     sharedSnapshots,
     snapshotHash,
+    isPointerSample,
+    skipNodes,
     sortEvents,
     stripAttributes,
     styleSlots,
@@ -226,4 +229,77 @@ test('renameVolatileIds gives made-up ids the same name on every load and keeps 
 
 test('sortEvents orders by timestamp', () => {
     assert.deepEqual(sortEvents([{ timestamp: 3 }, { timestamp: 1 }, { timestamp: 2 }]).map((e) => e.timestamp), [1, 2, 3]);
+});
+
+const el = (id, tagName, attributes = {}, childNodes = []) => ({ type: 2, id, tagName, attributes, childNodes });
+
+test('skipNodes drops data-replay-skip subtrees from a snapshot and remembers their ids', () => {
+    const skipped = new Set([999]);
+    const event = {
+        type: 2,
+        data: {
+            node: {
+                type: 0,
+                id: 1,
+                childNodes: [el(2, 'body', {}, [el(3, 'p', {}, [{ type: 3, id: 4, textContent: 'hi' }]), el(5, 'div', { [SKIP_ATTRIBUTE]: '' }, [el(6, 'button', {}, [{ type: 3, id: 7, textContent: 'End' }])])])],
+            },
+        },
+    };
+
+    assert.equal(skipNodes(event, skipped), true);
+    assert.deepEqual(event.data.node.childNodes[0].childNodes.map((node) => node.id), [3]);
+    // A snapshot lists the page again: what was skipped before is forgotten.
+    assert.deepEqual([...skipped].sort((a, b) => a - b), [5, 6, 7]);
+});
+
+test('skipNodes drops adds into skipped nodes, in any order, and the changes aimed at them', () => {
+    const skipped = new Set();
+    const event = {
+        type: 3,
+        data: {
+            source: 0,
+            // The child comes before its skipped parent, as rrweb may order them.
+            adds: [
+                { parentId: 10, nextId: null, node: el(11, 'span') },
+                { parentId: 2, nextId: 3, node: el(10, 'div', { [SKIP_ATTRIBUTE]: '1' }) },
+                { parentId: 2, nextId: 10, node: el(12, 'p', {}, [el(13, 'i', { [SKIP_ATTRIBUTE]: '' }), el(14, 'b')]) },
+            ],
+            removes: [],
+            attributes: [],
+            texts: [],
+        },
+    };
+
+    assert.equal(skipNodes(event, skipped), true);
+    assert.deepEqual(event.data.adds.map((add) => add.node.id), [12]);
+    // Its next sibling never reaches the replay: appended instead of waiting for it.
+    assert.equal(event.data.adds[0].nextId, null);
+    assert.deepEqual(event.data.adds[0].node.childNodes.map((node) => node.id), [14]);
+    assert.ok(skipped.has(10) && skipped.has(11) && skipped.has(13));
+
+    const changes = { type: 3, data: { source: 0, adds: [], removes: [{ parentId: 2, id: 10 }], attributes: [{ id: 11, attributes: { class: 'x' } }], texts: [{ id: 13, value: 'secret' }] } };
+
+    assert.equal(skipNodes(changes, skipped), false);
+
+    const mixed = { type: 3, data: { source: 0, adds: [], removes: [], attributes: [{ id: 11, attributes: { class: 'x' } }, { id: 3, attributes: { class: 'y' } }], texts: [] } };
+
+    assert.equal(skipNodes(mixed, skipped), true);
+    assert.deepEqual(mixed.data.attributes.map((change) => change.id), [3]);
+});
+
+test('skipNodes drops input, clicks and scrolls aimed at a skipped node, and keeps the rest', () => {
+    const skipped = new Set([10]);
+
+    assert.equal(skipNodes({ type: 3, data: { source: 5, id: 10, text: 'my message', isChecked: false } }, skipped), false);
+    assert.equal(skipNodes({ type: 3, data: { source: 2, type: 2, id: 10, x: 1, y: 1 } }, skipped), false);
+    assert.equal(skipNodes({ type: 3, data: { source: 5, id: 3, text: '***' } }, skipped), true);
+    assert.equal(skipNodes({ type: 4, data: { href: 'https://x.test' } }, skipped), true);
+    // An empty mutation stays what it was.
+    assert.equal(skipNodes({ type: 3, data: { source: 0, adds: [], removes: [], attributes: [], texts: [] } }, new Set()), true);
+});
+
+test('isPointerSample names the events a live stream drops first', () => {
+    assert.equal(isPointerSample({ type: 3, data: { source: 1, positions: [] } }), true);
+    assert.equal(isPointerSample({ type: 3, data: { source: 2 } }), false);
+    assert.equal(isPointerSample({ type: 2, data: {} }), false);
 });

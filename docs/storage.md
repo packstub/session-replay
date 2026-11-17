@@ -55,9 +55,10 @@ The files are always read through the package's gated routes, never through a pu
 | `replay_markers` | marker | `type`, `label`, `payload`, `at_ms`. This table is what lets a list filter without opening a file. |
 | `replay_assets` | stylesheet or shared snapshot | `hash`, `kind` (`stylesheet` or `snapshot`), `path`, stored and raw size, `last_seen_at`. Stored once, whichever recordings point at it. A shared snapshot whose content is also sent as a stylesheet becomes a stylesheet, and recordings that point at it as a snapshot still get it. |
 | `replay_asset_owners` | workspace that sent an asset | `hash`, `tenant_key` (a hash of the workspace's type and key, or of none). Written when a stylesheet or a snapshot arrives with content that matches its hash. A recording may point at an asset only when its own workspace is an owner: a hash learned elsewhere, of another workspace's theme or page, opens nothing, and the first recording of a workspace to meet a stylesheet another workspace stored uploads it once more. |
+| `replay_assist_requests` | help request ([Assist](assist.md)) | `status`, `opened_by`, who and workspace, the recording (`replay_session_id`, nullable, moved to the tab's next recording), `secret_hash` (the SHA-256 of the secret the visitor's tab presents), `identity` (a keyed hash of who the token named, salted per request), the agent (`agent_id`, `agent_name`, `agent_avatar`), `call_id`, `message`, `page_url`, the `grants` log, when the page and the agent were last seen, `claimed_at`, `started_at`, `ended_at`, `end_reason`. `lock_key` is unique and set while the request is going, so a recording has one at a time (on SQL Server, which allows one NULL in a unique index, the index is filtered to rows that have a key). |
 | `replay_session_assets` | stylesheet or shared snapshot a recording points at | `replay_session_id`, `hash`. What the viewer checks before it serves a stylesheet or a shared snapshot (the hash alone opens nothing), and what keeps either from being pruned while a recording that is left needs it. |
 
-User and tenant keys are stored as strings, so integer, UUID and ULID keys all fit. Chunks, markers and snapshot references are removed with their recording by foreign key; deleting a `ReplaySession` model also deletes its folder on the disk.
+User and tenant keys are stored as strings, so integer, UUID and ULID keys all fit. Chunks, markers, snapshot references and assist requests are removed with their recording by foreign key; deleting a `ReplaySession` model also deletes its folder on the disk.
 
 ## Multi-tenant apps
 
@@ -147,6 +148,17 @@ Measured on a Filament 5 panel (a table of 50 rows, a modal form, a create page 
 
 A visit is mostly looking, so whole recordings come out far below the busiest rows: the store's own numbers are 38 KB for a 39-second visit across four storefront pages and 24 KB for two pages of a customer panel. The lab's scripted hands never rest (a search or a sort every two seconds stored 430 KB per minute, a modal every five seconds 160 KB per minute); nobody keeps that up, so read the table per action and let `retention.days` and `sample_rate` set the total.
 
+### Assist
+
+Every time the live view starts, and again on every reconnect (either side reloads, or the agent comes back after leaving), the visitor's page takes one more full snapshot, so the agent's mirror starts from the page as it is. It goes into the stored recording like any other snapshot: expect one extra snapshot's worth per start and reconnect, about the size of the page's first one. Measured on the workbench pages (stored, gzip):
+
+| Page | One extra snapshot |
+| --- | --- |
+| The Filament 50-row table page (a panel's Orders list) | 37 KB (650 KB before compression) |
+| A small plain Blade page (the core workbench) | 1.2 KB (4 KB before compression) |
+
+Stylesheets are not sent again: they are stored once by hash as always, and on the live channel each one goes once per connection. Nothing else of the live view is stored: the mirror, audio, video and screen share go peer to peer and are not kept. A help request is one row in `replay_assist_requests` (about 1 KB with a short grants log).
+
 ### Planning disk and database
 
 The recording itself lives on the disk; the database only holds the index, and it stays small:
@@ -192,6 +204,7 @@ php artisan session-replay:prune --days=7
 - Keeps pinned recordings: `$session->forceFill(['pinned' => true])->save()`.
 - Deletes stylesheets that were last referenced before the window and that no recording that is left points at, so a pinned recording keeps its styling for as long as it stays, without keeping every other stylesheet of its day. Recordings made before the references were stored (1.0.0-beta.5 and earlier) point at nothing: while a pinned one of those is left, stylesheets last seen since it started stay too.
 - Deletes shared snapshots no recording that is left points at, a day after they were last sent. Sending one again moves that date once it is an hour old, so the batch that points at it always has at least 23 hours to arrive.
+- Deletes finished assist requests that never had a recording (a tab that recorded nothing) once they are older than the window; the others go with their recording.
 - Refuses a window under one day.
 
 Schedule it daily:

@@ -18,6 +18,7 @@ return [
         'vital' => 'Vital',
         'custom' => 'Eigene',
         'report' => 'Meldung',
+        'assist' => 'Hilfe',
     ],
     'copy_link' => 'Link zu diesem Moment kopieren',
     'link_copied' => 'Link kopiert',
@@ -44,6 +45,9 @@ return [
         'rating' => 'Bewertung',
         'x' => 'X',
         'y' => 'Y',
+        'opened_by' => 'Geöffnet von',
+        'reason' => 'Grund',
+        'granted' => 'Erlaubt',
     ],
 
 ];

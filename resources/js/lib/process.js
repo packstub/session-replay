@@ -289,3 +289,130 @@ export function renameVolatileIds(node, patterns = []) {
 export function sortEvents(events) {
     return events.sort((a, b) => a.timestamp - b.timestamp);
 }
+
+/*
+ * data-replay-skip: an element carrying the attribute is left out of the
+ * recording entirely, with everything inside it (the Assist widget, its
+ * prompts, the agent's cursor and the annotation canvas). data-replay-block
+ * keeps an empty box of the element's size and data-replay-ignore only drops
+ * input events; neither removes an element. The attribute must be on the
+ * element when it is inserted: one added later does not take the element out.
+ */
+
+export const SKIP_ATTRIBUTE = 'data-replay-skip';
+const SOURCE_MOUSE_MOVE = 1;
+const SOURCE_TOUCH_MOVE = 6;
+const SOURCE_DRAG = 12;
+
+function carriesSkip(node) {
+    return !!node && node.type === NODE_ELEMENT && !!node.attributes && Object.prototype.hasOwnProperty.call(node.attributes, SKIP_ATTRIBUTE);
+}
+
+function collectIds(node, ids) {
+    walk(node, (current) => {
+        if (typeof current.id === 'number') ids.add(current.id);
+    });
+}
+
+/** Drop the skipped subtrees of a serialized tree, remembering their ids. Mutates. */
+function pruneTree(node, skipped) {
+    walk(node, (current) => {
+        if (!Array.isArray(current.childNodes)) return;
+
+        // Filtered before walk() pushes the children: a dropped subtree is never visited.
+        current.childNodes = current.childNodes.filter((child) => {
+            if (!carriesSkip(child)) return true;
+
+            collectIds(child, skipped);
+
+            return false;
+        });
+    });
+}
+
+/**
+ * Take the elements carrying data-replay-skip out of an event. `skipped` is
+ * the Set of rrweb ids left out so far on this page (cleared by a full
+ * snapshot, which lists the page again): a mutation adding nodes into a
+ * skipped element, or changing, typing into or removing one, is dropped too.
+ * Returns false when nothing of the event is left. Mutates.
+ */
+export function skipNodes(event, skipped) {
+    if (!event || !event.data) return true;
+
+    if (event.type === EVENT_FULL_SNAPSHOT) {
+        if (!event.data.node) return true;
+
+        skipped.clear();
+        pruneTree(event.data.node, skipped);
+
+        return true;
+    }
+
+    if (event.type !== EVENT_INCREMENTAL) return true;
+
+    const data = event.data;
+
+    if (data.source !== SOURCE_MUTATION) {
+        // Input, clicks, scrolls, media, selections: anything aimed at a skipped node goes.
+        return !(typeof data.id === 'number' && skipped.has(data.id));
+    }
+
+    const adds = Array.isArray(data.adds) ? data.adds : [];
+
+    if (skipped.size === 0 && !adds.some((add) => add && add.node && (carriesSkip(add.node) || hasSkipInside(add.node)))) return true;
+
+    const before = adds.length + (data.removes?.length || 0) + (data.attributes?.length || 0) + (data.texts?.length || 0);
+
+    // rrweb does not order adds parent first: repeat until no add lands in a newly skipped node.
+    let grew = true;
+
+    while (grew) {
+        grew = false;
+
+        for (const add of adds) {
+            if (!add || !add.node || skipped.has(add.node.id)) continue;
+
+            if (carriesSkip(add.node) || skipped.has(add.parentId)) {
+                collectIds(add.node, skipped);
+                grew = true;
+            }
+        }
+    }
+
+    data.adds = adds.filter((add) => {
+        if (!add || !add.node) return true;
+        if (skipped.has(add.node.id)) return false;
+
+        pruneTree(add.node, skipped);
+
+        // The replayer waits for a sibling that never comes: append instead.
+        if (skipped.has(add.nextId)) add.nextId = null;
+        if (skipped.has(add.previousId)) add.previousId = null;
+
+        return true;
+    });
+
+    if (Array.isArray(data.removes)) data.removes = data.removes.filter((remove) => !skipped.has(remove.id) && !skipped.has(remove.parentId));
+    if (Array.isArray(data.attributes)) data.attributes = data.attributes.filter((change) => !skipped.has(change.id));
+    if (Array.isArray(data.texts)) data.texts = data.texts.filter((change) => !skipped.has(change.id));
+
+    const after = data.adds.length + (data.removes?.length || 0) + (data.attributes?.length || 0) + (data.texts?.length || 0);
+
+    return before === 0 || after > 0;
+}
+
+function hasSkipInside(node) {
+    let found = false;
+
+    walk(node, (current) => {
+        if (carriesSkip(current)) found = true;
+    });
+
+    return found;
+}
+
+/** Pointer samples, which a live stream that falls behind drops first. */
+export function isPointerSample(event) {
+    return !!event && event.type === EVENT_INCREMENTAL && !!event.data && [SOURCE_MOUSE_MOVE, SOURCE_TOUCH_MOVE, SOURCE_DRAG].includes(event.data.source);
+}

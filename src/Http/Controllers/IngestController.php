@@ -7,10 +7,11 @@ use Illuminate\Http\Request;
 use Illuminate\Http\UploadedFile;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Str;
-use Packstub\SessionReplay\Facades\SessionReplay;
+use Packstub\SessionReplay\Http\Concerns\ReadsRecorderToken;
 use Packstub\SessionReplay\Models\ReplayAsset;
 use Packstub\SessionReplay\Models\ReplayAssetOwner;
 use Packstub\SessionReplay\Models\ReplaySession;
+use Packstub\SessionReplay\Support\Assist;
 use Packstub\SessionReplay\Support\BatchIngester;
 use Packstub\SessionReplay\Support\ContextToken;
 use Packstub\SessionReplay\Support\ReplayStorage;
@@ -23,6 +24,8 @@ use Packstub\SessionReplay\Support\ReplayStorage;
  */
 class IngestController
 {
+    use ReadsRecorderToken;
+
     /** A batch may inflate to at most this many times ingest.max_batch_kb. */
     protected const INFLATE_FACTOR = 40;
 
@@ -117,10 +120,14 @@ class IngestController
             return $this->refuse(403, 'This recording belongs to someone else.', stop: true);
         }
 
+        $assist = app(Assist::class);
+
         return response()->json([
             'ok' => true,
             'duplicate' => $result['duplicate'],
             'missing_assets' => $result['missing_assets'],
+            // The knock: an agent's offer of help for the recording this batch was accepted for (assist.enabled only).
+            ...($assist->enabled() ? ['assist' => $assist->knock($sessionId)] : []),
         ], $result['created'] ? 201 : 200);
     }
 
@@ -296,33 +303,6 @@ class IngestController
         return response()->json(['ok' => true]);
     }
 
-    protected function context(Request $request): ContextToken|JsonResponse
-    {
-        if (! SessionReplay::enabled()) {
-            return $this->refuse(403, 'Recording is turned off.', stop: true);
-        }
-
-        $context = ContextToken::decode($request->input('token'));
-
-        if ($context === null) {
-            return $this->refuse(401, 'The recording token is missing, invalid or expired.', stop: true);
-        }
-
-        if ($context->isVisitor() && ! config('session-replay.guests', false)) {
-            return $this->refuse(403, 'Guests are not recorded.', stop: true);
-        }
-
-        return $context;
-    }
-
-    /** The recording's write key as the browser sends it (32 hex characters; anything up to 128 is taken), or none. */
-    protected function writeKey(Request $request): ?string
-    {
-        $key = $request->input('key');
-
-        return is_string($key) && $key !== '' && strlen($key) <= 128 ? $key : null;
-    }
-
     /** Counts the upload against the person's daily allowance (all guests share one) and says whether it is spent. */
     protected function overDailyLimit(ContextToken $context, int $bytes): bool
     {
@@ -354,11 +334,5 @@ class IngestController
         }
 
         return $body;
-    }
-
-    /** "stop" tells the recorder to give up for this page instead of retrying. */
-    protected function refuse(int $status, string $message, bool $stop = false): JsonResponse
-    {
-        return response()->json(['ok' => false, 'message' => $message, 'stop' => $stop], $status);
     }
 }

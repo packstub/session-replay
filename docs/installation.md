@@ -26,7 +26,7 @@ php artisan session-replay:install
 The install command:
 
 1. publishes `config/session-replay.php`,
-2. offers to run the migrations (six tables: `replay_sessions`, `replay_chunks`, `replay_markers`, `replay_assets`, `replay_session_assets`, `replay_asset_owners`),
+2. offers to run the migrations (seven tables: `replay_sessions`, `replay_chunks`, `replay_markers`, `replay_assets`, `replay_session_assets`, `replay_asset_owners`, `replay_assist_requests`),
 3. publishes `app/Providers/SessionReplayServiceProvider.php` with the `viewSessionReplay` gate in it and registers it in `bootstrap/providers.php`.
 
 Migrations also run with a plain `php artisan migrate` (upgrading from 1.0: the `replay_asset_owners` table and `replay_sessions.write_key` are new, run it); set `run_migrations` to `false` to publish and run them yourself (see [Storage](storage.md#multi-tenant-apps)).

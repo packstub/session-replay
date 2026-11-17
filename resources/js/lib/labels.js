@@ -18,6 +18,7 @@ export const TEXT = {
         vital: 'Vital',
         custom: 'Custom',
         report: 'Report',
+        assist: 'Assist',
     },
     copy_link: 'Copy link to this moment',
     link_copied: 'Link copied',
@@ -44,6 +45,9 @@ export const TEXT = {
         rating: 'Rating',
         x: 'X',
         y: 'Y',
+        opened_by: 'Opened by',
+        reason: 'Reason',
+        granted: 'Allowed',
     },
 };
 

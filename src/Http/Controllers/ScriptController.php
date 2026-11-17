@@ -6,7 +6,7 @@ use Packstub\SessionReplay\Facades\SessionReplay;
 use Symfony\Component\HttpFoundation\BinaryFileResponse;
 
 /**
- * GET {path}/scripts/{file} — the built recorder and player, so nothing has to be published.
+ * GET {path}/scripts/{file} — the built recorder, its Assist module, the player and the agent's live stage, so nothing has to be published.
  *
  * @internal Wired by the package; not part of the public API.
  */
@@ -14,8 +14,13 @@ class ScriptController
 {
     protected const FILES = [
         'recorder.js' => 'application/javascript; charset=utf-8',
+        // An ES module the recorder imports when Assist is needed (same origin, the same version query).
+        'assist.js' => 'application/javascript; charset=utf-8',
         'player.js' => 'application/javascript; charset=utf-8',
         'player.css' => 'text/css; charset=utf-8',
+        // The agent's live stage (Assist): rrweb's Replayer in live mode and the calls engine.
+        'stage.js' => 'application/javascript; charset=utf-8',
+        'stage.css' => 'text/css; charset=utf-8',
     ];
 
     public function __invoke(string $file): BinaryFileResponse

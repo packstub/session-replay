@@ -4,6 +4,23 @@ All notable changes to `packstub/session-replay` are documented here.
 
 ## Unreleased
 
+Assist: support helps someone while they are still on the page. Off until `SESSION_REPLAY_ASSIST` is on; run `php artisan migrate` for the new `replay_assist_requests` table. The live view needs [Holler for Laravel](https://github.com/packstub/holler) (suggested, released separately); without it the requests are a plain queue. See [Assist](docs/assist.md).
+
+**Security:** the upload endpoints (and the new Assist routes) read the signed token, the write key and a request's secret from the request body only, never from the query string, which access logs, proxies and error trackers keep.
+
+- A visitor asks for help from the page with `SessionReplay.assist.request()` or the optional "Get help" button (`assist.button`), and support takes the request on the new Requests page of the built-in viewer
+- Support offers help from a live recording: a **Live now** tab says when each page was last heard from, and the visitor answers Accept or Not now
+- The live stage shows the visitor's page as it happens, masked like the recording
+- The agent's pointer shows on the visitor's page while they watch (**Show my pointer**, on by default); nothing is asked, since nothing on the page changes
+- Remote control, typing into masked fields (`assist.control_masked`), audio, video and screen share are each asked of the visitor separately; Escape takes control back and a password field is never filled
+- Annotations: the agent draws over the page, and the strokes fade
+- **Put on hold** and **Resume** on the stage (Holler's hold); an agent is live in one assist at a time, and a second one waits until the first is on hold or over
+- An agent who leaves the live view keeps the request: the same call goes on when they are back in time, a new one starts after that, and past `assist.claim_timeout_seconds` the request returns to the list
+- Limits against floods: one request per recording, `assist.requests_per_hour`, `assist.max_open_requests`, and a budget of their own for guests (`assist.guests`, `assist.guest_requests_per_hour`)
+- `SessionReplay::canAssistUsing()` decides who may help (the viewer gate by default); a grants log and an `assist` marker on the recording say what was asked, what was allowed and for how long
+- Events: `AssistRequested`, `AssistClaimed`, `AssistStarted`, `AssistEnded`
+- The stage can sit in a page of your own ([Hosting the stage](docs/assist.md#hosting-the-stage-in-a-page-of-your-own)); Filament Session Replay puts it in a panel
+- `data-replay-skip` leaves an element out of the recording with everything inside it
 - `composer.json`'s homepage and docs link point at packstub.dev
 
 ## 1.1.0 — 2026-11-04
