@@ -21,6 +21,7 @@ Record what a person did in the browser, keep the recording on your own disk and
 - Docs: [docs/](https://github.com/packstub/session-replay/tree/main/docs)
 - Support: [GitHub issues](https://github.com/packstub/session-replay/issues)
 - Demo app: [packstub/session-replay-demo](https://github.com/packstub/session-replay-demo), a small Laravel shop with recordings to watch, ready to run locally
+- Featured on Laravel News: [Session Replay for Laravel: Self-Hosted Browser Recordings](https://laravel-news.com/laravel-session-replay)
 
 ## Features
 
@@ -123,6 +124,21 @@ npm test          # the recorder's pure functions
 npm run build     # resources/js -> resources/dist
 composer serve    # a page to record and the viewer, on :8000
 ```
+
+## More from Packstub
+
+Other Packstub packages that sit well next to this one:
+
+- **[Filament Tenancy](https://packstub.dev/plugins/filament-tenancy)** (paid): a database per workspace for Filament panels, built on stancl/tenancy. Session Replay keeps every recording in its workspace and its tables can stay on the central connection, so the two fit together.
+- **[Account Switcher for Laravel](https://packstub.dev/plugins/account-switcher)**: impersonation, linked accounts and one-click developer logins, with every switch in an audit log.
+- **[Agents for Laravel](https://packstub.dev/plugins/agents)**: an AI agent and an MCP server from one list of tools, under your app's own authorization.
+- **[Filament Flow](https://packstub.dev/plugins/filament-flow)**: visual workflow automations for a Filament panel, with triggers, conditions and actions drawn on a canvas.
+- **[Filament Kanban](https://packstub.dev/plugins/filament-kanban)**: a Kanban board for Filament with instant drag and drop and rules checked on the server.
+- **[Nitpick](https://packstub.dev/plugins/filament-nitpick)**: themes for Filament panels, and a way for every person to pick their own.
+
+All plugins: [packstub.dev/plugins](https://packstub.dev/plugins).
+
+Packstub is made by [XLITE](https://xlite.dev), a small studio that also builds Laravel and Filament apps for clients.
 
 ## Credits
 
