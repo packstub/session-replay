@@ -2,6 +2,10 @@
 
 All notable changes to `packstub/session-replay` are documented here.
 
+## Unreleased
+
+- `composer.json`'s homepage and docs link point at packstub.dev
+
 ## 1.1.0 — 2026-11-04
 
 A security release, with the memory fixes for a panel tab that grew all day. Run `php artisan migrate`: a table, a column and two indexes.
