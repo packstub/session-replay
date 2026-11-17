@@ -79,7 +79,7 @@
     "support": {
         "issues": "https://github.com/packstub/session-replay/issues",
         "source": "https://github.com/packstub/session-replay",
-        "docs": "https://github.com/packstub/session-replay/tree/main/docs"
+        "docs": "https://packstub.dev/docs/session-replay"
     },
     "suggest": {
         "packstub/filament-session-replay": "The sessions inside a Filament v5 panel: a filterable resource, the player with timeline tabs, a relation manager for your users, masking declared on the form field.",
