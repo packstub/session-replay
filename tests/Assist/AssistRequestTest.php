@@ -344,7 +344,7 @@ it('keeps requests of recordings outside the agent\'s list out of reach', functi
     $this->getJson(route('session-replay.assist.status', (string) Str::uuid()))->assertForbidden();
 });
 
-it('works as a plain queue without Calls: claimed, then ended by the agent', function () {
+it('works as a plain queue without Holler: claimed, then ended by the agent', function () {
     Event::fake([AssistEnded::class]);
 
     $browser = $this->browser();

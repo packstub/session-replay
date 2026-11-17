@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { Endpoint, FROM_AGENT, FROM_VISITOR, LiveStyles, encodeEvent } from '../lib/assist-protocol.js';
-import { AgentState, Gesture, LIVE_BUFFER_MS, LiveFeed, ago, editable, handleVisitorMessage, reasonKey, stageDelta, stagePoint } from '../lib/assist-stage.js';
+import { AgentState, Gesture, LIVE_BUFFER_MS, LiveFeed, POINT_INTERVAL_MS, Pointer, ago, editable, handleVisitorMessage, reasonKey, stageDelta, stagePoint } from '../lib/assist-stage.js';
 
 // ---- fakes ---------------------------------------------------------------------
 
@@ -498,6 +498,9 @@ test('stagePhase: one word for the host\'s status badge', async () => {
     assert.equal(stagePhase({ status: 'active', client: 'reconnecting', connected: true }), 'reconnecting');
     assert.equal(stagePhase({ status: 'active', client: 'active', connected: true }), 'live');
     assert.equal(stagePhase({ status: 'active', client: 'active', connected: true, hidden: true }), 'hidden');
+    // On hold: the engine let go of the call (idle, no channel), and the request is still live.
+    assert.equal(stagePhase({ status: 'active', client: 'idle', connected: false, held: true }), 'on_hold');
+    assert.equal(stagePhase({ status: 'ended', held: true }), 'ended');
 });
 
 // ---- limits and holding the request ------------------------------------------------
@@ -562,4 +565,81 @@ test('the stage is reconnecting while the agent is back after leaving and the ne
     assert.equal(stagePhase({ status: 'claimed', reconnecting: true }), 'reconnecting');
     assert.equal(stagePhase({ status: 'claimed' }), 'waiting');
     assert.equal(stagePhase({ status: 'claimed', reconnecting: true, calls: false }), 'unavailable');
+});
+
+// ---- the agent's pointer while they watch ---------------------------------------------
+
+test('the pointer over the mirror goes out as droppable point messages, at most one per interval, and the last place still goes', () => {
+    const pointer = new Pointer();
+
+    assert.deepEqual(pointer.at({ x: 10, y: 20 }, 1000), [[{ t: 'point', x: 10, y: 20 }, { droppable: true }]]);
+    assert.equal(pointer.shown, true);
+
+    // Too soon: held back, and kept for the next frame.
+    assert.deepEqual(pointer.at({ x: 11, y: 21 }, 1010), []);
+    assert.deepEqual(pointer.at({ x: 12, y: 22 }, 1020), []);
+    assert.deepEqual(pointer.waiting, { x: 12, y: 22 });
+
+    assert.deepEqual(pointer.at(pointer.waiting, 1000 + POINT_INTERVAL_MS), [[{ t: 'point', x: 12, y: 22 }, { droppable: true }]]);
+    assert.equal(pointer.waiting, null);
+
+    // A second of moving is about thirty messages, however often the mouse reports.
+    let sent = 0;
+
+    for (let ms = 2000; ms < 3000; ms += 4) sent += pointer.at({ x: ms % 500, y: 5 }, ms).length;
+
+    assert.ok(sent >= 28 && sent <= 31, `${sent} messages in a second`);
+});
+
+test('the pointer is taken down once when it leaves the page, and a new channel starts without one', () => {
+    const pointer = new Pointer();
+
+    // Never shown: nothing to hide.
+    assert.deepEqual(pointer.at(null, 1), []);
+
+    pointer.at({ x: 1, y: 1 }, 1000);
+    pointer.at({ x: 2, y: 2 }, 1001);
+
+    // Off the mirror (or control granted, the pointer turned off, the visitor's tab hidden): one hide, not droppable, and what waited is forgotten.
+    assert.deepEqual(pointer.at(null, 1002), [[{ t: 'point.hide' }, {}]]);
+    assert.equal(pointer.waiting, null);
+    assert.deepEqual(pointer.at(null, 1003), []);
+    assert.deepEqual(pointer.hide(), []);
+
+    // Back on the page.
+    assert.equal(pointer.at({ x: 3, y: 3 }, 2000).length, 1);
+
+    pointer.reset();
+    assert.equal(pointer.shown, false);
+    assert.deepEqual(pointer.hide(), []);
+    assert.equal(pointer.at({ x: 3, y: 3 }, 2001).length, 1);
+});
+
+test('the visitor\'s page takes the pointer through the real channel, and drops it first when it falls behind', async () => {
+    const [a, b] = pair();
+    const got = [];
+    const visitor = new Endpoint({ channel: a, role: 'visitor', schema: FROM_AGENT, context: { viewport: () => ({ width: 1280, height: 800 }), knows: () => true }, drain: async () => {}, can: ['point'], onMessage: (message) => got.push(message) }).start();
+    let release;
+    const agent = new Endpoint({ channel: b, role: 'agent', schema: FROM_VISITOR, drain: () => new Promise((resolve) => (release = resolve)) }).start();
+    const pointer = new Pointer();
+
+    await tick();
+    assert.equal(agent.peerCan('point'), true);
+
+    for (const [message, options] of pointer.at({ x: 100, y: 200 }, 1000)) agent.send(message, options);
+    await tick();
+    assert.deepEqual(got, [{ t: 'point', x: 100, y: 200 }]);
+
+    // The channel is behind: of the queued pointer positions only the newest goes, the click before them stays.
+    b.bufferedAmount = 5 * 1024 * 1024;
+    agent.send({ t: 'click', x: 1, y: 1 });
+    for (let i = 1; i <= 5; i++) for (const [message, options] of pointer.at({ x: 100 + i, y: 200 }, 1000 + i * POINT_INTERVAL_MS)) agent.send(message, options);
+    await tick();
+    b.bufferedAmount = 0;
+    release();
+    await tick();
+    await tick();
+
+    assert.deepEqual(got.slice(1), [{ t: 'click', x: 1, y: 1 }, { t: 'point', x: 105, y: 200 }]);
+    assert.equal(visitor.bad, 0);
 });

@@ -3,9 +3,12 @@
  * the agent's stage. One ordered data channel, label "assist", JSON text
  * messages `{ t, ... }`. Pure: no DOM, so it runs in Node for the tests.
  *
- * - First message each way: `{ t: 'hello', v, role }`. A side that gets another
- *   major version stops (onVersion) and sends nothing else; nothing but a hello
- *   is taken before the peer's hello.
+ * - First message each way: `{ t: 'hello', v, role, can }`. A side that gets
+ *   another major version stops (onVersion) and sends nothing else; nothing but
+ *   a hello is taken before the peer's hello. `can` lists the optional message
+ *   types this side takes beyond version 1's own (`point`): the peer sends one
+ *   only to a side that named it (peerCan()), so a page on an older build never
+ *   gets a type it would count as a bad message.
  * - A message above MAX_MESSAGE_BYTES (browsers disagree above about 256 KB, a
  *   full snapshot is often more) goes as `{ t: 'part', id, i, n, d }` pieces,
  *   joined in order on the other side.
@@ -23,7 +26,9 @@
  * media.refused / media.stopped (`kind`; refused also `reason`),
  * screen.granted / screen.refused (`reason`) / screen.stopped, annot.ack, bye.
  *
- * From the agent: hello, control.request, control.release, move / click /
+ * From the agent: hello, point (`x`, `y` in the visitor's viewport pixels: the
+ * agent's pointer while they only watch) / point.hide (optional: `can`),
+ * control.request, control.release, move / click /
  * drag.start / drag (`x`, `y` in the visitor's viewport pixels), scroll
  * (`dx`, `dy`, at the cursor), drag.stop, focus (`id`, an rrweb node id),
  * input / select (`id`, `value`), annot.start / annot.move (`x`, `y`),
@@ -58,6 +63,16 @@ const REASON_PATTERN = /^[a-z_]{1,32}$/;
 const MAX_CSS_CHARS = 8 * 1024 * 1024;
 const MAX_URL_CHARS = 2048;
 const MAX_DELTA = 100_000;
+const FEATURE_PATTERN = /^[a-z][a-z0-9._-]{0,31}$/;
+const MAX_FEATURES = 32;
+
+/** Optional message types a side may take beyond the version's own, named in its hello (`can`). */
+export const FEATURE_POINT = 'point';
+
+/** The `can` list of a hello as a clean list of names: anything else in it is left out. */
+export function features(list) {
+    return Array.isArray(list) ? [...new Set(list.slice(0, MAX_FEATURES).filter((name) => typeof name === 'string' && FEATURE_PATTERN.test(name)))] : [];
+}
 
 // ---- encoding ---------------------------------------------------------------
 
@@ -290,6 +305,9 @@ function mediaKind(message) {
 export const FROM_AGENT = {
     'control.request': bare,
     'control.release': bare,
+    // The agent's pointer while they watch: drawn, never acted on. Sent only to a page whose hello says `can: ['point']`.
+    point,
+    'point.hide': bare,
     move: point,
     click: point,
     'drag.start': point,
@@ -364,9 +382,12 @@ export function validate(message, schema, ctx = {}) {
  *
  * `rate` ({ bytesPerSecond, burstBytes }, see AGENT_RATE): a byte budget for
  * what comes in; past it the channel is closed with reason `too_fast`.
+ *
+ * `can`: the optional message types this side takes (its schema must know
+ * them); they go out in the hello, and peerCan(name) says what the peer named.
  */
 export class Endpoint {
-    constructor({ channel, role, schema, context = {}, drain, onReady = () => {}, onMessage = () => {}, onVersion = () => {}, onClose = () => {}, budget = BAD_MESSAGE_BUDGET, maxBytes = MAX_MESSAGE_BYTES, rate = null, now = () => Date.now() }) {
+    constructor({ channel, role, schema, context = {}, drain, onReady = () => {}, onMessage = () => {}, onVersion = () => {}, onClose = () => {}, budget = BAD_MESSAGE_BUDGET, maxBytes = MAX_MESSAGE_BYTES, rate = null, now = () => Date.now(), can = [] }) {
         this.channel = channel;
         this.role = role;
         this.schema = schema;
@@ -387,6 +408,8 @@ export class Endpoint {
         this.closed = false;
         this.pumping = false;
         this.peerVersion = null;
+        this.can = features(can);
+        this.peerFeatures = [];
         this.rate = rate;
         this.now = now;
         this.allowance = rate ? rate.burstBytes : 0;
@@ -400,7 +423,7 @@ export class Endpoint {
     start() {
         this.channel.addEventListener('message', this.listeners.message);
         this.channel.addEventListener('close', this.listeners.close);
-        this.write(encode({ t: 'hello', v: PROTOCOL_VERSION, role: this.role }));
+        this.write(encode({ t: 'hello', v: PROTOCOL_VERSION, role: this.role, ...(this.can.length ? { can: this.can } : {}) }));
 
         return this;
     }
@@ -415,6 +438,11 @@ export class Endpoint {
 
         this.queue.push({ text, droppable });
         this.pump();
+    }
+
+    /** Whether the peer's hello named this optional message type: only then is one sent. */
+    peerCan(name) {
+        return this.ready && this.peerFeatures.includes(name);
     }
 
     get behind() {
@@ -540,6 +568,7 @@ export class Endpoint {
             return;
         }
 
+        this.peerFeatures = features(message.can);
         this.ready = true;
         this.onReady();
         this.pump();

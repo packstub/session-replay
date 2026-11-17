@@ -99,6 +99,8 @@ class FakeClient extends EventTarget {
 function fakeUi() {
     const prompts = [];
     let shown = null;
+    // The one cursor: 'control' while the agent has control, 'point' while they point, null hidden (as assist-ui.js).
+    const cursor = { mode: null, name: null, at: null };
 
     return {
         prompts,
@@ -146,8 +148,32 @@ function fakeUi() {
             return prompts.some((prompt) => !prompt.done);
         },
         contains: () => false,
-        cursor: { show() {}, move() {}, hide() {} },
-        outline() {},
+        cursorState: cursor,
+        outlined: false,
+        cursor: {
+            show(name) {
+                Object.assign(cursor, { mode: 'control', name });
+            },
+            move(x, y) {
+                cursor.at = [x, y];
+            },
+            hide() {
+                if (cursor.mode === 'control') cursor.mode = null;
+            },
+        },
+        pointer: {
+            move(name, x, y) {
+                if (cursor.mode === 'control') return;
+
+                Object.assign(cursor, { mode: 'point', name, at: [x, y] });
+            },
+            hide() {
+                if (cursor.mode === 'point') cursor.mode = null;
+            },
+        },
+        outline(on) {
+            this.outlined = on;
+        },
         ink: { start() {}, move() {}, stop() {}, clear() {} },
         media() {},
         clearMedia() {},
@@ -244,6 +270,9 @@ async function live({ stored = {}, video = false } = {}) {
     await settle();
 
     return {
+        agent,
+        /** The visitor's end of the data channel. */
+        channel: visitorSide,
         ui,
         client,
         timers,
@@ -395,7 +424,7 @@ test('when the agent leaves the live view the page says they are reconnecting, a
 
     // The client's own poll hears the request went back to claimed: the call is over, the agent is away.
     page.server.poll = { id: 'r1', status: 'claimed', opened_by: 'visitor', agent: { id: '5', name: 'Ana' }, reconnecting: true, call: null, signals: [], cursor: 0 };
-    await first.options.signaling.poll({ after: 0, tab: 'x', hold: true });
+    await first.options.signaling.poll({ after: 0, tab: 'x', claim: true });
     await settle();
 
     assert.equal(first.destroyed, true);
@@ -426,7 +455,7 @@ test('what the visitor allowed one agent is not carried over to the next one', a
 
     // Ana leaves, the claim lapses back to the list, and Ion takes it.
     page.server.poll = { id: 'r1', status: 'open', opened_by: 'visitor', agent: null, call: null, signals: [], cursor: 0 };
-    await page.client.options.signaling.poll({ after: 0, tab: 'x', hold: true });
+    await page.client.options.signaling.poll({ after: 0, tab: 'x', claim: true });
     await settle();
 
     assert.deepEqual(JSON.parse(page.store.get('sr:assist')).grants, {});
@@ -441,4 +470,107 @@ test('what the visitor allowed one agent is not carried over to the next one', a
     assert.notEqual(FakeClient.last, page.client);
     assert.equal(FakeClient.last.callId, 'c3');
     assert.equal(FakeClient.last.cameraStream, null);
+});
+
+// ---- the agent's pointer while they only watch -----------------------------------------
+
+test('the page tells the stage it takes the pointer, and draws it as the agent\'s named cursor without asking and without the control frame', async () => {
+    const page = await live();
+
+    assert.equal(page.agent.peerCan('point'), true);
+
+    await page.send({ t: 'point', x: 300, y: 120 });
+
+    assert.deepEqual(page.ui.cursorState, { mode: 'point', name: 'Ana', at: [300, 120] });
+    // Nothing was asked, nothing was granted or logged, no dashed frame, and the page said nothing back.
+    assert.equal(page.ui.prompts.length, 0);
+    assert.deepEqual(page.grants, []);
+    assert.equal(page.ui.outlined, false);
+    assert.deepEqual(page.said(), []);
+
+    await page.send({ t: 'point', x: 310, y: 125 });
+    assert.deepEqual(page.ui.cursorState.at, [310, 125]);
+
+    await page.send({ t: 'point.hide' });
+    assert.equal(page.ui.cursorState.mode, null);
+});
+
+test('a control message still does nothing without control: only the pointer was let through', async () => {
+    const page = await live();
+
+    await page.send({ t: 'move', x: 300, y: 120 });
+    await page.send({ t: 'click', x: 300, y: 120 });
+
+    assert.equal(page.ui.cursorState.mode, null);
+    assert.deepEqual(page.said(), []);
+});
+
+test('the pointer never sits on a question, and not in a tab nobody sees', async () => {
+    const page = await live();
+
+    await page.send({ t: 'media.request', kind: 'audio' });
+    assert.equal(page.ui.open().length, 1);
+
+    await page.send({ t: 'point', x: 300, y: 120 });
+    assert.equal(page.ui.cursorState.mode, null);
+
+    await page.answer(false);
+    await page.send({ t: 'point', x: 300, y: 120 });
+    assert.equal(page.ui.cursorState.mode, 'point');
+
+    await page.send({ t: 'point.hide' });
+    globalThis.document.visibilityState = 'hidden';
+    await page.send({ t: 'point', x: 300, y: 120 });
+    assert.equal(page.ui.cursorState.mode, null);
+});
+
+test('with control the control cursor takes over: one cursor, and the pointer is ignored until control ends', async () => {
+    const page = await live();
+
+    await page.send({ t: 'point', x: 300, y: 120 });
+    assert.equal(page.ui.cursorState.mode, 'point');
+
+    await page.send({ t: 'control.request' });
+    await page.answer(true);
+
+    assert.equal(page.ui.cursorState.mode, 'control');
+    assert.equal(page.ui.outlined, true);
+
+    // A stage that still pointed: nothing changes for the control cursor.
+    await page.send({ t: 'point', x: 5, y: 5 });
+    await page.send({ t: 'point.hide' });
+    assert.equal(page.ui.cursorState.mode, 'control');
+
+    await page.send({ t: 'control.release' });
+    assert.equal(page.ui.cursorState.mode, null);
+    assert.equal(page.ui.outlined, false);
+
+    await page.send({ t: 'point', x: 7, y: 9 });
+    assert.deepEqual(page.ui.cursorState, { mode: 'point', name: 'Ana', at: [7, 9] });
+});
+
+test('the pointer goes with the channel', async () => {
+    const page = await live();
+
+    await page.send({ t: 'point', x: 300, y: 120 });
+    // The connection dropped under it.
+    page.channel.close();
+    await settle();
+
+    assert.equal(page.ui.cursorState.mode, null);
+});
+
+test('while the agent has the assist on hold the page says they will be right back', async () => {
+    const page = await live();
+
+    // Holler's hold: the engine has nobody to be connected to and nothing is wrong ('waiting').
+    page.client.state = 'waiting';
+    page.client.dispatchEvent(new Event('statechange'));
+
+    assert.equal(page.ui.shown.text, 'onHold');
+
+    page.client.state = 'active';
+    page.client.dispatchEvent(new Event('statechange'));
+
+    assert.equal(page.ui.shown.text, 'sees');
 });

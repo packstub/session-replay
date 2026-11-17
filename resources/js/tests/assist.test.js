@@ -10,6 +10,7 @@ import {
     PROTOCOL_VERSION,
     Reassembler,
     encodeEvent,
+    features,
     liveStyleKey,
     mapPoint,
     restoreLiveStyles,
@@ -339,13 +340,13 @@ test('the adapter polls with a POST, the secret and the token in the body, never
     const polls = [];
     const signaling = new AssistSignaling({ routes, fetch, credentials: () => ({ id: 'r1', secret: 's3cret', token: 'tok', session: 'rec-1', key: 'k', rebind: true }), onPoll: (data) => polls.push(data) });
 
-    const answer = await signaling.poll({ after: 2, tab: 'tab-1', hold: true, kind: 'assist' });
+    const answer = await signaling.poll({ after: 2, tab: 'tab-1', claim: true, kind: 'assist' });
 
-    assert.deepEqual(answer, { call: { id: 9 }, incoming: null, signals: [{ id: 3, type: 'offer' }], cursor: 3 });
+    assert.deepEqual(answer, { call: { id: 9 }, incoming: null, on_hold: null, signals: [{ id: 3, type: 'offer' }], cursor: 3 });
     assert.equal(calls[0].url, '/sr/assist/requests/r1');
     assert.equal(calls[0].init.method, 'POST');
     assert.ok(!calls[0].url.includes('s3cret') && !calls[0].url.includes('tok'));
-    assert.deepEqual(calls[0].body, { token: 'tok', after: 2, tab: 'tab-1', hold: true, secret: 's3cret', session: 'rec-1', key: 'k' });
+    assert.deepEqual(calls[0].body, { token: 'tok', after: 2, tab: 'tab-1', claim: true, secret: 's3cret', session: 'rec-1', key: 'k' });
     assert.equal(polls[0].status, 'active');
     assert.deepEqual(signaling.rtc.iceServers, [{ urls: 'stun:x' }]);
 });
@@ -719,4 +720,67 @@ test('a refusal carries its reason to the agent', () => {
     assert.deepEqual(validate({ t: 'screen.refused', reason: 'cooldown' }, FROM_VISITOR).message, { t: 'screen.refused', reason: 'cooldown' });
     assert.deepEqual(validate({ t: 'screen.refused' }, FROM_VISITOR).message, { t: 'screen.refused', reason: null });
     assert.equal(validate({ t: 'media.refused', kind: 'screen', reason: 'cooldown' }, FROM_VISITOR).ok, false);
+});
+
+// ---- the agent's pointer and the optional message types of a hello ----------------------
+
+test('point and point.hide are checked like the other points, and no control message was loosened', () => {
+    const check = (message) => validate(message, FROM_AGENT, viewport);
+
+    assert.deepEqual(check({ t: 'point', x: 10, y: 20, extra: 'dropped' }), { ok: true, message: { t: 'point', x: 10, y: 20 } });
+    assert.deepEqual(check({ t: 'point.hide', x: 1 }), { ok: true, message: { t: 'point.hide' } });
+    // Not a number: bad. Outside the viewport (a resize under way): dropped without counting.
+    assert.deepEqual(check({ t: 'point', x: '10', y: 20 }), { ok: false, bad: true });
+    assert.deepEqual(check({ t: 'point', x: NaN, y: 20 }), { ok: false, bad: true });
+    assert.deepEqual(check({ t: 'point', x: 5000, y: 20 }), { ok: false, bad: false });
+    assert.deepEqual(check({ t: 'point', x: -1, y: 20 }), { ok: false, bad: false });
+    // The visitor never sends one.
+    assert.deepEqual(validate({ t: 'point', x: 1, y: 1 }, FROM_VISITOR), { ok: false, bad: true });
+});
+
+test('a hello names the optional message types a side takes, and the peer sends one only when it was named', async () => {
+    const { a, b, v, g } = endpoints({ visitor: { can: ['point', 'Not A Name', 7, 'point'] } });
+
+    v.start();
+    g.start();
+    await tick();
+
+    assert.deepEqual(JSON.parse(a.sent[0]), { t: 'hello', v: PROTOCOL_VERSION, role: 'visitor', can: ['point'] });
+    // A side with nothing optional says a plain hello, as every build before did.
+    assert.deepEqual(JSON.parse(b.sent[0]), { t: 'hello', v: PROTOCOL_VERSION, role: 'agent' });
+    assert.equal(g.peerCan('point'), true);
+    assert.equal(g.peerCan('other'), false);
+    assert.equal(v.peerCan('point'), false);
+});
+
+test('a page on a build from before the pointer names nothing: the stage has no reason to send it a type it would count as bad', async () => {
+    const { b, v, g, log } = endpoints();
+
+    v.start();
+    g.start();
+    await tick();
+
+    assert.equal(g.peerCan('point'), false);
+
+    // What an unknown type costs a build that does not know it (why it is never sent unasked): counted, and past the budget the channel closes.
+    const old = { ...FROM_AGENT };
+
+    delete old.point;
+    delete old['point.hide'];
+    v.schema = old;
+
+    for (let i = 0; i <= BAD_MESSAGE_BUDGET; i++) b.send(JSON.stringify({ t: 'point', x: 1, y: 1 }));
+
+    assert.deepEqual(log.closed.map(([side, why]) => [side, why]).filter(([side]) => side === 'visitor'), [['visitor', 'bad_messages']]);
+});
+
+test('a hello\'s list of optional types is kept short and to plain names; nothing is known before the hello', () => {
+    assert.deepEqual(features(['point', 'point', 'a.b-c_1', '', 'UPPER', null, 'x'.repeat(40)]), ['point', 'a.b-c_1']);
+    assert.deepEqual(features('point'), []);
+    assert.equal(features(Array.from({ length: 100 }, (_, i) => `f${i}`)).length, 32);
+
+    const [a] = pair();
+    const v = new Endpoint({ channel: a, role: 'visitor', schema: FROM_AGENT, context: viewport, drain: () => Promise.resolve() });
+
+    assert.equal(v.peerCan('point'), false);
 });

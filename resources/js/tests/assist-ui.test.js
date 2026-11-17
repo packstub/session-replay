@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { createUi } from '../assist-ui.js';
+import { POINT_IDLE_MS, createUi } from '../assist-ui.js';
 
 // assist-ui.js PROMPT_ARM_MS.
 const PROMPT_ARM_MS = 500;
@@ -151,4 +151,69 @@ test('taking a prompt down from code is never delayed', async () => {
     await Promise.resolve();
 
     assert.equal(answer, false);
+});
+
+// ---- the agent's cursor: pointing and control share one element -----------------------
+
+test('the pointer shows the agent\'s named cursor, and goes when told, when a question shows and after a short idle', async () => {
+    const { ui } = fakeUi();
+    const cursor = () => [...ui.host.shadow.all()].find((node) => node.className === 'cursor');
+    const name = () => cursor().children.at(-1).textContent;
+
+    assert.equal(cursor().hidden, true);
+
+    ui.pointer.move('Ana', 100, 50);
+    assert.equal(cursor().hidden, false);
+    assert.equal(name(), 'Ana');
+    assert.equal(cursor().style.transform, 'translate(98px, 48px)');
+    assert.equal(ui.pointer.shown, true);
+
+    ui.pointer.hide();
+    assert.equal(cursor().hidden, true);
+
+    // A question takes it down, and none is drawn over one.
+    ui.pointer.move('Ana', 100, 50);
+    ui.prompt('Ana asks to talk.', { timeoutMs: 0, tag: 'media' });
+    assert.equal(cursor().hidden, true);
+    ui.pointer.move('Ana', 120, 60);
+    assert.equal(cursor().hidden, true);
+    ui.cancelPrompts();
+
+    // Left lying, it goes on its own.
+    ui.pointer.move('Ana', 100, 50);
+    await new Promise((resolve) => setTimeout(resolve, POINT_IDLE_MS + 100));
+    assert.equal(cursor().hidden, true);
+    assert.equal(ui.pointer.shown, false);
+});
+
+test('one cursor: control takes it over from the pointer, and neither hides the other\'s', () => {
+    const { ui } = fakeUi();
+    const cursor = () => [...ui.host.shadow.all()].find((node) => node.className === 'cursor');
+
+    ui.pointer.move('Ana', 100, 50);
+    ui.cursor.show('Ana');
+    ui.cursor.move(10, 10);
+
+    // The agent has control: a late pointer message moves nothing and hides nothing.
+    ui.pointer.move('Ana', 500, 500);
+    ui.pointer.hide();
+    assert.equal(cursor().hidden, false);
+    assert.equal(cursor().style.transform, 'translate(8px, 8px)');
+
+    ui.cursor.hide();
+    assert.equal(cursor().hidden, true);
+
+    // And the other way: hiding the control cursor leaves a pointer alone.
+    ui.pointer.move('Ana', 100, 50);
+    ui.cursor.hide();
+    assert.equal(cursor().hidden, false);
+    ui.pointer.hide();
+});
+
+test('the cursor lives in the panel\'s host, which the recorder skips: the pointer is never recorded or mirrored back', () => {
+    const { ui } = fakeUi();
+    const cursor = [...ui.host.shadow.all()].find((node) => node.className === 'cursor');
+
+    assert.equal(ui.host.getAttribute('data-replay-skip'), '');
+    assert.ok(cursor);
 });

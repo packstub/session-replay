@@ -1,6 +1,6 @@
 import { workerTimers } from './worker-timers.js';
 import { AssistSignaling } from './assist-signaling.js';
-import { CHANNEL_LABEL, Endpoint, FROM_AGENT, LiveStyles, encodeEvent } from './assist-protocol.js';
+import { CHANNEL_LABEL, Endpoint, FEATURE_POINT, FROM_AGENT, LiveStyles, encodeEvent } from './assist-protocol.js';
 import { RemoteControl, maskedField } from './assist-control.js';
 import { isPointerSample } from './process.js';
 import { createUi, label } from '../assist-ui.js';
@@ -60,7 +60,7 @@ export function installAssist(recorder, env) {
     const Client = env.Client;
     const drain = env.drain;
     const now = env.now || (() => Date.now());
-    // This page's window on the call (Holler holds a side per window); a reload is a new one.
+    // This page's window on the call (in Holler a window claims its side); a reload is a new one.
     const tab = randomId();
     const ui = env.ui || createUi({ labels });
     // Offers this tab answered or declined: the knock repeats with every upload while one is open.
@@ -149,7 +149,7 @@ export function installAssist(recorder, env) {
         if (!state || client) return;
 
         try {
-            await signaling.poll({ after: 0, tab, hold: true });
+            await signaling.poll({ after: 0, tab, claim: true });
         } catch (error) {
             if (failed(error)) return;
         }
@@ -253,7 +253,8 @@ export function installAssist(recorder, env) {
         if (client?.cameraStream) actions.unshift({ label: label(labels, client.muted ? 'unmute' : 'mute'), onClick: () => mute(!client.muted) });
         if (controlling) actions.unshift({ label: label(labels, 'endControl'), kind: 'primary', onClick: () => endControl('visitor') });
 
-        const text = controlling ? 'controlling' : client?.state === 'reconnecting' ? 'reconnecting' : client?.sharing ? 'seesScreen' : 'sees';
+        // 'waiting': the agent put the assist on hold (Holler's hold: they are on another call and come back).
+        const text = controlling ? 'controlling' : client?.state === 'waiting' ? 'onHold' : client?.state === 'reconnecting' ? 'reconnecting' : client?.sharing ? 'seesScreen' : 'sees';
 
         ui.show({ text: label(labels, text, agentName()), agent: state.agent, actions });
     }
@@ -488,6 +489,8 @@ export function installAssist(recorder, env) {
             role: 'visitor',
             schema: FROM_AGENT,
             context: { viewport: () => ({ width: window.innerWidth, height: window.innerHeight }), knows: (id) => !!recorder.node(id) },
+            // Optional message types this build takes: the agent's stage sends one only to a page that names it.
+            can: [FEATURE_POINT],
             drain,
             onReady() {
                 liveStyles = new LiveStyles();
@@ -503,6 +506,7 @@ export function installAssist(recorder, env) {
             onVersion: () => ui.notice(label(labels, 'update')),
             onClose: () => {
                 streaming = false;
+                ui.pointer.hide();
                 endControl('reconnect');
             },
         }).start();
@@ -510,6 +514,7 @@ export function installAssist(recorder, env) {
 
     function closeChannel(reason) {
         streaming = false;
+        ui.pointer.hide();
         endControl(reason);
         endpoint?.close(reason);
         endpoint = null;
@@ -575,8 +580,16 @@ export function installAssist(recorder, env) {
                 else ui.ink.stop();
 
                 return;
+            case 'point':
+                // Where the agent points while they watch: drawn, never acted on (no consent, like a stroke).
+                // With control, the control cursor is the one; never over a question; not in a tab nobody sees.
+                if (controlling || ui.promptOpen || document.visibilityState === 'hidden') return;
+
+                return ui.pointer.move(agentName(), message.x, message.y);
+            case 'point.hide':
+                return ui.pointer.hide();
             case 'bye':
-                return;
+                return ui.pointer.hide();
             default:
                 return act(message);
         }
@@ -894,7 +907,10 @@ export function installAssist(recorder, env) {
 
     function visibility() {
         // The heartbeat on coming back is the recorder's (lib/assist-hook.js).
-        if (document.visibilityState === 'hidden') endControl('hidden');
+        if (document.visibilityState === 'hidden') {
+            endControl('hidden');
+            ui.pointer.hide();
+        }
 
         sendState();
     }

@@ -86,7 +86,7 @@ export class AssistSignaling {
 
     /** The first answer to an agent's knock: the triple instead of a secret, which this answer issues. */
     answerKnock(id) {
-        return this.request(this.url('poll', id), this.body({ after: 0, hold: false }, { recording: true, secret: false })).then((data) => {
+        return this.request(this.url('poll', id), this.body({ after: 0, claim: false }, { recording: true, secret: false })).then((data) => {
             this.onPoll(data);
 
             return data;
@@ -118,16 +118,18 @@ export class AssistSignaling {
     /**
      * The request's poll, which is the guest's Holler poll once a call exists.
      * Carries the recording's triple when `rebind` says the tab's recording
-     * changed, so the request follows it.
+     * changed, so the request follows it. `claim`: this window takes the
+     * guest's side of the call (the engine asks for it while it runs the call).
+     * A visitor never puts a call on hold, so `on_hold` is always null.
      */
-    async poll({ after = 0, tab = null, hold = false, rebind = false } = {}) {
-        const data = await this.request(this.url('poll'), this.body({ after, tab, hold: !!hold }, { recording: rebind || this.credentials().rebind === true }));
+    async poll({ after = 0, tab = null, claim = false, rebind = false } = {}) {
+        const data = await this.request(this.url('poll'), this.body({ after, tab, claim: !!claim }, { recording: rebind || this.credentials().rebind === true }));
 
         if (data.rtc && Array.isArray(data.rtc.iceServers)) this.rtc = data.rtc;
 
         this.onPoll(data);
 
-        return { call: data.call ?? null, incoming: null, signals: Array.isArray(data.signals) ? data.signals : [], cursor: typeof data.cursor === 'number' ? data.cursor : after };
+        return { call: data.call ?? null, incoming: null, on_hold: null, signals: Array.isArray(data.signals) ? data.signals : [], cursor: typeof data.cursor === 'number' ? data.cursor : after };
     }
 
     send(callId, type, payload, to = null) {

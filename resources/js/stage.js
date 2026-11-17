@@ -3,15 +3,17 @@ import '@rrweb/replay/dist/style.css';
 import './stage.css';
 import { HttpSignaling, drain } from '@packstub/holler';
 import { AssistClient, workerTimers } from './lib/assist-client.js';
-import { AGENT_RATE, CHANNEL_LABEL, Endpoint, FROM_VISITOR } from './lib/assist-protocol.js';
-import { AgentState, FINISHED, Gesture, LiveFeed, ago, editable, handleVisitorMessage, reasonKey, stageDelta, stagePhase, stagePoint, stageStop } from './lib/assist-stage.js';
+import { AGENT_RATE, CHANNEL_LABEL, Endpoint, FEATURE_POINT, FROM_VISITOR } from './lib/assist-protocol.js';
+import { AgentState, FINISHED, Gesture, LiveFeed, Pointer, ago, editable, handleVisitorMessage, reasonKey, stageDelta, stagePhase, stagePoint, stageStop } from './lib/assist-stage.js';
 
 /**
  * The agent's live stage in the built-in viewer ({path}/assist/requests/{id}/stage):
  * the visitor's page mirrored from the recorder's own events (rrweb's Replayer in
  * live mode, its controller hidden, the iframe with rrweb's default sandbox, no
- * scripts), remote control through an overlay, annotations, audio (and video
- * where Holler allows it), screen share either way, and the end of the assist.
+ * scripts), the agent's pointer shown on the visitor's page while they watch,
+ * remote control through an overlay, annotations, audio (and video where
+ * Holler allows it), screen share either way, putting the assist on hold
+ * (Holler's hold) and the end of the assist.
  *
  * The stage runs its own CallClient over Holler's own routes (kind=assist polls,
  * the ICE servers from the `ice` route) with media 'none' and the `assist`
@@ -92,6 +94,7 @@ function mountStage(root) {
     let request = config.request;
     const state = new AgentState({ calls: !!config.calls?.available, routes: !!config.calls?.routes, video: !!config.video });
     const gesture = new Gesture();
+    const pointer = new Pointer();
     const timers = workerTimers();
     let client = null;
     let clientCall = null;
@@ -102,6 +105,10 @@ function mountStage(root) {
     let destroyed = false;
     let statusTimer = null;
     let editing = null;
+    // "Look here": the agent's pointer over the mirror is drawn on the visitor's page. On unless the agent turns it off.
+    let pointing = true;
+    let pointAt = null;
+    let pointFrame = null;
     const ink = { strokes: [], current: null, frame: null };
 
     // ---- the mirror -----------------------------------------------------------
@@ -189,6 +196,7 @@ function mountStage(root) {
                 // Back on the live view after leaving it: the visitor's page makes a new call on its next poll.
                 return request.reconnecting ? t('status.reconnecting') : t('status.claimed');
             case 'active':
+                if (held()) return t('status.on_hold');
                 if (!client || client.state === 'connecting' || client.state === 'idle' || client.state === 'calling') return t('status.connecting');
                 if (client.state === 'reconnecting') return t('status.reconnecting');
                 if (!state.connected) return t('status.connecting');
@@ -218,6 +226,13 @@ function mountStage(root) {
         }
     }
 
+    /** Why a tool is not available now: while the assist is on hold, that is the reason rather than "connecting". */
+    function why(action) {
+        const reason = state.why(action);
+
+        return reason === 'connecting' && held() ? 'on_hold' : reason;
+    }
+
     function render() {
         if (state.why('draw') !== null) drawing = false;
 
@@ -230,11 +245,11 @@ function mountStage(root) {
         if (state.url) els.url.textContent = state.url;
 
         const live = request.status === 'active' && !finished;
-        const control = state.why('control');
+        const control = why('control');
 
         setButton('mirror', { why: live ? null : 'connecting', pressed: state.mode === 'mirror' });
         setButton('screen', {
-            why: state.screen === 'on' ? null : state.why('screen'),
+            why: state.screen === 'on' ? null : why('screen'),
             pressed: state.mode === 'screen',
             label: state.screen === 'on' ? t('buttons.screen') : state.screen === 'asking' ? t('buttons.screen_asking') : t('buttons.ask_screen'),
         });
@@ -243,17 +258,24 @@ function mountStage(root) {
             pressed: state.control === 'on',
             label: state.control === 'on' ? t('buttons.release') : state.control === 'asking' ? t('buttons.control_asking') : t('buttons.control'),
         });
-        setButton('draw', { why: state.why('draw'), pressed: drawing });
+        setButton('draw', { why: why('draw'), pressed: drawing });
+        setButton('pointer', { why: why('draw'), pressed: pointing });
+        setButton('hold', {
+            hidden: !config.calls?.routes?.hold || !config.calls?.routes?.resume,
+            why: held() ? null : live && state.connected ? null : state.why('share') ?? 'connecting',
+            pressed: held(),
+            label: held() ? t('buttons.resume') : t('buttons.hold'),
+        });
         setButton('audio', {
-            why: state.audio === 'on' ? 'audio_on' : state.why('audio'),
+            why: state.audio === 'on' ? 'audio_on' : why('audio'),
             label: state.audio === 'asking' ? t('buttons.audio_asking') : t('buttons.audio'),
         });
         setButton('video', {
             hidden: !config.video,
-            why: state.video === 'on' ? 'video_on' : state.why('video'),
+            why: state.video === 'on' ? 'video_on' : why('video'),
             label: state.video === 'asking' ? t('buttons.video_asking') : t('buttons.video'),
         });
-        setButton('share', { why: state.why('share'), pressed: !!client?.sharing, label: client?.sharing ? t('buttons.stop_share') : t('buttons.share') });
+        setButton('share', { why: why('share'), pressed: !!client?.sharing, label: client?.sharing ? t('buttons.stop_share') : t('buttons.share') });
         setButton('withdraw', { hidden: finished || !['open', 'claimed'].includes(request.status) });
         setButton('end', { hidden: finished || !['claimed', 'active'].includes(request.status) });
 
@@ -281,16 +303,18 @@ function mountStage(root) {
         els.screen.classList.toggle('is-controlling', state.control === 'on' && !screen);
 
         if (state.control !== 'on') closeEditor();
+        // No longer pointing (control granted, their screen instead of the page, the tab hidden, turned off): gone there too.
+        if (pointer.shown && !canPoint()) sendAll(pointer.hide());
 
         root.dispatchEvent(new CustomEvent('session-replay:stage', { detail: snapshot() }));
     }
 
     function phase() {
-        return stagePhase({ finished, status: request.status, reconnecting: !!request.reconnecting, calls: state.calls, routes: state.routes, version: state.version, client: client?.state ?? null, connected: state.connected, hidden: state.hidden });
+        return stagePhase({ finished, status: request.status, reconnecting: !!request.reconnecting, calls: state.calls, routes: state.routes, version: state.version, client: client?.state ?? null, connected: state.connected, hidden: state.hidden, held: held() });
     }
 
     function snapshot() {
-        return { phase: phase(), request: request.status, call: client?.state ?? null, connected: state.connected, control: state.control, audio: state.audio, video: state.video, screen: state.screen, mode: state.mode, drawing, events: feed.events, finished };
+        return { phase: phase(), request: request.status, call: client?.state ?? null, connected: state.connected, control: state.control, audio: state.audio, video: state.video, screen: state.screen, mode: state.mode, drawing, pointing, held: held(), events: feed.events, finished };
     }
 
     // ---- the agent's routes -----------------------------------------------------
@@ -410,6 +434,13 @@ function mountStage(root) {
         client.addEventListener('localstream', () => render());
         client.addEventListener('statechange', () => render());
         client.addEventListener('peerstate', () => render());
+        // The assist went on hold (the Hold button, or another call of the agent's resumed in its place from the
+        // Holler widget) or came back: the engine lets go of the call without an ending and keeps it as heldCall.
+        client.addEventListener('held', ({ detail }) => {
+            if (detail?.call && String(detail.call.id) === String(clientCall)) note('on_hold');
+
+            render();
+        });
         client.addEventListener('ended', () => {
             closeChannel('ended');
             dropClient();
@@ -488,6 +519,7 @@ function mountStage(root) {
                 endpoint = null;
                 gesture.cancel();
                 state.close();
+                pointer.reset();
                 render();
             },
         }).start();
@@ -499,6 +531,12 @@ function mountStage(root) {
         endpoint = null;
         old?.close(reason);
         state.close();
+        pointer.reset();
+    }
+
+    /** The assist is on hold for the agent: their side of the call waits (Holler's `on_hold`), the visitor's page too. */
+    function held() {
+        return !finished && !!client?.heldCall && String(client.heldCall.id) === String(clientCall);
     }
 
     function send(message, options = {}) {
@@ -562,6 +600,30 @@ function mountStage(root) {
 
     buttons.draw?.addEventListener('click', () => {
         drawing = !drawing && state.why('draw') === null;
+        render();
+    });
+
+    buttons.pointer?.addEventListener('click', () => {
+        pointing = !pointing;
+        render();
+    });
+
+    buttons.hold?.addEventListener('click', async () => {
+        if (!client) return;
+
+        buttons.hold.disabled = true;
+
+        try {
+            if (held()) {
+                await client.resumeHeld();
+                note('resumed');
+            } else {
+                await client.hold();
+            }
+        } catch {
+            note('hold_failed');
+        }
+
         render();
     });
 
@@ -682,6 +744,35 @@ function mountStage(root) {
     function sendAll(pairs) {
         for (const [message, options] of pairs) send(message, options);
     }
+
+    // ---- the pointer: where the agent points while they watch -----------------------
+
+    /**
+     * Whether the agent's pointer goes to the visitor's page now: the visitor's build takes it (its hello said so),
+     * the page view is up and seen, and the agent has no control (then `move` drives the one cursor there).
+     */
+    function canPoint() {
+        return pointing && !finished && !!endpoint?.peerCan(FEATURE_POINT) && state.connected && state.mode === 'mirror' && state.control !== 'on' && !state.hidden;
+    }
+
+    function flushPoint() {
+        pointFrame = null;
+        sendAll(pointer.at(canPoint() ? pointAt : null, performance.now()));
+
+        // Held back for the interval: the place the pointer stopped at still goes.
+        if (pointer.waiting) pointFrame = requestAnimationFrame(flushPoint);
+    }
+
+    // On the screen, not the overlay: the overlay takes pointer events only while the agent draws or has control.
+    els.screen.addEventListener('pointermove', (event) => {
+        pointAt = stagePoint(event.clientX, event.clientY, frame());
+        pointFrame ??= requestAnimationFrame(flushPoint);
+    });
+
+    els.screen.addEventListener('pointerleave', () => {
+        pointAt = null;
+        pointFrame ??= requestAnimationFrame(flushPoint);
+    });
 
     els.overlay.addEventListener('pointerdown', (event) => {
         if (event.button !== 0) return;
@@ -963,6 +1054,7 @@ function mountStage(root) {
         destroyed = true;
         finished = true;
         timers.clear(statusTimer);
+        if (pointFrame !== null) cancelAnimationFrame(pointFrame);
         closeChannel('unload');
         // destroy() sends the leave beacon, never a hang-up.
         dropClient();

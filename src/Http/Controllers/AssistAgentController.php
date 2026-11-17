@@ -182,6 +182,11 @@ class AssistAgentController
                 'signal' => route($prefix.'signal', ['call' => '__ID__']),
                 'leave' => route($prefix.'leave', ['call' => '__ID__']),
                 'ice' => route($prefix.'ice'),
+                // Holler's hold: the agent puts the assist on hold from the stage and comes back to it there.
+                ...(Route::has($prefix.'hold') && Route::has($prefix.'resume') ? [
+                    'hold' => route($prefix.'hold', ['call' => '__ID__']),
+                    'resume' => route($prefix.'resume', ['call' => '__ID__']),
+                ] : []),
             ];
             $policy = app(Holler::class)->rtcConfiguration()['iceTransportPolicy'];
         }

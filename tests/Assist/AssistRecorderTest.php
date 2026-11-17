@@ -29,7 +29,7 @@ it('hands the recorder the visitor routes, the timings and the strings while Ass
         ->and($assist['labels'])->toHaveKeys(['getHelp', 'askControl', 'askMasked', 'askAudio', 'askScreen', 'endControl']);
 });
 
-it('keeps the active poll under Calls\' hold and turns on the button and masked typing from the config', function () {
+it('keeps the active poll under Holler\'s claim and turns on the button and masked typing from the config', function () {
     config()->set('session-replay.assist.button', true);
     config()->set('session-replay.assist.control_masked', true);
     config()->set('session-replay.assist.poll.active_ms', 9000);
@@ -41,7 +41,7 @@ it('keeps the active poll under Calls\' hold and turns on the button and masked 
         ->and($assist['poll']['active'])->toBe(4000);
 });
 
-it('keeps the agent\'s stage polling Holler under its hold, however slow Calls\' own active poll is set', function () {
+it('keeps the agent\'s stage polling Holler under its claim, however slow Holler\'s own active poll is set', function () {
     config()->set('holler.poll.active', 8000);
     expect(app(Assist::class)->callsPollMs())->toBe(4000);
 

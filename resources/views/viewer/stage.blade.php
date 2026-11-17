@@ -57,6 +57,8 @@
                     <div class="sr-stage__row">
                         <button type="button" class="primary" data-action="control" aria-pressed="false" aria-describedby="sr-why-control">{{ __($s.'buttons.control') }}</button>
                         <button type="button" data-action="draw" aria-pressed="false" aria-describedby="sr-why-draw">{{ __($s.'buttons.draw') }}</button>
+                        {{-- On by default: the visitor sees where the agent points while they watch. --}}
+                        <button type="button" data-action="pointer" aria-pressed="true">{{ __($s.'buttons.pointer') }}</button>
                     </div>
                     <small class="sr-stage__why" id="sr-why-control" data-why="control" hidden></small>
                     <small class="sr-stage__why" id="sr-why-draw" data-why="draw" hidden></small>
@@ -74,9 +76,11 @@
                 </div>
 
                 <div class="sr-stage__row">
+                    <button type="button" data-action="hold" aria-pressed="false" aria-describedby="sr-why-hold" hidden>{{ __($s.'buttons.hold') }}</button>
                     <button type="button" data-action="withdraw" hidden>{{ __($s.'buttons.withdraw') }}</button>
                     <button type="button" class="danger" data-action="end" hidden>{{ __($s.'buttons.end') }}</button>
                 </div>
+                <small class="sr-stage__why" id="sr-why-hold" data-why="hold" hidden></small>
             </div>
 
             <div class="card sr-stage__audio" data-ref="audiobar" hidden>

@@ -7,6 +7,7 @@ use Illuminate\Support\Str;
 use Illuminate\Testing\TestResponse;
 use Packstub\Holler\Facades\Holler;
 use Packstub\Holler\HollerServiceProvider;
+use Packstub\Holler\Models\Call;
 use Packstub\SessionReplay\Models\ReplaySession;
 use Packstub\SessionReplay\Tests\Fixtures\Models\Team;
 use Packstub\SessionReplay\Tests\Fixtures\Models\User;
@@ -125,7 +126,7 @@ abstract class AssistTestCase extends TestCase
     }
 
     /**
-     * A visitor's request, claimed by an agent who is signed in (to the viewer and to Calls: the same guard).
+     * A visitor's request, claimed by an agent who is signed in (to the viewer and to Holler: the same guard).
      *
      * @return array{0: array{session: ReplaySession, token: string, key: string}, 1: array{id: string, secret: string}, 2: User}
      */
@@ -138,6 +139,31 @@ abstract class AssistTestCase extends TestCase
         $this->actingAs($agent)->postJson(route('session-replay.assist.claim', $asked['id']))->assertOk();
 
         return [$browser, $asked, $agent];
+    }
+
+    /**
+     * A live assist with the visitor's page (tab-1) and the agent's stage (agent-tab) both on the call.
+     *
+     * @return array{0: array{session: ReplaySession, token: string, key: string}, 1: array{id: string, secret: string}, 2: User, 3: Call}
+     */
+    protected function liveAssist(): array
+    {
+        [$browser, $asked, $agent] = $this->claimed();
+
+        $id = $this->poll($asked['id'], $asked['secret'], $browser['token'], ['tab' => 'tab-1'])->assertJson(['status' => 'active'])->json('call.id');
+        Holler::poll((string) $agent->id, 0, $id, 'agent-tab', claim: true, kind: 'assist');
+
+        return [$browser, $asked, $agent, Call::query()->with('participants')->findOrFail($id)];
+    }
+
+    /**
+     * The agent's stage is open: it polls the request's status every 2 s (as the signed-in agent).
+     *
+     * @return array<string, mixed>
+     */
+    protected function stagePolls(array $asked): array
+    {
+        return $this->getJson(route('session-replay.assist.status', $asked['id']))->assertOk()->json();
     }
 
     /**
@@ -154,7 +180,7 @@ abstract class AssistTestCase extends TestCase
         [$browser, $asked, $agent] = $this->claimed();
 
         $call = $this->poll($asked['id'], $asked['secret'], $browser['token'], ['tab' => 'tab-1'])->assertJson(['status' => 'active'])->json('call.id');
-        Holler::poll((string) $agent->id, 0, $call, 'agent-tab', hold: true, kind: 'assist');
+        Holler::poll((string) $agent->id, 0, $call, 'agent-tab', claim: true, kind: 'assist');
 
         // The agent navigates away; the visitor's page goes on polling every 2 s.
         for ($i = 0; $i < 4; $i++) {

@@ -6,7 +6,8 @@ export { workerTimers };
 /**
  * What both sides of Assist run the engine with: a CallClient whose poll loop
  * sits on a Web Worker timer. A hidden tab's own timers slow to once a minute,
- * which would lose the side of the call Holler holds for a window (5 s) and
+ * which would lose the side of the call the window claimed (Holler keeps a
+ * claim for 5 s after the window's last poll) and
  * look like a drop to the other side. The visitor's page (assist.js) and the
  * agent's stage (stage.js) both use it.
  */

@@ -1,7 +1,8 @@
 /**
  * Assist for real, between two browsers on the workbench: Ada's page records and asks for help; Ana claims the
  * request on the Requests page and lands on the live stage. Ana sees the mirror change when Ada types and adds a
- * row, asks for control and, once Ada allows it, clicks a button on Ada's page; she draws on Ada's page, starts
+ * row, points at the heading (Ada sees her cursor there, nothing asked), puts the assist on hold and resumes it,
+ * asks for control and, once Ada allows it, clicks a button on Ada's page; she draws on Ada's page, starts
  * audio (Ada allows the microphone), and ends the assist. WebRTC over loopback, a fake microphone.
  *
  * The visitor's panel lives in a closed shadow root; the test opens it (attachShadow forced to `open` before the
@@ -34,6 +35,22 @@ const inkOnVisitor = (page) =>
         }
 
         return painted;
+    });
+
+/** The agent's cursor on the visitor's page (inside the panel's shadow root): shown or not, whose name, where, and whether the control frame is up. */
+const cursorOnVisitor = (page) =>
+    page.evaluate(() => {
+        for (const host of document.querySelectorAll('[data-replay-skip]')) {
+            const cursor = host.shadowRoot?.querySelector('.cursor');
+
+            if (!cursor) continue;
+
+            const [, x, y] = /translate\((-?\d+)px, (-?\d+)px\)/.exec(cursor.style.transform) ?? [];
+
+            return { shown: !cursor.hidden, name: cursor.querySelector('span')?.textContent ?? '', x: Number(x), y: Number(y), frame: !host.shadowRoot.querySelector('.outline').hidden };
+        }
+
+        return null;
     });
 
 const stageState = (page) => page.evaluate(() => document.querySelector('[data-session-replay-stage]')?.sessionReplayStage?.state ?? null);
@@ -91,6 +108,54 @@ test('an agent claims a request and helps on the live stage: mirror, control, an
     await visitor.locator('#add').click();
     await expect(mirror.locator('#list li')).toHaveCount(1);
 
+    // ---- the pointer: Ana only watches, and Ada sees where she points ------------------------------
+
+    const title = await mirror.locator('h1').boundingBox();
+    const titleOnPage = await visitor.locator('h1').boundingBox();
+
+    await agent.mouse.move(title.x + title.width / 4, title.y + title.height / 2);
+    await agent.mouse.move(title.x + title.width / 2, title.y + title.height / 2, { steps: 5 });
+
+    await expect.poll(async () => (await cursorOnVisitor(visitor))?.shown, { timeout: 5_000 }).toBe(true);
+    // The place she stopped at, on Ada's own page: the middle of the heading, give or take the mirror's scale.
+    await expect.poll(async () => Math.abs((await cursorOnVisitor(visitor)).x - (titleOnPage.x + titleOnPage.width / 2))).toBeLessThan(12);
+
+    const pointed = await cursorOnVisitor(visitor);
+
+    expect(pointed.name).not.toBe('');
+    expect(Math.abs(pointed.y - (titleOnPage.y + titleOnPage.height / 2))).toBeLessThan(12);
+    // No question was asked and no control frame is up: nothing on Ada's page can be changed.
+    expect(pointed.frame).toBe(false);
+    await expect(visitor.getByText(/would like to/)).toHaveCount(0);
+    expect((await stageState(agent)).control).toBe('off');
+    // The cursor is part of the panel the recorder skips: it never comes back in the mirror.
+    await expect(mirror.locator('[data-session-replay-assist]')).toHaveCount(0);
+
+    // Off the page: gone on Ada's side too.
+    await agent.mouse.move(2, 2);
+    await expect.poll(async () => (await cursorOnVisitor(visitor)).shown, { timeout: 5_000 }).toBe(false);
+
+    // Turned off, it stays off.
+    await agent.getByRole('button', { name: 'Show my pointer' }).click();
+    await expect(agent.getByRole('button', { name: 'Show my pointer' })).toHaveAttribute('aria-pressed', 'false');
+    await agent.mouse.move(title.x + title.width / 2, title.y + title.height / 2, { steps: 5 });
+    await agent.waitForTimeout(500);
+    expect((await cursorOnVisitor(visitor)).shown).toBe(false);
+    await agent.getByRole('button', { name: 'Show my pointer' }).click();
+
+    // ---- on hold and back: Ada's page waits, the same call goes on ---------------------------------
+
+    await agent.getByRole('button', { name: 'Put on hold' }).click();
+    await expect(status).toHaveText(/^On hold/);
+    await expect(visitor.getByText(/put this session on hold/)).toBeVisible({ timeout: 15_000 });
+    expect((await stageState(agent)).phase).toBe('on_hold');
+
+    await agent.getByRole('button', { name: 'Resume' }).click();
+    await expect(status).toHaveText(/^Live:/, { timeout: 60_000 });
+    await expect(visitor.getByText(/sees this page/)).toBeVisible({ timeout: 15_000 });
+    await expect(mirror.locator('h1')).toHaveText('Workbench');
+    await expect(mirror.locator('#list li')).toHaveCount(1);
+
     // ---- control: asked, allowed, a click on Ada's page -------------------------------------------
 
     await agent.getByRole('button', { name: 'Request control' }).click();
@@ -101,6 +166,10 @@ test('an agent claims a request and helps on the live stage: mirror, control, an
     await expect(agent.getByRole('button', { name: 'Release control' })).toBeVisible();
     await expect(agent.locator('[data-ref="screen"]')).toHaveClass(/is-controlling/);
     await expect(visitor.getByText(/is controlling this page/)).toBeVisible();
+    // One cursor: with control it is the control cursor, inside the dashed frame.
+    await expect.poll(async () => (await cursorOnVisitor(visitor)).frame).toBe(true);
+    expect((await cursorOnVisitor(visitor)).shown).toBe(true);
+    expect(await visitor.evaluate(() => [...document.querySelectorAll('[data-replay-skip]')].reduce((count, host) => count + (host.shadowRoot?.querySelectorAll('.cursor').length ?? 0), 0))).toBe(1);
 
     const add = await mirror.locator('#add').boundingBox();
 

@@ -44,7 +44,7 @@ it('creates the call when the page acknowledges the claim, not before', function
     expect($poll->json('rtc'))->toBe(['iceServers' => Holler::rtcConfiguration()['iceServers'], 'iceTransportPolicy' => 'all']);
 
     // Polls after it reuse the call, held by the tab.
-    $this->poll($asked['id'], $asked['secret'], $browser['token'], ['tab' => 'tab-1'])->assertJson(['status' => 'active', 'call' => ['id' => $call->id, 'held' => false]]);
+    $this->poll($asked['id'], $asked['secret'], $browser['token'], ['tab' => 'tab-1'])->assertJson(['status' => 'active', 'call' => ['id' => $call->id, 'claimed_elsewhere' => false]]);
 
     expect(Call::query()->count())->toBe(1);
 });
@@ -66,7 +66,7 @@ it('relays signals both ways, with a session description left as it was sent', f
 
     $this->visitorPost('signal', $asked['id'], $asked['secret'], $browser['token'], ['type' => 'offer', 'payload' => ['type' => 'offer', 'sdp' => $sdp]])->assertCreated();
 
-    $theirs = Holler::poll((string) $agent->id, 0, $call, 'agent-tab', hold: true, kind: 'assist');
+    $theirs = Holler::poll((string) $agent->id, 0, $call, 'agent-tab', claim: true, kind: 'assist');
 
     expect($theirs['signals'])->toHaveCount(1)
         ->and($theirs['signals'][0]['payload']['sdp'])->toBe($sdp)
@@ -97,7 +97,28 @@ it('caps a signal\'s size the way Holler does', function () {
         ->assertJson(['reason' => 'too_large']);
 });
 
-it('ends the request with Calls\' reason when the agent hangs up', function () {
+it('answers 429 like Holler when the page\'s signals pile up unread, and takes them again once the stage reads', function () {
+    config()->set('holler.max_pending_signals', 3);
+
+    [$browser, $asked, $agent] = $this->claimed();
+
+    $call = $this->poll($asked['id'], $asked['secret'], $browser['token'], ['tab' => 'tab-1'])->json('call.id');
+    $candidate = fn () => $this->visitorPost('signal', $asked['id'], $asked['secret'], $browser['token'], ['type' => 'ice', 'payload' => ['candidate' => 'candidate:1 1 udp 1 127.0.0.1 9 typ host']]);
+
+    for ($i = 0; $i < 3; $i++) {
+        $candidate()->assertCreated();
+    }
+
+    $candidate()->assertStatus(429)->assertJson(['ok' => false, 'reason' => 'too_many']);
+
+    // The stage's window claims its side and reads them: read signals are deleted, so there is room again.
+    $read = Holler::poll((string) $agent->id, 0, $call, 'agent-tab', claim: true, kind: 'assist');
+    Holler::poll((string) $agent->id, $read['cursor'], $call, 'agent-tab', claim: true, kind: 'assist');
+
+    $candidate()->assertCreated();
+});
+
+it('ends the request with Holler\'s reason when the agent hangs up', function () {
     Event::fake([AssistEnded::class]);
 
     [$browser, $asked, $agent] = $this->claimed();
@@ -139,7 +160,7 @@ it('frees the guest\'s side when the page unloads, so the next page takes it', f
 
     expect(Call::query()->sole()->participants->firstWhere('user_id', 'guest:'.$asked['id'])->tab)->toBeNull();
 
-    $this->poll($asked['id'], $asked['secret'], $browser['token'], ['tab' => 'tab-2'])->assertJson(['call' => ['held' => false]]);
+    $this->poll($asked['id'], $asked['secret'], $browser['token'], ['tab' => 'tab-2'])->assertJson(['call' => ['claimed_elsewhere' => false]]);
 });
 
 it('refuses a claim when the viewer and Holler see different people', function () {
@@ -469,7 +490,7 @@ it('still ends the request when it is the visitor\'s page that Holler drops', fu
     // The page is gone; the agent's stage polls on.
     for ($i = 0; $i < 4; $i++) {
         $this->travel(2)->seconds();
-        Holler::poll((string) $agent->id, 0, $call, 'agent-tab', hold: true, kind: 'assist');
+        Holler::poll((string) $agent->id, 0, $call, 'agent-tab', claim: true, kind: 'assist');
     }
 
     expect(AssistRequest::query()->sole())->status->toBe('ended')->end_reason->toBe('dropped');

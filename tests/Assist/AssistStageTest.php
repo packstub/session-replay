@@ -110,7 +110,7 @@ it('goes on to the stage after a claim from the Requests page, which links to it
         ->assertSessionHas('session-replay.assist-error');
 });
 
-it('renders the stage with what its script needs: the request, the agent routes and Calls\' own routes', function () {
+it('renders the stage with what its script needs: the request, the agent routes and Holler\'s own routes', function () {
     $this->needsCalls();
 
     Holler::routes(middleware: ['web', 'auth']);
@@ -150,7 +150,7 @@ it('renders the stage with what its script needs: the request, the agent routes 
     expect(stageConfig($this->get(route('session-replay.assist.stage', $asked['id'])))['video'])->toBeFalse();
 });
 
-it('tells the agent when Calls\' routes are not registered, instead of a stage that never connects', function () {
+it('tells the agent when Holler\'s routes are not registered, instead of a stage that never connects', function () {
     $this->needsCalls();
 
     [, $asked, $agent] = $this->claimed();
@@ -203,7 +203,7 @@ it('asks a guest to sign in before the stage', function () {
     $this->get(route('session-replay.assist.stage', $asked['id']))->assertRedirect(route('login'));
 });
 
-it('keeps the queue without Calls: the claim stays on the list and the stage says there is no live view', function () {
+it('keeps the queue without Holler: the claim stays on the list and the stage says there is no live view', function () {
     $this->withoutCalls();
 
     $asked = $this->asked($this->browser());

@@ -371,7 +371,7 @@ return [
         // A visible tab's sign of life, which also brings an agent's offer to a page that uploads nothing.
         'heartbeat_seconds' => 15,
         // How often the page polls its request: while it waits, and during an assist (the call's heartbeat;
-        // Holler holds a side for 5 seconds).
+        // a window keeps the side of the call it claimed for 5 seconds after its last poll).
         'poll' => [
             'waiting_ms' => 3000,
             'active_ms' => 2000,

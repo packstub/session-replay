@@ -66,7 +66,7 @@ class AssistController
     }
 
     /**
-     * POST {path}/assist/requests/{id} — secret, token, after, tab, hold (in the body, never the URL); session and key to re-bind the request to the
+     * POST {path}/assist/requests/{id} — secret, token, after, tab, claim (in the body, never the URL); session and key to re-bind the request to the
      * tab's new recording. An agent's proposal is answered without a secret, with the triple: the secret is issued in
      * that first answer, once.
      */
@@ -104,7 +104,7 @@ class AssistController
         }
 
         $tab = $this->tab($request);
-        $poll = $this->assist->visitorPoll($assist, max(0, (int) $request->input('after', 0)), $tab, $request->input('hold') === null || $request->boolean('hold'));
+        $poll = $this->assist->visitorPoll($assist, max(0, (int) $request->input('after', 0)), $tab, $request->input('claim') === null || $request->boolean('claim'));
 
         return response()->json($secret === null ? $poll : [...$poll, 'secret' => $secret]);
     }

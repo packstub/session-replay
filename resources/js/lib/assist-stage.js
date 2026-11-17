@@ -151,6 +151,62 @@ export function stageDelta(dx, dy, frame) {
     return { dx: Math.round(dx * scale), dy: Math.round(dy * scale) };
 }
 
+/** The agent's pointer goes to the visitor's page at most this often (about 30 a second). */
+export const POINT_INTERVAL_MS = 33;
+
+/**
+ * The agent's pointer over the mirror while they only watch, as `point`
+ * messages for the visitor's page ("look here": drawn there as the agent's
+ * named cursor, never acted on). at(point, now) returns the messages to send
+ * as [message, options] pairs: the position, at most one every `intervalMs`
+ * and droppable (the first thing the channel sheds when it falls behind), or
+ * `point.hide` once when the pointer leaves the page (`point` null: off the
+ * mirror, the pointer turned off, control granted, the visitor's tab hidden).
+ * A position held back for the interval is kept in `waiting`: ask again on the
+ * next frame, so the place the pointer stopped at is the one the visitor sees.
+ */
+export class Pointer {
+    constructor({ intervalMs = POINT_INTERVAL_MS } = {}) {
+        this.intervalMs = intervalMs;
+        this.reset();
+    }
+
+    at(point, now) {
+        if (!point) {
+            this.waiting = null;
+
+            if (!this.shown) return [];
+
+            this.shown = false;
+
+            return [[{ t: 'point.hide' }, {}]];
+        }
+
+        if (now - this.sentAt < this.intervalMs) {
+            this.waiting = point;
+
+            return [];
+        }
+
+        this.waiting = null;
+        this.sentAt = now;
+        this.shown = true;
+
+        return [[{ t: 'point', x: point.x, y: point.y }, { droppable: true }]];
+    }
+
+    hide() {
+        return this.at(null, 0);
+    }
+
+    /** A new channel (or none): the visitor's page shows no pointer of this one. */
+    reset() {
+        this.sentAt = -Infinity;
+        this.shown = false;
+        this.waiting = null;
+    }
+}
+
 /**
  * Pointer events on the overlay as control messages: a press that does not
  * move is a click where it was pressed, one that moves past `threshold`
@@ -236,7 +292,8 @@ export function editable(element) {
  * when the action is not available now (then `why()` says why).
  *
  * Reasons (label keys under stage.why): no_calls, no_routes, connecting,
- * version, hidden, screen_mode, asking, ended, no_video.
+ * version, hidden, screen_mode, asking, ended, no_video (and on_hold, which the
+ * stage puts in place of connecting while the assist is on hold).
  */
 export class AgentState {
     constructor({ calls = true, routes = true, video = false } = {}) {
@@ -502,15 +559,17 @@ export function stageStop(data) {
  * `session-replay:stage` event carries it): `ended`, `unavailable` (no Holler, no routes or
  * another protocol version), `waiting` (an offer or a claim the visitor's page has not taken up
  * yet), `connecting`, `reconnecting` (also while the agent is back on the live view after
- * leaving it and the new call is on its way), `hidden` (live, the visitor's tab in the background) or `live`.
+ * leaving it and the new call is on its way), `on_hold` (the agent put the assist on hold, or resumed
+ * another call of theirs in its place), `hidden` (live, the visitor's tab in the background) or `live`.
  */
-export function stagePhase({ finished = false, status = null, reconnecting = false, calls = true, routes = true, version = false, client = null, connected = false, hidden = false } = {}) {
+export function stagePhase({ finished = false, status = null, reconnecting = false, calls = true, routes = true, version = false, client = null, connected = false, hidden = false, held = false } = {}) {
     if (finished || FINISHED.includes(status)) return 'ended';
     if (!calls || !routes || version) return 'unavailable';
     // Claimed again after the agent left the live view: a new call comes on the visitor's next poll.
     if (status === 'claimed' && reconnecting) return 'reconnecting';
     if (status === 'open' || status === 'claimed') return 'waiting';
     if (status !== 'active') return 'ended';
+    if (held) return 'on_hold';
     if (client === 'reconnecting') return 'reconnecting';
     if (!client || ['idle', 'connecting', 'calling'].includes(client) || !connected) return 'connecting';
 

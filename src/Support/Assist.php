@@ -65,7 +65,7 @@ class Assist
         return (bool) config('session-replay.assist.enabled', false);
     }
 
-    /** How often the agent's stage polls Holler during the call: Holler's own `poll.active` (ms), kept between 250 ms and a second under Holler's hold. */
+    /** How often the agent's stage polls Holler during the call: Holler's own `poll.active` (ms), kept between 250 ms and a second under Holler's claim. */
     public function callsPollMs(): int
     {
         $ms = config('holler.poll.active');
@@ -74,14 +74,15 @@ class Assist
     }
 
     /**
-     * The longest gap between two polls of a side in a call: a second under Holler's hold (a window that
-     * stops polling for `Call::HOLD_SECONDS` lets go of its side, and the other end sees it reconnecting).
+     * The longest gap between two polls of a side in a call: a second under Holler's claim (a window keeps the
+     * side it claimed for `Call::CLAIM_SECONDS` after its last poll; past that the side is free for another
+     * window, and the other end sees it reconnecting).
      */
     public function callsPollCeilingMs(): int
     {
-        $hold = class_exists(Call::class) ? Call::HOLD_SECONDS : 5;
+        $claim = class_exists(Call::class) ? Call::CLAIM_SECONDS : 5;
 
-        return max(500, ($hold - 1) * 1000);
+        return max(500, ($claim - 1) * 1000);
     }
 
     /** Whether Holler lets a call carry video (its `video` setting, through the context). */
@@ -220,11 +221,11 @@ class Assist
 
     /**
      * The visitor's poll: the page is here, the timeouts run, a claim is acknowledged (the call is created), and
-     * once a call exists the page's Holler poll is made for it (hold: the page keeps the guest's side).
+     * once a call exists the page's Holler poll is made for it (claim: the page takes and keeps the guest's side).
      *
      * @return array<string, mixed>
      */
-    public function visitorPoll(AssistRequest $request, int $after = 0, ?string $tab = null, bool $hold = true): array
+    public function visitorPoll(AssistRequest $request, int $after = 0, ?string $tab = null, bool $claim = true): array
     {
         if ($request->isPending()) {
             AssistRequest::query()->whereKey($request->getKey())->update(['visitor_seen_at' => now()]);
@@ -240,7 +241,7 @@ class Assist
 
         $this->reconcile($request);
 
-        return $this->presentForVisitor($request, $after, $tab, $hold);
+        return $this->presentForVisitor($request, $after, $tab, $claim);
     }
 
     /**
@@ -747,6 +748,43 @@ class Assist
 
         if ($call === null || $call->isEnded()) {
             $this->callOver($request, $call);
+
+            return;
+        }
+
+        $this->letGoOfAbandonedHold($request, $call);
+    }
+
+    /**
+     * The agent may put the assist on hold (Holler's hold: the Hold button on the stage, or another call of theirs
+     * resumed in its place from the Holler widget). The request stays live and the visitor's page says the agent
+     * stepped away. Holler keeps a call on hold for as long as any window of that person polls, so a panel tab left
+     * open would keep a visitor waiting for good: here the hold lasts while the live view is open. An agent whose
+     * stage has not polled the request's status for `holler.reconnect_timeout` seconds while the assist is on hold
+     * has left the live view, as one whose side Holler dropped has: their side is withdrawn as dropped, and the
+     * request goes back to claimed (callOver()), to be picked up again when they come back or by someone else.
+     */
+    protected function letGoOfAbandonedHold(AssistRequest $request, Call $call): void
+    {
+        $agent = $request->agent_id === null ? null : $call->participant($request->agent_id);
+
+        if (! $agent?->isOnHold()) {
+            return;
+        }
+
+        $patience = max(1, (int) config('holler.reconnect_timeout', 15));
+
+        if ($request->agent_seen_at !== null && $request->agent_seen_at->gte(now()->subSeconds($patience))) {
+            return;
+        }
+
+        // CallEnded fires inside (the guest is alone): callEnded() puts the request back to claimed.
+        app(Holler::class)->withdraw($call, $agent, CallParticipant::DROPPED);
+        $request->refresh();
+
+        if ($request->status === AssistRequest::ACTIVE && $request->call_id === $call->getKey()) {
+            // The listener did not run (events faked, or it failed): the same move here.
+            $this->callOver($request, $call->refresh()->load('participants'));
         }
     }
 
@@ -847,12 +885,12 @@ class Assist
      *
      * @return array<string, mixed>
      */
-    public function presentForVisitor(AssistRequest $request, int $after = 0, ?string $tab = null, bool $hold = true): array
+    public function presentForVisitor(AssistRequest $request, int $after = 0, ?string $tab = null, bool $claim = true): array
     {
         $poll = ['call' => null, 'signals' => [], 'cursor' => $after, 'rtc' => null];
 
         if ($request->call_id !== null && $this->callsAvailable()) {
-            $calls = app(Holler::class)->poll($request->guestId(), $after, $request->call_id, $tab, $hold, self::KIND);
+            $calls = app(Holler::class)->poll($request->guestId(), $after, $request->call_id, $tab, $claim, self::KIND);
             // What the page's RTCPeerConnection needs (ICE servers, transport policy): only once there is a call.
             $poll = ['call' => $calls['call'], 'signals' => $calls['signals'], 'cursor' => $calls['cursor'], 'rtc' => $calls['call'] === null ? null : app(Holler::class)->rtcConfiguration()];
 

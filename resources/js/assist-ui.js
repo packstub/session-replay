@@ -1,8 +1,9 @@
 /**
  * What the visitor sees of Assist: the "Get help" button and form, the
  * status panel, the prompts (offer, consent, grants), the call bar, the
- * agent's named cursor, the dashed outline while the agent has control and
- * the annotation canvas. Plain DOM in a closed shadow root on a host that
+ * agent's named cursor (where they point while they watch, and where they act
+ * while they have control: one cursor), the dashed outline while the agent
+ * has control and the annotation canvas. Plain DOM in a closed shadow root on a host that
  * carries data-replay-skip: the page's styles cannot reach in, the recorder
  * leaves all of it out of the recording (so the agent's cursor and strokes
  * are never mirrored back) and nothing depends on the app's CSS framework.
@@ -50,6 +51,8 @@ const FADE_AFTER_MS = 4000;
 // A prompt takes no answer this soon after it shows: a visitor typing on the page must not grant with Space or Enter.
 export const PROMPT_ARM_MS = 500;
 const FADE_MS = 600;
+// The agent's pointer (no control) goes this long after its last position: a pointer left lying is not pointing.
+export const POINT_IDLE_MS = 3000;
 const STROKE_TIMEOUT_MS = 10_000;
 
 export function isHttpUrl(value) {
@@ -114,6 +117,23 @@ export function createUi({ doc = document, win = window, labels, now = () => Dat
     const prompts = [];
     let current = null;
     let noticeTimer = null;
+    // Whose the cursor is now: 'control' (the agent acts), 'point' (the agent only points), or null (hidden).
+    let cursorMode = null;
+    let pointTimer = null;
+
+    function placeCursor(x, y) {
+        cursor.style.transform = `translate(${Math.round(x) - 2}px, ${Math.round(y) - 2}px)`;
+    }
+
+    function hidePointer() {
+        clearTimeout(pointTimer);
+        pointTimer = null;
+
+        if (cursorMode !== 'point') return;
+
+        cursorMode = null;
+        cursor.hidden = true;
+    }
 
     function who(agent, text, parent) {
         const row = make('div', 'who', parent);
@@ -154,6 +174,8 @@ export function createUi({ doc = document, win = window, labels, now = () => Dat
         promptCard.replaceChildren();
         promptCard.hidden = false;
         ink.clear();
+        // Like a stroke, the agent's pointer never sits on a question.
+        hidePointer();
 
         const text = who(current.agent, current.text, promptCard);
 
@@ -383,16 +405,47 @@ export function createUi({ doc = document, win = window, labels, now = () => Dat
             if (current && (tag === null || current.tag === tag)) answer(false);
         },
 
+        /** The cursor while the agent has control: it takes the cursor over from the pointer. */
         cursor: {
             show(name) {
+                clearTimeout(pointTimer);
+                pointTimer = null;
+                cursorMode = 'control';
                 cursorName.textContent = name;
                 cursor.hidden = false;
             },
             move(x, y) {
-                cursor.style.transform = `translate(${Math.round(x) - 2}px, ${Math.round(y) - 2}px)`;
+                placeCursor(x, y);
             },
             hide() {
+                if (cursorMode !== 'control') return;
+
+                cursorMode = null;
                 cursor.hidden = true;
+            },
+        },
+
+        /**
+         * The same cursor while the agent only watches and points ("look here"): no outline, nothing on the page
+         * changes. Not while the agent has control (that cursor is the one) or a question is up; gone
+         * POINT_IDLE_MS after its last position.
+         */
+        pointer: {
+            move(name, x, y) {
+                if (cursorMode === 'control' || current !== null) return;
+
+                cursorMode = 'point';
+                cursorName.textContent = name;
+                placeCursor(x, y);
+                cursor.hidden = false;
+                clearTimeout(pointTimer);
+                pointTimer = setTimeout(hidePointer, POINT_IDLE_MS);
+                // Node's tests: a timer that only hides a cursor never keeps the process up (a browser's id has no unref).
+                pointTimer?.unref?.();
+            },
+            hide: hidePointer,
+            get shown() {
+                return cursorMode === 'point';
             },
         },
 
