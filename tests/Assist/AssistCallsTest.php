@@ -609,3 +609,15 @@ it('waits after a "Not now" before anyone offers help on the same recording agai
     $live();
     $this->actingAs($agent)->postJson(route('session-replay.assist.propose', $browser['session']))->assertCreated();
 });
+
+it('relays empty strings in a signal as sent, like Holler\'s own route (the end of candidates)', function () {
+    [$browser, $asked, $agent] = $this->claimed();
+
+    $call = $this->poll($asked['id'], $asked['secret'], $browser['token'], ['tab' => 'tab-1'])->json('call.id');
+
+    $this->visitorPost('signal', $asked['id'], $asked['secret'], $browser['token'], ['type' => 'ice', 'payload' => ['candidate' => '', 'sdpMid' => '0', 'usernameFragment' => '']])->assertCreated();
+
+    $payload = Holler::poll((string) $agent->id, 0, $call, 'agent-tab', claim: true, kind: 'assist')['signals'][0]['payload'];
+
+    expect($payload['candidate'])->toBe('')->and($payload['usernameFragment'])->toBe('');
+});

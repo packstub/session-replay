@@ -5,6 +5,7 @@ namespace Packstub\SessionReplay;
 use Illuminate\Cache\RateLimiting\Limit;
 use Illuminate\Contracts\Debug\ExceptionHandler;
 use Illuminate\Contracts\Http\Kernel;
+use Illuminate\Foundation\Http\Middleware\ConvertEmptyStringsToNull;
 use Illuminate\Foundation\Http\Middleware\TrimStrings;
 use Illuminate\Http\Request;
 use Illuminate\Routing\Events\RouteMatched;
@@ -186,8 +187,9 @@ class SessionReplayServiceProvider extends PackageServiceProvider
     }
 
     /**
-     * Assist: a WebRTC description ends in CRLF and the parser wants it there, so the signals route is never trimmed
-     * (Holler's own skip matches its routes only); an assist call that ends ends its request.
+     * Assist: a signal is relayed as the browser sent it, so the signals route is never trimmed (a WebRTC description
+     * ends in CRLF and the parser wants it there) and keeps its empty strings (an empty candidate ends the candidates),
+     * as Holler does for its own routes, whose skip matches those only; an assist call that ends ends its request.
      */
     protected function bootAssist(): void
     {
@@ -197,7 +199,10 @@ class SessionReplayServiceProvider extends PackageServiceProvider
 
         $path = trim((string) config('session-replay.path', 'session-replay'), '/');
 
-        TrimStrings::skipWhen(fn (Request $request): bool => $request->is($path.'/assist/requests/*/signals'));
+        $signals = fn (Request $request): bool => $request->is($path.'/assist/requests/*/signals');
+
+        TrimStrings::skipWhen($signals);
+        ConvertEmptyStringsToNull::skipWhen($signals);
 
         if (class_exists(CallEnded::class)) {
             Event::listen(CallEnded::class, fn (CallEnded $event) => $this->app->make(Assist::class)->callEnded($event->call));
