@@ -29,6 +29,7 @@ SessionReplay::canAssistUsing(fn ($agent, ?ReplaySession $session, AssistRequest
 ### Several workspaces
 
 - **Requests without a recording.** `$session` is null for a request from a tab that records nothing, so `visibleUsing()` has nothing to look at. While you have a `visibleUsing()` rule and no `canAssistUsing()` rule, those requests are shown to nobody and cannot be claimed: one workspace's agents never see another's visitors by accident. To take them, register `canAssistUsing()` and check `$request->tenant_type` and `$request->tenant_id` there.
+- **Requests of a workspace without a recording.** Even without a `visibleUsing()` rule, the gate alone never hands them out: such a request is shown only to an agent placed in its workspace (by `tenantUsing()`, or by a caller that passes the agent's workspace, as the Filament package does for a panel scoped to its tenant), to the agent who already holds it, or under a `canAssistUsing()` rule. An operator console that should see every workspace's requests registers `canAssistUsing()`.
 - **The agent's workspace.** When the app registered `SessionReplay::tenantUsing()`, it is asked for the agent's own request too: if it names a workspace (the team in the URL, the panel's tenant), the agent sees and acts on that workspace's requests only, with or without a recording. When it names none (an operator console), the other rules decide alone.
 - **Limits.** `assist.max_open_requests` counts per workspace, so a flood in one workspace never fills another's list.
 
@@ -291,7 +292,7 @@ A poll answers:
 
 ## The agent's routes
 
-Behind `viewer.middleware` and the `viewSessionReplay` gate; every request-bound route asks `visibleUsing()` and `canAssist` again. JSON for a client of your own; the Requests page posts forms.
+Behind `viewer.middleware` and the `viewSessionReplay` gate; every request-bound route asks `visibleUsing()` and `canAssist` again. JSON for a client of your own; the Requests page posts forms. They stay registered while `viewer.enabled` is off (a stage hosted elsewhere, such as the Filament package's, polls `status` and posts `asks`, `end` and `withdraw`), outside any panel: in an app with several workspaces, register `tenantUsing()` or `canAssistUsing()` so these routes know which workspace an agent works in ([Several workspaces](#several-workspaces)).
 
 | Method | Route | Does |
 | --- | --- | --- |

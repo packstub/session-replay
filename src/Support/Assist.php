@@ -443,11 +443,15 @@ class Assist
             ->where(fn ($query) => $query->whereIn('status', [AssistRequest::OPEN, AssistRequest::CLAIMED])->orWhere(fn ($mine) => $this->whereHolder($mine, $agent)))
             ->when($tenant, fn ($query, Model $tenant) => $query->where('tenant_type', $tenant->getMorphClass())->where('tenant_id', (string) $tenant->getKey()))
             ->when($workspace, fn ($query, Model $workspace) => $query->where('tenant_type', $workspace->getMorphClass())->where('tenant_id', (string) $workspace->getKey()))
-            ->where(function ($query) use ($agent): void {
+            ->where(function ($query) use ($agent, $scopes): void {
                 // A request without a recording has nothing for visibleUsing() to look at: with a rule there, it is
                 // shown only when canAssistUsing() decides (fail closed), or a viewer of one workspace would see another's.
+                // One of a workspace needs the agent's workspace named (or the agent holding it), not the gate alone.
                 if (SessionReplay::assistsWithoutRecording()) {
-                    $query->whereNull('replay_session_id');
+                    $query->where(fn ($none) => $none->whereNull('replay_session_id')->when(
+                        ! SessionReplay::assistsWithoutRecording(true, $scopes !== []),
+                        fn ($none) => $none->where(fn ($ours) => $ours->whereNull('tenant_id')->orWhere(fn ($mine) => $this->whereHolder($mine, $agent))),
+                    ));
                 }
 
                 $query->orWhereIn('replay_session_id', SessionReplay::visibleTo(ReplaySession::query(), $agent)->select('id'));
@@ -463,10 +467,13 @@ class Assist
     /**
      * Whether this agent may see and act on this request: the workspace the app's tenantUsing() gives for the agent's
      * request (when it gives one), the recording in their list (visibleUsing()), and canAssist(). A request without a
-     * recording, while visibleUsing() narrows the list and no canAssistUsing() decides, is nobody's. Asked on every
+     * recording, while visibleUsing() narrows the list and no canAssistUsing() decides, is nobody's; one of a workspace
+     * is only for an agent placed in it (tenantUsing(), $workspace, or the agent holds it already). Asked on every
      * agent endpoint.
+     *
+     * @param  ?Model  $workspace  the agent's workspace when the caller knows it (a panel scoped to its tenant)
      */
-    public function visibleTo(AssistRequest $request, mixed $agent): bool
+    public function visibleTo(AssistRequest $request, mixed $agent, ?Model $workspace = null): bool
     {
         if (! $agent instanceof Authenticatable) {
             return false;
@@ -474,11 +481,13 @@ class Assist
 
         $tenant = $this->agentTenant();
 
-        if ($tenant !== null && ($request->tenant_type !== $tenant->getMorphClass() || $request->tenant_id !== (string) $tenant->getKey())) {
-            return false;
+        foreach ([$tenant, $workspace] as $scope) {
+            if ($scope !== null && ($request->tenant_type !== $scope->getMorphClass() || $request->tenant_id !== (string) $scope->getKey())) {
+                return false;
+            }
         }
 
-        if ($request->replay_session_id === null && ! SessionReplay::assistsWithoutRecording()) {
+        if ($request->replay_session_id === null && ! SessionReplay::assistsWithoutRecording($request->tenant_id !== null, $tenant !== null || $workspace !== null || $this->holds($agent, $request))) {
             return false;
         }
 
@@ -494,9 +503,9 @@ class Assist
      *
      * @throws AssistRefused
      */
-    public function claim(Authenticatable $agent, AssistRequest $request): void
+    public function claim(Authenticatable $agent, AssistRequest $request, ?Model $workspace = null): void
     {
-        if (! $this->visibleTo($request, $agent)) {
+        if (! $this->visibleTo($request, $agent, $workspace)) {
             throw new AssistRefused(403, __('session-replay::viewer.assist.not_allowed'), 'not_allowed');
         }
 
