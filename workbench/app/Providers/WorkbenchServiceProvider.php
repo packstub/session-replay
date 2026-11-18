@@ -12,7 +12,7 @@ use Workbench\App\Http\Middleware\Csp;
 
 /**
  * A page to record and a viewer anyone may open: `composer serve`, click around, then visit /session-replay.
- * Assist is on, with the "Get help" button; with packstub/holler installed (see AGENTS.md) the live stage works
+ * Assist is on, with the "Get help" button; with packstub/holler installed (require-dev) the live stage works
  * too: ask for help on /, then open /agent in another browser (Ana Support) and claim the request.
  */
 class WorkbenchServiceProvider extends ServiceProvider

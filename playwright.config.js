@@ -1,7 +1,7 @@
 // End-to-end: Assist for real between two browsers on the workbench (`composer serve`'s app): a visitor whose
 // page records and asks for help, and an agent who claims the request and works on the live stage. Headless
 // Chromium with a fake microphone and camera; WebRTC over loopback. `npm run test:e2e` (the server is started
-// here, with packstub/holler installed from the sibling checkout as AGENTS.md describes).
+// here; packstub/holler comes from require-dev).
 
 import { defineConfig, devices } from '@playwright/test';
 import { writeFileSync } from 'node:fs';

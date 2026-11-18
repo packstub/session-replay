@@ -13,8 +13,8 @@ use Packstub\SessionReplay\Tests\Fixtures\Models\Team;
 use Packstub\SessionReplay\Tests\Fixtures\Models\User;
 
 /**
- * Assist on (the routes register at boot), with packstub/holler booted when it is installed: a dev install links it
- * from ../holler (see AGENTS.md). Tests that need Holler call needsCalls() and are skipped without it.
+ * Assist on (the routes register at boot), with packstub/holler (require-dev) booted when it is installed. Tests that
+ * need Holler call needsCalls() and are skipped without it.
  */
 abstract class AssistTestCase extends TestCase
 {
