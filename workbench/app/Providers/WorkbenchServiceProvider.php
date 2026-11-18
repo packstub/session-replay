@@ -26,6 +26,9 @@ class WorkbenchServiceProvider extends ServiceProvider
         // The visitor's page and the agent's stage poll at once (PHP_CLI_SERVER_WORKERS): wait for a lock, never fail.
         config()->set('database.connections.sqlite.busy_timeout', 10000);
         config()->set('database.connections.sqlite.journal_mode', 'wal');
+        // The rate limiters and Assist's sweeps on the database store upgrade a read lock to a write lock inside a
+        // transaction, which SQLite answers "database is locked" at once, busy timeout or not: files instead.
+        config()->set('cache.default', 'file');
 
         if (class_exists(HollerServiceProvider::class)) {
             $this->app->register(HollerServiceProvider::class);
