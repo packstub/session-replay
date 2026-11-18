@@ -94,6 +94,50 @@ class Assist
         return $this->callsAvailable() && app(CallContext::class)->hasVideo();
     }
 
+    /**
+     * The Content-Security-Policy for a page that shows the live mirror (the built-in stage; a page of your own that
+     * hosts it should send it too). The mirror is rebuilt from what the visitor's browser sends, and rrweb's iframe
+     * inherits the page's policy, so without it a visitor could make the agent's browser fetch any URL (an image, a
+     * url() or an @import) and learn the agent's address. Images, styles, fonts, media and frames load from this
+     * origin, the app's own (app.url, app.asset_url) and assist.mirror_sources only; scripts and connections are
+     * left to the app's own policy. Null when assist.mirror_sources holds "*".
+     */
+    public function mirrorPolicy(): ?string
+    {
+        $extra = array_values(array_filter((array) config('session-replay.assist.mirror_sources', []), 'is_string'));
+
+        if (in_array('*', $extra, true)) {
+            return null;
+        }
+
+        $sources = [];
+
+        foreach ([config('app.url'), config('app.asset_url'), ...$extra] as $source) {
+            $source = is_string($source) ? trim($source) : '';
+            $parts = parse_url($source);
+
+            if (is_array($parts) && isset($parts['scheme'], $parts['host'])) {
+                $source = strtolower($parts['scheme'].'://'.$parts['host']).(isset($parts['port']) ? ':'.$parts['port'] : '');
+            }
+
+            // A source expression, never a way into another directive.
+            if ($source !== '' && preg_match('/^[^\s;,\'"]+$/', $source) === 1) {
+                $sources[$source] = true;
+            }
+        }
+
+        $origins = implode('', array_map(fn (string $source) => ' '.$source, array_keys($sources)));
+
+        return implode('; ', [
+            "img-src 'self' data: blob:".$origins,
+            "style-src 'self' 'unsafe-inline'".$origins,
+            "font-src 'self' data:".$origins,
+            "media-src 'self' data: blob: mediastream:".$origins,
+            "frame-src 'self'".$origins,
+            "object-src 'none'",
+        ]);
+    }
+
     /** packstub/holler is installed and booted, and assist.calls leaves it on. */
     public function callsAvailable(): bool
     {

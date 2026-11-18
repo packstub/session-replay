@@ -155,6 +155,7 @@ Help requests, off by default; see [Assist](assist.md#configuration) for what ea
 | `assist.heartbeat_seconds` | `15` | A visible tab's heartbeat, which brings an agent's offer. |
 | `assist.poll.waiting_ms` / `assist.poll.active_ms` | `3000` / `2000` | How often the visitor's page polls its request while it waits / during an assist. |
 | `assist.calls_routes` | `holler.` | The name prefix of Holler's routes (`Holler::routes(as: …)`) that the agent's live stage polls. |
+| `assist.mirror_sources` | `[]` | `SESSION_REPLAY_ASSIST_MIRROR_SOURCES` (comma-separated). More origins the live mirror may load assets from, besides the app's own; `*` sends no policy. |
 
 ## Log context
 

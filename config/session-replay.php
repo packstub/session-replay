@@ -379,6 +379,11 @@ return [
         // The name prefix of Holler's routes (Holler::routes(as: …)), which the agent's live stage polls: in a plain app,
         // register Holler::routes() in routes/web.php (the `web` middleware and the viewer's guard).
         'calls_routes' => 'holler.',
+        // The live stage sends a Content-Security-Policy so the mirror loads images, styles, fonts and media only from
+        // the app (its own origin, app.url, app.asset_url) and these origins: the visitor's page cannot make the agent's
+        // browser fetch a URL of its choosing. Add the hosts your pages load assets from (a CDN, a font service);
+        // ['*'] sends no policy.
+        'mirror_sources' => array_values(array_filter(explode(',', (string) env('SESSION_REPLAY_ASSIST_MIRROR_SOURCES', '')))),
     ],
 
     /*

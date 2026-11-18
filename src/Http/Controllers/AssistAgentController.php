@@ -8,6 +8,7 @@ use Illuminate\Contracts\View\View;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
+use Illuminate\Http\Response;
 use Illuminate\Support\Facades\Route;
 use Packstub\Holler\Holler;
 use Packstub\SessionReplay\Exceptions\AssistRefused;
@@ -77,7 +78,7 @@ class AssistAgentController
      * live): the visitor's page mirrored, remote control, annotations, audio, screen share. Behind the viewer's
      * middleware and gate like every agent route, with visibleUsing() and canAssist asked again.
      */
-    public function stage(string $id): View|RedirectResponse
+    public function stage(string $id): Response|RedirectResponse
     {
         $agent = $this->agent();
         $request = $this->find($id, $agent);
@@ -88,11 +89,13 @@ class AssistAgentController
             return redirect()->route('session-replay.assist.index')->with('session-replay.assist-error', __('session-replay::viewer.assist.not_open'));
         }
 
-        return view('session-replay::viewer.stage', [
+        $policy = $this->assist->mirrorPolicy();
+
+        return response()->view('session-replay::viewer.stage', [
             'request' => $request,
             'assist' => $this->assist,
             'config' => $this->stageConfig($request, $agent),
-        ]);
+        ])->withHeaders($policy === null ? [] : ['Content-Security-Policy' => $policy]);
     }
 
     /** POST {path}/assist/requests/{id}/claim — the form goes on to the stage (with Holler), the JSON stays JSON. */

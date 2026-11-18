@@ -236,3 +236,30 @@ it('polls Holler from the stage as often as Holler says', function () {
     config()->set('holler.poll.active', 5);
     expect(stageConfig($this->get($stage))['calls']['pollMs'])->toBe(250);
 });
+
+it('keeps the mirror from fetching what the visitor\'s page points it at: a CSP on the stage for images, styles, fonts and media', function () {
+    config()->set('app.url', 'https://shop.test');
+    config()->set('app.asset_url', 'https://cdn.shop.test/build');
+
+    [, $asked, $agent] = $this->claimed();
+
+    $policy = $this->actingAs($agent)->get(route('session-replay.assist.stage', $asked['id']))->assertOk()->headers->get('Content-Security-Policy');
+
+    expect($policy)->toContain("img-src 'self' data: blob: https://shop.test https://cdn.shop.test")
+        ->toContain("style-src 'self' 'unsafe-inline' https://shop.test https://cdn.shop.test")
+        ->toContain("font-src 'self' data: https://shop.test https://cdn.shop.test")
+        ->toContain("media-src 'self' data: blob: mediastream: https://shop.test https://cdn.shop.test")
+        ->toContain("frame-src 'self' https://shop.test https://cdn.shop.test")
+        ->toContain("object-src 'none'")
+        // Nothing about scripts or connections: the app's own policy, if any, decides those.
+        ->not->toContain('script-src')->not->toContain('connect-src')->not->toContain('default-src');
+
+    // More origins for the app's assets (a font service, a CDN), or "*" for none of it.
+    config()->set('session-replay.assist.mirror_sources', ['https://fonts.example.com']);
+
+    expect($this->get(route('session-replay.assist.stage', $asked['id']))->headers->get('Content-Security-Policy'))->toContain("font-src 'self' data: https://shop.test https://cdn.shop.test https://fonts.example.com");
+
+    config()->set('session-replay.assist.mirror_sources', ['*']);
+
+    $this->get(route('session-replay.assist.stage', $asked['id']))->assertHeaderMissing('Content-Security-Policy');
+});

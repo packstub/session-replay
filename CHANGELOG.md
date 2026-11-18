@@ -10,7 +10,7 @@ Assist: support helps someone while they are still on the page. Off until `SESSI
 
 - A visitor asks for help from the page with `SessionReplay.assist.request()` or the optional "Get help" button (`assist.button`), and support takes the request on the new Requests page of the built-in viewer
 - Support offers help from a live recording: a **Live now** tab says when each page was last heard from, and the visitor answers Accept or Not now
-- The live stage shows the visitor's page as it happens, masked like the recording
+- The live stage shows the visitor's page as it happens, masked like the recording; it loads assets only from the app and `assist.mirror_sources`, so a visitor's page cannot make the agent's browser call another host
 - The agent's pointer shows on the visitor's page while they watch (**Show my pointer**, on by default); nothing is asked, since nothing on the page changes
 - Remote control, typing into masked fields (`assist.control_masked`), audio, video and screen share are each asked of the visitor separately; Escape takes control back and a password field is never filled
 - Annotations: the agent draws over the page, and the strokes fade

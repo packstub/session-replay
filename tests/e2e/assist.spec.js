@@ -69,6 +69,14 @@ test('an agent claims a request and helps on the live stage: mirror, control, an
     agent.on('pageerror', (error) => consoleErrors.push(`agent: ${error.message}`));
     visitor.on('pageerror', (error) => consoleErrors.push(`visitor: ${error.message}`));
 
+    // What the agent's browser was made to fetch from a host the visitor's page chose: a request the CSP stopped
+    // fails with "csp" before it leaves the browser; anything else went out (or tried to: the host does not resolve).
+    const leaks = [];
+    const leaked = (request, how) => request.url().includes('leak.invalid') && how !== 'csp' && leaks.push(`${request.url()} (${how})`);
+
+    agent.on('requestfinished', (request) => leaked(request, 'finished'));
+    agent.on('requestfailed', (request) => leaked(request, request.failure()?.errorText));
+
     // ---- Ada's page records, then asks for help -------------------------------------------------
 
     const firstUpload = visitor.waitForResponse((response) => response.url().includes('/session-replay/ingest') && response.status() === 201, { timeout: 30_000 });
@@ -107,6 +115,13 @@ test('an agent claims a request and helps on the live stage: mirror, control, an
 
     await visitor.locator('#add').click();
     await expect(mirror.locator('#list li')).toHaveCount(1);
+
+    // An image the visitor's page adds from a host of its choosing reaches the mirror, but the stage's CSP keeps the
+    // agent's browser from fetching it (and so from telling that host the agent's address).
+    await visitor.evaluate(() => document.body.append(Object.assign(document.createElement('img'), { id: 'leak', src: 'http://leak.invalid/pixel.png', alt: '' })));
+    await expect(mirror.locator('#leak')).toHaveCount(1);
+    await agent.waitForTimeout(500);
+    expect(leaks).toEqual([]);
 
     // ---- the pointer: Ana only watches, and Ada sees where she points ------------------------------
 
