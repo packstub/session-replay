@@ -1,6 +1,7 @@
 <?php
 
 use Illuminate\Support\Facades\Event;
+use Illuminate\Support\Facades\Gate;
 use Packstub\Holler\Facades\Holler;
 use Packstub\Holler\Holler as CallsService;
 use Packstub\Holler\Models\Call;
@@ -620,4 +621,44 @@ it('relays empty strings in a signal as sent, like Holler\'s own route (the end 
     $payload = Holler::poll((string) $agent->id, 0, $call, 'agent-tab', claim: true, kind: 'assist')['signals'][0]['payload'];
 
     expect($payload['candidate'])->toBe('')->and($payload['usernameFragment'])->toBe('');
+});
+
+it('takes an agent off a live assist when the viewSessionReplay gate itself turns them away, at their next status poll', function () {
+    [, $asked, $agent, $call] = $this->liveAssist();
+
+    // The most common way access goes: the gate says no to this agent now. The middleware answers before the route.
+    Gate::define('viewSessionReplay', fn ($user, $session = null) => $user->getKey() !== $agent->getKey() && (bool) $user->is_staff);
+
+    config()->set('app.debug', false);
+
+    $response = $this->getJson(route('session-replay.assist.status', $asked['id']))->assertForbidden();
+
+    // A bare refusal: nothing of the request in it.
+    expect(array_keys($response->json()))->toBe(['message'])
+        ->and(AssistRequest::query()->sole())->status->toBe('ended')->end_reason->toBe('not_allowed')
+        ->and($call->refresh()->isEnded())->toBeTrue();
+});
+
+it('takes an agent off a live assist when the gate turns them away, from the visitor\'s poll once the recheck is due', function () {
+    [$browser, $asked, $agent, $call] = $this->liveAssist();
+
+    Gate::define('viewSessionReplay', fn ($user, $session = null) => $user->getKey() !== $agent->getKey() && (bool) $user->is_staff);
+
+    $this->travel(11)->seconds();
+    $this->poll($asked['id'], $asked['secret'], $browser['token'], ['tab' => 'tab-1'])->assertJson(['status' => 'ended']);
+
+    expect(AssistRequest::query()->sole()->end_reason)->toBe('not_allowed')
+        ->and($call->refresh()->isEnded())->toBeTrue();
+});
+
+it('leaves a request alone when the gate turns away someone who does not hold it', function () {
+    [, $asked, $agent] = $this->liveAssist();
+
+    $this->actingAs($other = $this->staff(['name' => 'Bo Support']));
+    Gate::define('viewSessionReplay', fn ($user, $session = null) => $user->getKey() !== $other->getKey() && (bool) $user->is_staff);
+
+    $this->getJson(route('session-replay.assist.status', $asked['id']))->assertForbidden();
+    $this->postJson(route('session-replay.assist.end', $asked['id']))->assertForbidden();
+
+    expect(AssistRequest::query()->sole()->status)->toBe('active');
 });
