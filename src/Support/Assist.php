@@ -170,7 +170,7 @@ class Assist
         $existing = $lockKey === null ? null : AssistRequest::query()->pending()->where('lock_key', $lockKey)->first();
 
         if ($existing !== null) {
-            return [$existing, $this->issueSecret($existing, $context), false];
+            return [$this->sameAsker($existing, $context), $this->issueSecret($existing, $context), false];
         }
 
         $this->sweep([$context->tenantType, $context->tenantId]);
@@ -202,12 +202,28 @@ class Assist
             // The same tab asked twice at once: the other request is the one.
             $existing = AssistRequest::query()->pending()->where('lock_key', $lockKey)->firstOrFail();
 
-            return [$existing, $this->issueSecret($existing, $context), false];
+            return [$this->sameAsker($existing, $context), $this->issueSecret($existing, $context), false];
         }
 
         AssistRequested::dispatch($request);
 
         return [$request, $secret, true];
+    }
+
+    /**
+     * The request a recording or tab has going, handed back only to the person and workspace it belongs to: a page out
+     * of a full-page cache shares its nonce, so another person with the same tab id would otherwise read its status.
+     * An agent's offer whose secret was never issued has no identity yet (issueSecret() sets it).
+     *
+     * @throws AssistRefused
+     */
+    protected function sameAsker(AssistRequest $existing, ContextToken $context): AssistRequest
+    {
+        if (! $existing->sameTenantAs($context) || ($existing->secret_hash !== null && ! $existing->sameIdentityAs($context))) {
+            throw new AssistRefused(409, 'This tab has a request going for someone else.', 'state');
+        }
+
+        return $existing;
     }
 
     /**

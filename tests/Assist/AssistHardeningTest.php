@@ -1,5 +1,6 @@
 <?php
 
+use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\UniqueConstraintViolationException;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\RateLimiter;
@@ -305,4 +306,19 @@ it('keeps a workspace\'s requests without a recording from an agent no rule plac
     // tenantUsing() naming the workspace does it too, and so does a canAssistUsing() rule.
     SessionReplay::tenantUsing(fn () => $globex);
     expect($this->getJson(route('session-replay.assist.queue'))->json('requests'))->toHaveCount(1);
+});
+
+it('hands the request a tab has going back only to the same person in the same workspace', function () {
+    $ada = $this->user();
+    $first = ContextToken::for($ada);
+    $sameNonce = fn (?Model $user, ?Model $team = null) => (new ContextToken($user?->getMorphClass(), $user === null ? null : (string) $user->getKey(), $team?->getMorphClass(), $team === null ? null : (string) $team->getKey(), null, [], time(), $first->nonce))->encode();
+
+    $id = $this->postJson(route('session-replay.assist.store'), ['token' => $first->encode(), 'tab' => 'tab-1'])->assertCreated()->json('id');
+
+    // A page out of a full-page cache gave someone else the same nonce, and they know the tab id: not Ada's request.
+    $this->postJson(route('session-replay.assist.store'), ['token' => $sameNonce($this->user()), 'tab' => 'tab-1'])->assertStatus(409)->assertJsonMissing(['id' => $id]);
+    $this->postJson(route('session-replay.assist.store'), ['token' => $sameNonce($ada, $this->team()), 'tab' => 'tab-1'])->assertStatus(409)->assertJsonMissing(['id' => $id]);
+
+    // Ada herself gets it back.
+    $this->postJson(route('session-replay.assist.store'), ['token' => $sameNonce($ada), 'tab' => 'tab-1'])->assertOk()->assertJson(['id' => $id, 'secret' => null]);
 });
