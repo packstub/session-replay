@@ -73,6 +73,7 @@ return [
         'not_open' => 'This request is not open any more.',
         'already_asked' => 'The visitor already asked for help; claim the request from the list.',
         'not_live' => 'Help can only be offered while the recording is live.',
+        'declined_recently' => 'The visitor said not now a moment ago. Offer again in a few minutes.',
         'not_allowed' => 'You may not help with this request.',
         'not_yours' => 'This request is someone else\'s.',
         'guard_mismatch' => 'You are signed in to the viewer and to Holler as different people. Set holler.guard to the viewer\'s guard (session-replay.viewer.guard).',

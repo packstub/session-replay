@@ -73,6 +73,7 @@ return [
         'not_open' => 'Diese Anfrage ist nicht mehr offen.',
         'already_asked' => 'Der Besucher hat schon um Hilfe gebeten; übernimm die Anfrage aus der Liste.',
         'not_live' => 'Hilfe kann nur angeboten werden, solange die Aufzeichnung live ist.',
+        'declined_recently' => 'Der Besucher hat gerade erst abgelehnt. Biete in ein paar Minuten erneut Hilfe an.',
         'not_allowed' => 'Du darfst bei dieser Anfrage nicht helfen.',
         'not_yours' => 'Diese Anfrage gehört jemand anderem.',
         'guard_mismatch' => 'Du bist im Viewer und in Holler als verschiedene Personen angemeldet. Setze holler.guard auf den Guard des Viewers (session-replay.viewer.guard).',

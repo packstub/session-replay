@@ -148,6 +148,7 @@ Help requests, off by default; see [Assist](assist.md#configuration) for what ea
 | `assist.guest_requests_per_hour` | `20` | `SESSION_REPLAY_ASSIST_GUEST_REQUESTS_PER_HOUR`. New requests per hour from all guests of a workspace together; while set, a guest asks only from a recording with events. |
 | `assist.claim_timeout_seconds` | `30` | An unacknowledged claim goes back to the list, and so does the claim of an agent who left the live view and did not come back in time. |
 | `assist.proposal_timeout_seconds` | `60` | An unanswered offer expires. |
+| `assist.decline_cooldown_seconds` | `300` | After "Not now", no new offer on that recording for this long; `0`: no wait. |
 | `assist.visitor_timeout_seconds` | `60` | A page that stopped polling: the request expires or ends. |
 | `assist.max_duration_minutes` | `120` | `SESSION_REPLAY_ASSIST_MAX_DURATION_MINUTES`. An assist ends after this long. |
 | `assist.button` | `false` | `SESSION_REPLAY_ASSIST_BUTTON`. A floating "Get help" button on recorded pages. |

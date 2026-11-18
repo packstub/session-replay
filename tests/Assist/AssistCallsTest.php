@@ -252,6 +252,10 @@ it('lets the visitor say not now to an offer, and expires one nobody answers', f
     $this->visitorPost('decline', $id, $secret, $browser['token'])->assertOk()->assertJson(['status' => 'declined']);
     $this->getJson(route('session-replay.assist.status', $id))->assertJson(['status' => 'declined']);
 
+    // Past the cool-down after a "Not now".
+    $this->travel(301)->seconds();
+    $browser['session']->forceFill(['last_activity_at' => now()])->save();
+
     $id = $this->postJson(route('session-replay.assist.propose', $browser['session']))->assertCreated()->json('id');
 
     $this->travel(61)->seconds();
@@ -576,4 +580,32 @@ it('asks canAssist again from the visitor\'s poll, so a live assist ends when it
 
     expect(AssistRequest::query()->sole()->end_reason)->toBe('not_allowed')
         ->and($call->refresh()->isEnded())->toBeTrue();
+});
+
+it('waits after a "Not now" before anyone offers help on the same recording again', function () {
+    $browser = $this->browser();
+    $agent = $this->staff();
+
+    $id = $this->actingAs($agent)->postJson(route('session-replay.assist.propose', $browser['session']))->json('id');
+    $secret = $this->poll($id, null, $browser['token'], ['session' => $browser['session']->id, 'key' => $browser['key']])->json('secret');
+    $this->visitorPost('decline', $id, $secret, $browser['token'])->assertOk();
+
+    $live = function () use ($browser): void {
+        $browser['session']->forceFill(['last_activity_at' => now()])->save();
+    };
+
+    // Not on the next heartbeat, and not by a colleague either.
+    $this->travel(15)->seconds();
+    $live();
+    $this->postJson(route('session-replay.assist.propose', $browser['session']))->assertStatus(429)->assertJson(['reason' => 'declined_recently']);
+    $this->actingAs($this->staff(['name' => 'Bo Support']))->postJson(route('session-replay.assist.propose', $browser['session']))->assertStatus(429);
+
+    // The visitor may still ask for help themselves.
+    $this->asked($browser);
+    AssistRequest::query()->where('opened_by', 'visitor')->update(['status' => 'cancelled', 'lock_key' => null]);
+
+    // assist.decline_cooldown_seconds (300) later, an offer is fine again.
+    $this->travel(290)->seconds();
+    $live();
+    $this->actingAs($agent)->postJson(route('session-replay.assist.propose', $browser['session']))->assertCreated();
 });

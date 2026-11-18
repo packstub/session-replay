@@ -358,6 +358,8 @@ return [
         'claim_timeout_seconds' => 30,
         // An agent's offer nobody answered expires.
         'proposal_timeout_seconds' => 60,
+        // After the visitor says "Not now" to an offer, nobody may offer help on that recording for this long. 0: no wait.
+        'decline_cooldown_seconds' => 300,
         // A request whose page has not polled for this long expires (the tab was closed); a live one ends.
         'visitor_timeout_seconds' => 60,
         // An assist ends after this many minutes, whatever is going on.

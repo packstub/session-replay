@@ -305,7 +305,7 @@ Behind `viewer.middleware` and the `viewSessionReplay` gate; every request-bound
 | `POST` | `assist/requests/{id}/asks` `{what}` | log that you asked the visitor for `control`, `audio`, `video`, `screen` or `control_masked`, so the grants log shows what was asked next to what was allowed |
 | `POST` | `assist/requests/{id}/end` | end it (and the call) |
 
-A request as the agent sees it: `id`, `status`, `opened_by`, `session`, `session_url`, `user` (`id`, `label`), `message`, `page_url`, `agent` (`id`, `name`), `mine`, `call`, `reconnecting`, `visitor_here`, `visitor_seen_ago`, `waiting` (seconds), `grants`, `claimed_at`, `started_at`, `ended_at`, `end_reason`, `created_at`. Refusals are `{message, reason}`, `reason` one of `taken`, `exists`, `not_allowed`, `guard_mismatch`, `connection_mismatch`, `not_live`, `no_calls`, `state`.
+A request as the agent sees it: `id`, `status`, `opened_by`, `session`, `session_url`, `user` (`id`, `label`), `message`, `page_url`, `agent` (`id`, `name`), `mine`, `call`, `reconnecting`, `visitor_here`, `visitor_seen_ago`, `waiting` (seconds), `grants`, `claimed_at`, `started_at`, `ended_at`, `end_reason`, `created_at`. Refusals are `{message, reason}`, `reason` one of `taken`, `exists`, `not_allowed`, `guard_mismatch`, `connection_mismatch`, `not_live`, `declined_recently`, `no_calls`, `state`.
 
 ## Privacy
 
@@ -340,6 +340,7 @@ This is how the package behaves, not legal advice; your privacy team or DPO has 
 | `assist.guest_requests_per_hour` | `20` | New requests per hour from all guests of a workspace together; while set, a guest asks only from a recording with events. `null` turns both off. |
 | `assist.claim_timeout_seconds` | `30` | A claim the page has not acknowledged goes back to the list; so does the claim of an agent who left the live view and has not come back this long after Holler dropped them. |
 | `assist.proposal_timeout_seconds` | `60` | An offer nobody answered expires. |
+| `assist.decline_cooldown_seconds` | `300` | After "Not now", nobody may offer help on that recording for this long (`declined_recently`, 429); `0` turns it off. |
 | `assist.visitor_timeout_seconds` | `60` | A request whose page stopped polling expires; a live one ends. |
 | `assist.max_duration_minutes` | `120` | An assist ends after this long, counted from its first start. |
 | `assist.button` | `false` (`SESSION_REPLAY_ASSIST_BUTTON`) | A floating "Get help" button on every recorded page. |

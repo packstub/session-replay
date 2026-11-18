@@ -73,6 +73,7 @@ return [
         'not_open' => 'Esta solicitud ya no está abierta.',
         'already_asked' => 'El visitante ya pidió ayuda; atiende la solicitud desde la lista.',
         'not_live' => 'Solo se puede ofrecer ayuda mientras la grabación está en directo.',
+        'declined_recently' => 'El visitante acaba de decir que ahora no. Vuelve a ofrecer ayuda en unos minutos.',
         'not_allowed' => 'No puedes ayudar con esta solicitud.',
         'not_yours' => 'Esta solicitud es de otra persona.',
         'guard_mismatch' => 'Has iniciado sesión en el visor y en Holler como personas distintas. Pon en holler.guard el guard del visor (session-replay.viewer.guard).',

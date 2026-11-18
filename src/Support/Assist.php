@@ -608,6 +608,13 @@ class Assist
             throw $this->exists($existing);
         }
 
+        // After a "Not now", nobody offers again on this recording for a while: the page would ask on every heartbeat.
+        $cooldown = max(0, (int) config('session-replay.assist.decline_cooldown_seconds', 300));
+
+        if ($cooldown > 0 && AssistRequest::query()->where('replay_session_id', $session->getKey())->where('status', AssistRequest::DECLINED)->where('ended_at', '>', now()->subSeconds($cooldown))->exists()) {
+            throw new AssistRefused(429, __('session-replay::viewer.assist.declined_recently'), 'declined_recently');
+        }
+
         $request = (new AssistRequest)->forceFill([
             'id' => strtolower((string) Str::uuid()),
             'replay_session_id' => $session->getKey(),

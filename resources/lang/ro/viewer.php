@@ -73,6 +73,7 @@ return [
         'not_open' => 'Cererea nu mai este deschisă.',
         'already_asked' => 'Vizitatorul a cerut deja ajutor; preia cererea din listă.',
         'not_live' => 'Ajutorul se poate oferi doar cât timp înregistrarea este live.',
+        'declined_recently' => 'Vizitatorul tocmai a spus că nu acum. Oferă ajutor din nou peste câteva minute.',
         'not_allowed' => 'Nu poți ajuta la această cerere.',
         'not_yours' => 'Cererea aparține altcuiva.',
         'guard_mismatch' => 'Ești autentificat în vizualizator și în Holler ca persoane diferite. Setează holler.guard la guardul vizualizatorului (session-replay.viewer.guard).',
