@@ -56,7 +56,18 @@ class AssistAgentController
     public function status(string $id): JsonResponse
     {
         $agent = $this->agent();
-        $request = $this->find($id, $agent);
+        $request = AssistRequest::query()->with('session')->find(strtolower($id));
+
+        abort_if($request === null, 403);
+
+        if (! $this->assist->visibleTo($request, $agent)) {
+            // The holder lost the right to help (a role taken away, another workspace): their assist does not go on.
+            if ($request->isPending() && $this->assist->holds($agent, $request)) {
+                $this->assist->notAllowedAnyMore($request);
+            }
+
+            abort(403);
+        }
 
         return response()->json($this->assist->presentForAgent($this->assist->agentPoll($agent, $request), $agent));
     }

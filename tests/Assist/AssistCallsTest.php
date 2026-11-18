@@ -540,3 +540,40 @@ it('revokes what the visitor allowed when a lapsed claim goes back to the list',
 
     expect(collect(AssistRequest::query()->sole()->grants)->last())->toMatchArray(['kind' => 'video', 'granted' => false, 'by' => 'server', 'reason' => 'unclaimed']);
 });
+
+it('takes an agent who lost the right to assist off a live assist at their next status poll', function () {
+    [$browser, $asked, $agent, $call] = $this->liveAssist();
+
+    // The role taken away mid-call: the stage's status poll is refused, and the assist and its call end.
+    SessionReplay::canAssistUsing(fn () => false);
+
+    $this->getJson(route('session-replay.assist.status', $asked['id']))->assertForbidden();
+
+    expect(AssistRequest::query()->sole())->status->toBe('ended')->end_reason->toBe('not_allowed')
+        ->and($call->refresh()->isEnded())->toBeTrue();
+
+    $this->poll($asked['id'], $asked['secret'], $browser['token'], ['tab' => 'tab-1'])->assertJson(['status' => 'ended']);
+});
+
+it('puts a claim back in the list when its agent lost the right to assist before the call started', function () {
+    [, $asked] = $this->claimed();
+
+    SessionReplay::canAssistUsing(fn () => false);
+
+    $this->getJson(route('session-replay.assist.status', $asked['id']))->assertForbidden();
+
+    expect(AssistRequest::query()->sole())->status->toBe('open')->agent_id->toBeNull();
+});
+
+it('asks canAssist again from the visitor\'s poll, so a live assist ends when its agent stopped polling', function () {
+    [$browser, $asked, , $call] = $this->liveAssist();
+
+    SessionReplay::canAssistUsing(fn () => false);
+
+    // Checked at most every few seconds, not on every poll.
+    $this->travel(11)->seconds();
+    $this->poll($asked['id'], $asked['secret'], $browser['token'], ['tab' => 'tab-1'])->assertJson(['status' => 'ended']);
+
+    expect(AssistRequest::query()->sole()->end_reason)->toBe('not_allowed')
+        ->and($call->refresh()->isEnded())->toBeTrue();
+});

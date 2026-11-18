@@ -60,6 +60,9 @@ class Assist
      */
     public const SWEEP_EVERY_SECONDS = 5;
 
+    /** How often the visitor's poll asks canAssist again for the agent of a claimed or live request. */
+    public const RECHECK_AGENT_SECONDS = 10;
+
     public function enabled(): bool
     {
         return (bool) config('session-replay.assist.enabled', false);
@@ -231,6 +234,7 @@ class Assist
             AssistRequest::query()->whereKey($request->getKey())->update(['visitor_seen_at' => now()]);
             $request->refresh();
             $this->expire($request);
+            $this->recheckAgent($request);
         }
 
         // The claim is acknowledged by creating the call, once the agent's stage is there (a claim made a moment ago,
@@ -605,6 +609,44 @@ class Assist
         }
 
         return $request;
+    }
+
+    /**
+     * The visitor's poll asks canAssist again for the agent of a claimed or live request, at most every
+     * RECHECK_AGENT_SECONDS: an agent whose rights were taken away goes, even when their stage stopped polling.
+     */
+    protected function recheckAgent(AssistRequest $request): void
+    {
+        if (! in_array($request->status, [AssistRequest::CLAIMED, AssistRequest::ACTIVE], true) || $request->agent_id === null) {
+            return;
+        }
+
+        if (! Cache::add('session-replay|assist-agent-check|'.$request->getKey(), true, self::RECHECK_AGENT_SECONDS)) {
+            return;
+        }
+
+        $agent = $this->agentModel($request);
+
+        if ($agent === null || ! SessionReplay::canAssist($agent, $request->session, $request)) {
+            $this->notAllowedAnyMore($request);
+        }
+    }
+
+    /**
+     * The agent who holds the request may not help with it any more (a role taken away, another workspace, the
+     * person removed): a live assist ends with its call, an agent's offer is withdrawn or ended, and a visitor's
+     * claimed request goes back to the list for someone else.
+     */
+    public function notAllowedAnyMore(AssistRequest $request): void
+    {
+        match (true) {
+            $request->status === AssistRequest::ACTIVE => $this->finish($request, [AssistRequest::ACTIVE], AssistRequest::ENDED, 'not_allowed'),
+            $request->status === AssistRequest::OPEN && $request->openedByAgent() => $this->finish($request, [AssistRequest::OPEN], AssistRequest::WITHDRAWN, 'not_allowed'),
+            $request->status === AssistRequest::CLAIMED && $request->openedByAgent() => $this->finish($request, [AssistRequest::CLAIMED], AssistRequest::ENDED, 'not_allowed'),
+            $request->status === AssistRequest::CLAIMED => $request->transition([AssistRequest::CLAIMED], AssistRequest::OPEN, AssistRequest::UNCLAIMED)
+                && $this->revokeGrants($request, 'not_allowed'),
+            default => null,
+        };
     }
 
     /**

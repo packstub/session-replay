@@ -81,12 +81,12 @@ A request goes `open`, then `claimed` by an agent, then `ended` by the agent. `A
 | `open` → `active` | visitor | the visitor accepts an agent's offer; the call is created then |
 | `claimed` → `active` | visitor's page | its next poll acknowledges the claim while the agent's stage is open (it polled in the last 10 seconds); the call is created then |
 | `active` → `claimed` | Holler | the agent left the live view for longer than `holler.reconnect_timeout` (15 s) and Holler dropped their side: the request stays the agent's, without a call, and the visitor's page says they are reconnecting ([Leaving the live view](#leaving-the-live-view)) |
-| `claimed` → `open` | timeout, agent | the page did not acknowledge within `assist.claim_timeout_seconds` (30), the agent who left the live view did not come back within it, or the agent let go of the claim (the visitor still waits; someone else may take it) |
+| `claimed` → `open` | timeout, agent | the page did not acknowledge within `assist.claim_timeout_seconds` (30), the agent who left the live view did not come back within it, or the agent let go of the claim or may no longer help (the visitor still waits; someone else may take it) |
 | `open`, `claimed` → `cancelled` | visitor | Cancel, or the page is signed in as someone else now |
 | `open` → `declined` | visitor | "Not now" on an agent's offer |
 | `open`, `claimed` → `expired` | timeout | an offer unanswered for `assist.proposal_timeout_seconds` (60), or a page that stopped polling for `assist.visitor_timeout_seconds` (60) |
 | `open` → `withdrawn` | agent | the agent takes the offer back, or may no longer help (`canAssist` is asked again when the visitor accepts; `end_reason` `not_allowed`) |
-| `claimed`, `active` → `ended` | agent, Holler, timeout | the agent ends it, the call ended (Holler's reason: `hung_up`, or `dropped` when the visitor's page went away), the visitor hung up, the page went quiet, or `assist.max_duration_minutes` (120, counted from the first start) passed |
+| `claimed`, `active` → `ended` | agent, Holler, timeout | the agent ends it, the call ended (Holler's reason: `hung_up`, or `dropped` when the visitor's page went away), the visitor hung up, the page went quiet, `assist.max_duration_minutes` (120, counted from the first start) passed, or the agent may no longer help (`not_allowed`: asked again on the stage's status poll and, every 10 seconds, on the visitor's) |
 
 A recording has at most one request going at a time (a tab without a recording, one per tab: the recorder keeps an id per tab in `sessionStorage` and sends it with the request, so pages served from a full-page cache, which share a nonce, still get one each): asking again returns the one that is going. The timeouts run inside the visitor's poll and the agent's list, the way Holler expires calls inside its poll: no scheduler needed. Over the list they run at most once every 5 seconds per workspace, however many agents have it open.
 
