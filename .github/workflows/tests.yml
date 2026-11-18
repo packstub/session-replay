@@ -61,12 +61,58 @@ jobs:
       - name: Run the JavaScript tests
         run: node --test resources/js/tests/*.test.js
 
+  e2e:
+    name: Assist end to end (Playwright)
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Setup PHP
+        uses: shivammathur/setup-php@eb7c497e18156a6bbabfef1d3a82760b9eda3962 # 2.40.0
+        with:
+          php-version: "8.4"
+          extensions: pdo_sqlite, intl, zlib
+          coverage: none
+
+      - name: Setup Node
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 22
+          cache: npm
+
+      # packstub/holler from Packagist (require-dev) and @packstub/holler from npm; npm ci brings Playwright.
+      - name: Install dependencies
+        run: |
+          composer update --prefer-dist --no-interaction --no-progress
+          npm ci
+          npx playwright install --with-deps chromium
+
+      # The pages load the committed resources/dist, so check it is what the sources build.
+      - name: The committed bundle is up to date
+        run: |
+          npm run build
+          git diff --exit-code --stat -- resources/dist
+
+      - name: Run Assist between two browsers
+        run: npm run test:e2e
+        env:
+          CI: "1"
+
+      - name: Upload the trace of a failed run
+        if: failure()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: playwright-traces
+          path: test-results
+
   # The one check the main branch requires (Settings → Rules): green only when every job above is.
   # A new job goes in `needs`, so the required name stays the same when the matrix changes.
   tests-passed:
     name: Tests passed
     if: always()
-    needs: [tests, javascript]
+    needs: [tests, javascript, e2e]
     runs-on: ubuntu-latest
 
     steps:
