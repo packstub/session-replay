@@ -4,7 +4,7 @@ A visitor asks for help from the page they are on, and someone from support take
 
 Everything lives in this package: the requests and their routes, the "Get help" API and button on the visitor's page, and the agent's side in the built-in viewer (the Live tab, Offer help, the Requests page and the live stage). [Filament Session Replay](https://github.com/packstub/filament-session-replay/blob/main/docs/assist.md) brings the same into a panel and hosts the same stage ([Hosting the stage](#hosting-the-stage-in-a-page-of-your-own)).
 
-**What the live view needs.** The queue works with this package alone. The live view (the call, the mirror, remote control, audio) runs on [Holler for Laravel](https://github.com/packstub/holler) (`packstub/holler`), and in a Filament panel also on [Filament Holler](https://github.com/packstub/filament-holler) (`packstub/filament-holler`). Both are released on their own schedule, so check their READMEs for how to install them today; Assist turns the live view on by itself once Holler is there.
+**What the live view needs.** The queue works with this package alone. The live view (the call, the mirror, remote control, audio) runs on [Holler for Laravel](https://github.com/packstub/holler) 1.x (`packstub/holler`), and in a Filament panel on [Filament Holler](https://github.com/packstub/filament-holler) (`packstub/filament-holler`) as well. Assist turns the live view on by itself once Holler is installed; [With Holler](#with-holler) has the steps.
 
 ## Turning it on
 
@@ -34,7 +34,27 @@ SessionReplay::canAssistUsing(fn ($agent, ?ReplaySession $session, AssistRequest
 
 ### With Holler
 
-Install [`packstub/holler`](https://github.com/packstub/holler) and Assist uses it on its own (`assist.calls` turns that off). The agent is the viewer guard's user, and Holler rings them by the same id, so in a plain Laravel app `session-replay.viewer.guard` and `holler.guard` must name the same guard (in Filament both are the panel's). Claiming a request refuses with a clear message when the two see different people (`guard_mismatch`), instead of creating a call the agent's browser never sees.
+Install [Holler for Laravel](https://github.com/packstub/holler) and run its migrations:
+
+```bash
+composer require packstub/holler
+php artisan migrate
+```
+
+Register Holler's routes in `routes/web.php` (the live stage talks to them, see [The live stage](#the-live-stage)) and schedule Holler's cleanup:
+
+```php
+use Packstub\Holler\Facades\Holler;
+
+Holler::routes();
+
+// routes/console.php
+Schedule::command('holler:prune')->daily();
+```
+
+Holler's widget and buttons are not needed for Assist: the visitor's page and the stage bring their own call client. In a Filament panel, Filament Holler registers the routes in the panel instead; see [Filament Session Replay's Assist docs](https://github.com/packstub/filament-session-replay/blob/main/docs/assist.md).
+
+Assist uses Holler on its own once it is there (`assist.calls` turns that off). The agent is the viewer guard's user, and Holler rings them by the same id, so in a plain Laravel app `session-replay.viewer.guard` and `holler.guard` must name the same guard (in Filament both are the panel's). Claiming a request refuses with a clear message when the two see different people (`guard_mismatch`), instead of creating a call the agent's browser never sees.
 
 The call itself is created later, in the visitor's request, where no panel is active. So the claim (or the offer) stores who the agent is to the place they acted from: their model's morph class, the guard's name and Holler's scope there. The visitor's request loads the agent from those and starts the call in that scope, never through the app's default guard: an agent on a panel's `admin` guard is rung as that admin, and their panel's Holler poll sees the call.
 

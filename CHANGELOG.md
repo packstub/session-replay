@@ -4,7 +4,7 @@ All notable changes to `packstub/session-replay` are documented here.
 
 ## Unreleased
 
-Assist: support helps someone while they are still on the page. Off until `SESSION_REPLAY_ASSIST` is on; run `php artisan migrate` for the new `replay_assist_requests` table. The live view needs [Holler for Laravel](https://github.com/packstub/holler) (suggested, released separately); without it the requests are a plain queue. See [Assist](docs/assist.md).
+Assist: support helps someone while they are still on the page. Off until `SESSION_REPLAY_ASSIST` is on; run `php artisan migrate` for the new `replay_assist_requests` table. The live view needs [Holler for Laravel](https://github.com/packstub/holler) 1.x (`composer require packstub/holler`); without it the requests are a plain queue. See [Assist](docs/assist.md).
 
 **Security:** the upload endpoints (and the new Assist routes) read the signed token, the write key and a request's secret from the request body only, never from the query string, which access logs, proxies and error trackers keep.
 
