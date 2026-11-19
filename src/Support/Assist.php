@@ -104,7 +104,7 @@ class Assist
      */
     public function mirrorPolicy(): ?string
     {
-        $extra = array_values(array_filter((array) config('session-replay.assist.mirror_sources', []), 'is_string'));
+        $extra = array_map('trim', array_values(array_filter((array) config('session-replay.assist.mirror_sources', []), 'is_string')));
 
         if (in_array('*', $extra, true)) {
             return null;
@@ -114,14 +114,20 @@ class Assist
 
         foreach ([config('app.url'), config('app.asset_url'), ...$extra] as $source) {
             $source = is_string($source) ? trim($source) : '';
+
+            // Printable ASCII only: no space, line break or control character a header would split on.
+            if (preg_match('/^[\x21-\x7E]+$/', $source) !== 1) {
+                continue;
+            }
+
             $parts = parse_url($source);
 
             if (is_array($parts) && isset($parts['scheme'], $parts['host'])) {
                 $source = strtolower($parts['scheme'].'://'.$parts['host']).(isset($parts['port']) ? ':'.$parts['port'] : '');
             }
 
-            // A source expression, never a way into another directive.
-            if ($source !== '' && preg_match('/^[^\s;,\'"]+$/', $source) === 1) {
+            // A source expression, never a way into another directive or a keyword.
+            if (strpbrk($source, ';,\'"') === false) {
                 $sources[$source] = true;
             }
         }

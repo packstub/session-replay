@@ -5,6 +5,7 @@ use Packstub\Holler\Facades\Holler;
 use Packstub\SessionReplay\Facades\SessionReplay;
 use Packstub\SessionReplay\Models\AssistRequest;
 use Packstub\SessionReplay\Models\ReplaySession;
+use Packstub\SessionReplay\Support\Assist;
 
 /** The stage's config, as the Blade view writes it for stage.js. */
 function stageConfig(TestResponse $response): array
@@ -262,4 +263,31 @@ it('keeps the mirror from fetching what the visitor\'s page points it at: a CSP 
     config()->set('session-replay.assist.mirror_sources', ['*']);
 
     $this->get(route('session-replay.assist.stage', $asked['id']))->assertHeaderMissing('Content-Security-Policy');
+});
+
+it('keeps a mirror source from adding a directive of its own to the stage\'s CSP', function () {
+    config()->set('app.url', 'https://shop.test');
+    config()->set('app.asset_url', null);
+    config()->set('session-replay.assist.mirror_sources', [
+        "cdn.example.com; script-src 'unsafe-inline'",
+        "https://ok.example.com\r\nX-Injected: 1",
+        "fonts.example.com\x00evil.test",
+        "fonts\x0b.example.com",
+        "'unsafe-eval'",
+        'a.example.com,b.example.com',
+        ' https://spaced.example.com ',
+        'https://path.example.com/x;y',
+    ]);
+
+    $policy = app(Assist::class)->mirrorPolicy();
+
+    expect($policy)->toContain("img-src 'self' data: blob: https://shop.test https://spaced.example.com https://path.example.com;")
+        ->not->toContain('unsafe-eval')->not->toContain('script-src')->not->toContain('X-Injected')
+        ->not->toContain('cdn.example.com')->not->toContain('fonts.example.com')->not->toContain('a.example.com')
+        ->and(substr_count($policy, ';'))->toBe(5);
+
+    // "*" with spaces around it, as an env list gives it, still sends no policy.
+    config()->set('session-replay.assist.mirror_sources', ['https://cdn.example.com', ' * ']);
+
+    expect(app(Assist::class)->mirrorPolicy())->toBeNull();
 });
