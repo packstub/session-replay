@@ -611,6 +611,22 @@ it('waits after a "Not now" before anyone offers help on the same recording agai
     $this->actingAs($agent)->postJson(route('session-replay.assist.propose', $browser['session']))->assertCreated();
 });
 
+it('waits after a "Not now" on the same person\'s other recordings too, not on someone else\'s', function () {
+    $visitor = $this->user();
+    $first = $this->browser($visitor);
+    // The same person in another tab: a recording of its own.
+    $second = $this->browser($visitor);
+    $someoneElse = $this->browser();
+    $agent = $this->staff();
+
+    $id = $this->actingAs($agent)->postJson(route('session-replay.assist.propose', $first['session']))->json('id');
+    $secret = $this->poll($id, null, $first['token'], ['session' => $first['session']->id, 'key' => $first['key']])->json('secret');
+    $this->visitorPost('decline', $id, $secret, $first['token'])->assertOk();
+
+    $this->actingAs($agent)->postJson(route('session-replay.assist.propose', $second['session']))->assertStatus(429)->assertJson(['reason' => 'declined_recently']);
+    $this->postJson(route('session-replay.assist.propose', $someoneElse['session']))->assertCreated();
+});
+
 it('relays empty strings in a signal as sent, like Holler\'s own route (the end of candidates)', function () {
     [$browser, $asked, $agent] = $this->claimed();
 

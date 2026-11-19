@@ -340,7 +340,7 @@ This is how the package behaves, not legal advice; your privacy team or DPO has 
 | `assist.guest_requests_per_hour` | `20` | New requests per hour from all guests of a workspace together; while set, a guest asks only from a recording with events. `null` turns both off. |
 | `assist.claim_timeout_seconds` | `30` | A claim the page has not acknowledged goes back to the list; so does the claim of an agent who left the live view and has not come back this long after Holler dropped them. |
 | `assist.proposal_timeout_seconds` | `60` | An offer nobody answered expires. |
-| `assist.decline_cooldown_seconds` | `300` | After "Not now", nobody may offer help on that recording for this long (`declined_recently`, 429); `0` turns it off. |
+| `assist.decline_cooldown_seconds` | `300` | After "Not now", nobody may offer help on that recording, or another recording of the same signed-in person, for this long (`declined_recently`, 429); `0` turns it off. |
 | `assist.visitor_timeout_seconds` | `60` | A request whose page stopped polling expires; a live one ends. |
 | `assist.max_duration_minutes` | `120` | An assist ends after this long, counted from its first start. |
 | `assist.button` | `false` (`SESSION_REPLAY_ASSIST_BUTTON`) | A floating "Get help" button on every recorded page. |

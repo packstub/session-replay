@@ -631,9 +631,20 @@ class Assist
         }
 
         // After a "Not now", nobody offers again on this recording for a while: the page would ask on every heartbeat.
+        // Nor on another recording of the same signed-in person (another tab, a recording started after an idle
+        // timeout): the no was theirs, not the tab's.
         $cooldown = max(0, (int) config('session-replay.assist.decline_cooldown_seconds', 300));
 
-        if ($cooldown > 0 && AssistRequest::query()->where('replay_session_id', $session->getKey())->where('status', AssistRequest::DECLINED)->where('ended_at', '>', now()->subSeconds($cooldown))->exists()) {
+        if ($cooldown > 0 && AssistRequest::query()
+            ->where('status', AssistRequest::DECLINED)
+            ->where('ended_at', '>', now()->subSeconds($cooldown))
+            ->where(fn (Builder $query) => $query->where('replay_session_id', $session->getKey())->when(
+                $session->user_id !== null,
+                fn (Builder $query) => $query->orWhere(fn (Builder $person) => $person
+                    ->where('user_type', $session->user_type)->where('user_id', (string) $session->user_id)
+                    ->when($session->tenant_id === null, fn (Builder $query) => $query->whereNull('tenant_id'), fn (Builder $query) => $query->where('tenant_type', $session->tenant_type)->where('tenant_id', (string) $session->tenant_id))),
+            ))
+            ->exists()) {
             throw new AssistRefused(429, __('session-replay::viewer.assist.declined_recently'), 'declined_recently');
         }
 
