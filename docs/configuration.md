@@ -104,6 +104,7 @@ Share pages that look the same for everyone who opens them: a pricing page, the 
 | `domain` | `null` | Restrict the routes to one domain. |
 | `ingest.middleware` | `[]` | Extra middleware for the upload routes. None is needed: identity comes from the signed token. |
 | `ingest.requests_per_minute` | `240` | Uploads per minute per person (for guests, per rendered page: a value in the signed token, not one the browser picks). `null` turns it off. |
+| `ingest.global_requests_per_minute` | `null` | Uploads per minute for the whole app, everyone together. Past it the endpoint answers 503 with `Retry-After` (the rest of the minute plus up to two minutes at random) and the recorder pauses that long. For the minutes after an outage, when every open tab sends what it kept. `null` or `0` turns it off. See [Limits](storage.md#limits). |
 | `ingest.daily_mb` | `250` | Megabytes one person may upload per day, as sent. A day of steady work in a panel is well under 100 MB. `null` turns it off. |
 | `ingest.guest_daily_mb` | `2048` | Megabytes all guests together may upload per day. Guests cannot be told apart, so this is the cap that keeps a script from filling the disk. `null` turns it off. |
 | `ingest.max_batch_kb` | `1536` | Largest upload accepted, as sent; a shared snapshot gets the same limit. |

@@ -22,6 +22,10 @@ Assist: support helps someone while they are still on the page. Off until `SESSI
 - The stage can sit in a page of your own ([Hosting the stage](docs/assist.md#hosting-the-stage-in-a-page-of-your-own)); Filament Session Replay puts it in a panel
 - `data-replay-skip` leaves an element out of the recording with everything inside it
 - `composer.json`'s homepage and docs link point at packstub.dev
+- After a server outage, tabs no longer all upload at once: retries are jittered, and a window triggered by a request that got no answer (or a 502, 503, 504) waits 30 to 120 s at random before it goes up ([When the upload fails](docs/recording.md#when-the-upload-fails))
+- The recorder honours `Retry-After` on a 503 or 429, pausing every upload of the tab for up to ten minutes
+- `ingest.global_requests_per_minute` caps uploads for the whole app and answers 503 with `Retry-After`; off by default
+- **Fixed:** a window kept in the browser during an outage is sent again on the tab's next page load (since 1.1.0 it waited until it expired)
 - **Fixed:** on SQLite, an upload or an Assist grant that arrives while another request is writing waits its turn instead of failing with "database is locked"
 
 ## 1.1.0 — 2026-11-04
