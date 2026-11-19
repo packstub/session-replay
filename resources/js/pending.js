@@ -98,6 +98,8 @@ export function savePending(sessionId, batch, blob, assets, identity) {
             identity: identity ?? null,
             assets,
             blob,
+            // The end of the spread of a window an outage triggered, so the next page load waits out only the rest.
+            notBefore: batch.notBefore || 0,
             savedAt: Date.now(),
         }),
     );

@@ -6,7 +6,7 @@ import { EVENT_FULL_SNAPSHOT, assetPlaceholder, attributeMatcher, referencedAsse
 import { ACTIVE_SOURCES, activeTime, charsSinceSnapshot, checkoutInterval, estimateChars, estimateEventChars, isTrigger, trimWindow, windowStart } from './lib/buffer.js';
 import { lastingPlugin, navigationPause } from './lib/navigation.js';
 import { hasHeader, observe, requestMarker } from './lib/requests.js';
-import { MAX_RETRIES, pendingFate, retryDelay } from './lib/pending.js';
+import { MAX_PAUSES, MAX_RETRIES, RETRY_AFTER_MAX_MS, SPREAD_MAX_MS, isOutage, pendingFate, retryAfterDelay, retryDelay, spreadDelay, timeLeft } from './lib/pending.js';
 import { ask, dismiss, notice } from './ask.js';
 import { deletePending, listPending, pendingStoreExists, savePending } from './pending.js';
 import { createAssistHook } from './lib/assist-hook.js';
@@ -47,6 +47,8 @@ const CONSOLE_PLUGIN = 'rrweb/console@1';
 const KEEPALIVE_LIMIT = 60 * 1024;
 // Batches waiting to go up while the server is away; beyond this they are dropped (see queue()).
 const MAX_QUEUED = 40;
+// Until when the server asked (503 or 429 with Retry-After) for no uploads from this tab, across its page loads.
+const PAUSE_KEY = 'sr:pause';
 const MAX_BUFFERED_EVENTS = 400;
 const MAX_BUFFERED_CHARS = 1_500_000;
 
@@ -86,6 +88,10 @@ let asking = false;
 let askError = null;
 // The kept window batches (IndexedDB) of this recording, dropped when the tab stops.
 let kept = new Set();
+// Until when uploads wait for the server's Retry-After: every upload of the tab, not only the batch that was told.
+let pausedUntil = 0;
+// Ends the spread a window is waiting out (see share()) at once: the person asked for the replay to be sent.
+let cutSpread = null;
 // Bumped when a recording ends for a new one on the same page: stylesheet hashing still running belongs to the old one.
 let generation = 0;
 // Bumped by stop(): a batch queued before a stop is never sent after it, even once a recording started again
@@ -229,7 +235,8 @@ function mark(type, label, payload = {}, heldAt = null) {
 
     note(type, label, payload, at, heldAt === null);
 
-    return isTrigger(type, config.onError?.triggers) ? trigger() : false;
+    // A server that is away fails every open tab at once: the window that failure triggers goes up spread out.
+    return isTrigger(type, config.onError?.triggers) ? trigger(type === 'request' && isOutage(payload?.status)) : false;
 }
 
 /** The marker itself, at `at`; `live` while rrweb records (a held marker keeps its own time). */
@@ -273,6 +280,9 @@ function report(label, payload = {}) {
     }
 
     if (session.phase !== 'recording') return Promise.resolve(false);
+
+    // A window still waiting out an outage's spread goes now, with the report behind it.
+    cutSpread?.();
 
     return flush();
 }
@@ -392,9 +402,9 @@ function trimBuffer(cutoff) {
 
 /**
  * A trigger fired while buffering: upload the window and keep recording, after asking when onError.ask is on.
- * True when the question went up.
+ * `outage` when the trigger was the server being away (see share()). True when the question went up.
  */
-function trigger() {
+function trigger(outage = false) {
     if (!session || session.phase !== 'buffering' || asking || stopped) return false;
 
     // A "no" with onError.askAgain: the next question waits a window, so a burst of errors asks once.
@@ -403,7 +413,7 @@ function trigger() {
     trimBuffer(Date.now() - windowMs);
 
     if (!config.onError.ask) {
-        share(false);
+        share(false, outage);
 
         return false;
     }
@@ -420,7 +430,7 @@ function trigger() {
             if (stopped || session !== asked || session.phase !== 'buffering') return;
 
             if (answer.share) {
-                share(answer.anonymous);
+                share(answer.anonymous, outage);
                 notice(config.onError.labels.sent);
 
                 return;
@@ -447,7 +457,15 @@ function trigger() {
     return true;
 }
 
-function share(anonymous) {
+/**
+ * Start sending: the window first, then the batches that follow. A window an
+ * outage triggered (no answer, 502, 503, 504) waits 30 to 120 s at random
+ * before its first upload, so the tabs the outage triggered all at once do not
+ * all upload at once when the server comes back. Only a window kept in the
+ * browser waits: a tab closed meanwhile sends it on its next page load, after
+ * what is left of the wait.
+ */
+function share(anonymous, outage = false) {
     session.phase = 'recording';
     session.anonymous = !!anonymous;
     saveSession();
@@ -457,6 +475,7 @@ function share(anonymous) {
 
         // The window itself: kept in the browser when its upload fails, unlike the batches that follow.
         batch.window = keepPending;
+        if (outage && keepPending) batch.notBefore = Date.now() + spreadDelay();
         queue(batch);
     }
 
@@ -641,6 +660,12 @@ async function uploadAssets(hashes, token, recording) {
 
         if (text === undefined) continue;
 
+        // The server asked for a pause: the stylesheet goes with a later batch.
+        if (isPaused()) {
+            failed.push(hash);
+            continue;
+        }
+
         const data = new FormData();
 
         data.append('token', token);
@@ -658,7 +683,10 @@ async function uploadAssets(hashes, token, recording) {
                 return failed;
             }
 
-            if (response.status === 429 || response.status >= 500) failed.push(hash);
+            if (response.status === 429 || response.status >= 500) {
+                honourRetryAfter(response);
+                failed.push(hash);
+            }
         } catch {
             failed.push(hash);
         }
@@ -708,6 +736,9 @@ async function shareSnapshots(batch) {
             const uploaded = uploadedSnapshots();
 
             if (!uploaded[hash]) {
+                // The server asked for a pause: the snapshot stays in the batch.
+                if (isPaused()) continue;
+
                 const data = new FormData();
 
                 data.append('token', batch.token);
@@ -715,7 +746,12 @@ async function shareSnapshots(batch) {
                 data.append('content', await gzip(text), 'content');
 
                 // The answer is the same whether the server had it or not; only a failure keeps the tree inline.
-                if (!(await fetch(config.snapshots.url, { method: 'POST', body: data })).ok) continue;
+                const response = await fetch(config.snapshots.url, { method: 'POST', body: data });
+
+                if (!response.ok) {
+                    honourRetryAfter(response);
+                    continue;
+                }
 
                 uploaded[hash] = Date.now();
                 write('sessionStorage', SHARED_KEY, JSON.stringify({ identity: config.identity ?? null, hashes: Object.fromEntries(Object.entries(uploaded).slice(-50)) }));
@@ -780,6 +816,21 @@ async function send(batch) {
     // after half a minute, and a reload before that aborts the request without an answer.
     if (batch.window && !batch.kept && !stopped) await keep(batch);
 
+    // The spread of a window an outage triggered (kept above with its end, so a page load does not start it over),
+    // then any pause the server asked for.
+    if (batch.notBefore) {
+        await new Promise((resolve) => {
+            cutSpread = resolve;
+            sleepUntil(batch.notBefore, SPREAD_MAX_MS).then(resolve);
+        });
+        cutSpread = null;
+        batch.notBefore = 0;
+    }
+
+    await pause();
+
+    if (stopped || batch.era !== era) return false;
+
     let response;
 
     try {
@@ -800,6 +851,14 @@ async function send(batch) {
 
     if (response.status === 429 || response.status >= 500) {
         if (response.status === 429) flushInterval = Math.min(flushInterval * 2, 60_000);
+
+        // The server said when to come back: every upload of the tab waits, and the wait is no failed try. A few of
+        // them at most, or a server that always says "later" would keep the batch forever.
+        if (honourRetryAfter(response) && (batch.pauses || 0) < MAX_PAUSES) {
+            batch.pauses = (batch.pauses || 0) + 1;
+
+            return failed(batch, true);
+        }
 
         return failed(batch);
     }
@@ -834,11 +893,62 @@ async function answer(response) {
     }
 }
 
-/** The server could not take the batch: the window is in IndexedDB (see send()), the batch is retried. */
-async function failed(batch) {
+/**
+ * The server could not take the batch: the window is in IndexedDB (see send()), the batch is retried; `paused`
+ * when the server said when (send() waits for the pause, the try is not counted).
+ */
+async function failed(batch, paused = false) {
     if (batch.window && !batch.kept && !stopped) await keep(batch);
 
+    if (paused) return stopped ? false : send(batch);
+
     return retry(batch);
+}
+
+/**
+ * A 503 or 429 with Retry-After pauses every upload of the tab for that long (capped, jittered; see
+ * retryAfterDelay()), kept in sessionStorage so a page load does not cut it short. True when the answer had one.
+ */
+function honourRetryAfter(response) {
+    if (response.status !== 503 && response.status !== 429) return false;
+
+    let ms = null;
+
+    try {
+        ms = retryAfterDelay(response.headers.get('Retry-After'));
+    } catch {
+        // No headers to read (an odd fetch polyfill).
+    }
+
+    if (ms === null) return false;
+
+    pausedUntil = Math.max(pausedUntil, Date.now() + ms);
+    write('sessionStorage', PAUSE_KEY, String(pausedUntil));
+
+    return true;
+}
+
+/** Whether uploads wait for the server's Retry-After right now. */
+function isPaused() {
+    const now = Date.now();
+
+    if (!pausedUntil) pausedUntil = Number(read('sessionStorage', PAUSE_KEY)) || 0;
+    // A clock that went back holds no upload for longer than the longest pause.
+    if (pausedUntil > now + RETRY_AFTER_MAX_MS) pausedUntil = now + RETRY_AFTER_MAX_MS;
+
+    return timeLeft(pausedUntil, now, RETRY_AFTER_MAX_MS) > 0;
+}
+
+/** Resolves once the server's Retry-After is over, also when it was extended meanwhile. */
+async function pause() {
+    while (isPaused() && !stopped) await sleepUntil(pausedUntil, RETRY_AFTER_MAX_MS);
+}
+
+/** Waits until `until`, at most `max`; unlike wait(), the browser going online does not cut it short. */
+function sleepUntil(until, max) {
+    const ms = timeLeft(until, Date.now(), max);
+
+    return ms > 0 ? new Promise((resolve) => setTimeout(resolve, ms)) : Promise.resolve();
 }
 
 /** The window a trigger uploads stays in IndexedDB until the server answers. */
@@ -934,7 +1044,8 @@ async function resumePending() {
 
         for (const [hash, text] of Object.entries(record.assets || {})) if (!pendingAssetText.has(hash)) pendingAssetText.set(hash, text);
 
-        const batch = { seq: record.seq, events: [], meta: record.meta, anonymous: !!record.anonymous, session, token: config.token, identity: config.identity ?? null, tries: 0, blob: record.blob, window: true, kept: true };
+        // Of this era: send() drops a batch of another one. notBefore: what is left of an outage's spread.
+        const batch = { seq: record.seq, events: [], meta: record.meta, anonymous: !!record.anonymous, session, token: config.token, identity: config.identity ?? null, tries: 0, blob: record.blob, window: true, kept: true, era, notBefore: Number(record.notBefore) || 0 };
 
         kept.add(batch);
         await send(batch);
