@@ -1,5 +1,7 @@
 # Recording
 
+One Blade directive records a page. This page covers its options, who is recorded, sessions, recording only on errors, markers and the browser API.
+
 ## The directive
 
 ```blade
