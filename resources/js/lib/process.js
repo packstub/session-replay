@@ -144,6 +144,51 @@ export function styleSlots(event, minBytes = 0) {
     return slots;
 }
 
+const QUIET_REL = new Set(['stylesheet', 'alternate']);
+
+function relIsQuiet(value) {
+    if (value === null || value === undefined || value === false) return true;
+    if (typeof value !== 'string') return false;
+
+    const tokens = value.toLowerCase().split(/[\s]+/).filter(Boolean);
+
+    return tokens.every((token) => QUIET_REL.has(token));
+}
+
+/**
+ * Take the `rel` off every <link> that is not a stylesheet: preconnect, dns-prefetch, preload and prefetch open a
+ * connection or fetch with no Content-Security-Policy directive of their own (or one a page cannot narrow without
+ * breaking itself), so a page replayed live could make the viewer's browser reach a host of its choosing. A sheet's
+ * own fetch stays under style-src. `links` keeps the ids of the link elements seen, across events, for the attribute
+ * changes that come later (rrweb names only the id there). Names are compared without case, as the DOM does. Mutates.
+ */
+export function quietLinks(event, links) {
+    for (const root of roots(event)) {
+        walk(root, (node) => {
+            if (!node || node.type !== NODE_ELEMENT || typeof node.tagName !== 'string' || node.tagName.toLowerCase() !== 'link') return;
+            if (typeof node.id === 'number') links.add(node.id);
+
+            quietRel(node.attributes);
+        });
+    }
+
+    if (event.type === EVENT_INCREMENTAL && event.data && event.data.source === SOURCE_MUTATION && Array.isArray(event.data.attributes)) {
+        for (const change of event.data.attributes) {
+            if (change && links.has(change.id)) quietRel(change.attributes);
+        }
+    }
+
+    return event;
+}
+
+function quietRel(attributes) {
+    if (!attributes || typeof attributes !== 'object') return;
+
+    for (const name of Object.keys(attributes)) {
+        if (name.toLowerCase() === 'rel' && !relIsQuiet(attributes[name])) attributes[name] = null;
+    }
+}
+
 /** Hashes the player has to fetch before it can show these events. */
 export function referencedAssets(events) {
     const hashes = new Set();

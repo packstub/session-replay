@@ -120,6 +120,10 @@ test('an agent claims a request and helps on the live stage: mirror, control, an
     // agent's browser from fetching it (and so from telling that host the agent's address).
     await visitor.evaluate(() => document.body.append(Object.assign(document.createElement('img'), { id: 'leak', src: 'http://leak.invalid/pixel.png', alt: '' })));
     await expect(mirror.locator('#leak')).toHaveCount(1);
+    // A preload has no directive of the stage's policy to stop it: the mirror takes its rel off.
+    await visitor.evaluate(() => document.body.append(Object.assign(document.createElement('link'), { id: 'leak-link', rel: 'preload', as: 'fetch', href: 'http://leak.invalid/data.json' })));
+    await expect(mirror.locator('#leak-link')).toHaveCount(1);
+    expect(await mirror.locator('#leak-link').getAttribute('rel')).toBeNull();
     await agent.waitForTimeout(500);
     expect(leaks).toEqual([]);
 

@@ -7,6 +7,7 @@
  */
 
 import { mapPoint, restoreLiveStyles } from './assist-protocol.js';
+import { quietLinks } from './process.js';
 
 // rrweb event types: what the stage looks at.
 const FULL_SNAPSHOT = 2;
@@ -35,6 +36,9 @@ export const MAX_LIVE_CSS_CHARS = 32 * 1024 * 1024;
  *   ids start again, so the Replayer starts again too.
  * - Stylesheets are capped per channel (MAX_LIVE_CSS_KEYS, MAX_LIVE_CSS_CHARS):
  *   past the cap a new one is dropped (its events show an empty sheet).
+ * - A <link> that is not a stylesheet loses its `rel` (quietLinks()): a
+ *   preconnect or a prefetch would reach a host of the visitor's choosing
+ *   past the stage's Content-Security-Policy.
  */
 export class LiveFeed {
     /**
@@ -57,6 +61,7 @@ export class LiveFeed {
         this.offset = null;
         this.meta = null;
         this.events = 0;
+        this.links = new Set();
     }
 
     get started() {
@@ -79,6 +84,7 @@ export class LiveFeed {
     /** An `rr` message's event (validated already, a fresh object: it is mutated). */
     event(event) {
         restoreLiveStyles(event, this.texts);
+        quietLinks(event, this.links);
 
         if (this.offset === null) this.offset = this.now() - event.timestamp;
 
@@ -124,6 +130,7 @@ export class LiveFeed {
         this.offset = null;
         this.meta = null;
         this.events = 0;
+        this.links = new Set();
     }
 }
 

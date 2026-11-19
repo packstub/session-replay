@@ -503,6 +503,48 @@ test('stagePhase: one word for the host\'s status badge', async () => {
     assert.equal(stagePhase({ status: 'ended', held: true }), 'ended');
 });
 
+test('a visitor\'s page cannot make the mirror preconnect or prefetch to a host of its choosing', () => {
+    const { live, made } = feed();
+    const link = (id, attributes) => ({ type: 2, id, tagName: 'link', attributes, childNodes: [] });
+
+    live.event({
+        type: 2,
+        timestamp: 1,
+        data: {
+            node: {
+                type: 0,
+                id: 1,
+                childNodes: [
+                    link(2, { rel: 'preconnect', href: 'https://spy.example/' }),
+                    link(3, { REL: 'dns-prefetch', href: 'https://spy.example/' }),
+                    { type: 2, id: 4, tagName: 'LINK', attributes: { rel: 'preload', as: 'fetch', href: 'https://spy.example/x' }, childNodes: [] },
+                    link(5, { rel: 'stylesheet', href: 'https://shop.test/app.css', _cssText: 'a{}' }),
+                    link(6, { rel: 'alternate stylesheet', href: 'https://shop.test/print.css' }),
+                    link(7, { href: 'https://spy.example/' }),
+                ],
+            },
+            initialOffset: { top: 0, left: 0 },
+        },
+    });
+    // Added later, and switched later: a link that was a stylesheet becomes a prefetch, one with no rel gets one.
+    live.event({ type: 3, timestamp: 2, data: { source: 0, adds: [{ parentId: 1, nextId: null, node: link(8, { rel: 'prefetch', href: 'https://spy.example/y' }) }], removes: [], texts: [], attributes: [] } });
+    live.event({ type: 3, timestamp: 3, data: { source: 0, adds: [], removes: [], texts: [], attributes: [{ id: 5, attributes: { rel: 'prefetch' } }, { id: 7, attributes: { Rel: 'preconnect' } }, { id: 99, attributes: { rel: 'nofollow' } }] } });
+
+    const [full, added, changed] = made[0].events;
+    const nodes = Object.fromEntries(full.data.node.childNodes.map((node) => [node.id, node.attributes]));
+
+    assert.equal(nodes[2].rel, null);
+    assert.equal(nodes[3].REL, null);
+    assert.equal(nodes[4].rel, null);
+    assert.equal(nodes[5].rel, 'stylesheet');
+    assert.equal(nodes[6].rel, 'alternate stylesheet');
+    assert.equal(added.data.adds[0].node.attributes.rel, null);
+    assert.equal(changed.data.attributes[0].attributes.rel, null);
+    assert.equal(changed.data.attributes[1].attributes.Rel, null);
+    // Not a link: left as sent.
+    assert.equal(changed.data.attributes[2].attributes.rel, 'nofollow');
+});
+
 // ---- limits and holding the request ------------------------------------------------
 
 test('keeps a bounded number of stylesheets per channel, in keys and in characters', async () => {
