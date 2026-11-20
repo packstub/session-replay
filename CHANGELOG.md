@@ -2,31 +2,28 @@
 
 All notable changes to `packstub/session-replay` are documented here.
 
-## Unreleased
+## 1.2.0 — 2026-11-20
 
-Assist: support helps someone while they are still on the page. Off until `SESSION_REPLAY_ASSIST` is on; run `php artisan migrate` for the new `replay_assist_requests` table. The live view needs [Holler for Laravel](https://github.com/packstub/holler) 1.x (`composer require packstub/holler`); without it the requests are a plain queue. See [Assist](docs/assist.md).
+**Introducing Assist: live help, right on the page.** Session Replay no longer only shows what happened: support can now join a visitor while they are still there. The agent sees the page live, points, draws over it and, when the visitor allows it, takes control, talks or shares a screen, all from your own Laravel app. The live part runs on [Holler for Laravel](https://github.com/packstub/holler) 1.0: a WebRTC call straight between the two browsers, with signaling over plain HTTP, so there is no websocket server to run.
 
-**Security:** the upload endpoints (and the new Assist routes) read the signed token, the write key and a request's secret from the request body only, never from the query string, which access logs, proxies and error trackers keep.
+### ✨ Assist, powered by Holler
 
-- A visitor asks for help from the page with `SessionReplay.assist.request()` or the optional "Get help" button (`assist.button`), and support takes the request on the new Requests page of the built-in viewer
-- Support offers help from a live recording: a **Live now** tab says when each page was last heard from, and the visitor answers Accept or Not now; after a Not now, no new offer to that person for `assist.decline_cooldown_seconds` (5 minutes)
-- The live stage shows the visitor's page as it happens, masked like the recording; it loads assets only from the app and `assist.mirror_sources`, so a visitor's page cannot make the agent's browser call another host
-- The agent's pointer shows on the visitor's page while they watch (**Show my pointer**, on by default); nothing is asked, since nothing on the page changes
-- Remote control, typing into masked fields (`assist.control_masked`), audio, video and screen share are each asked of the visitor separately; Escape takes control back, a password field is never filled, and control once allowed goes on across the site's pages in the same tab (`assist.control_across_pages`, on by default)
-- Annotations: the agent draws over the page, and the strokes fade
-- **Put on hold** and **Resume** on the stage (Holler's hold); an agent is live in one assist at a time, and a second one waits until the first is on hold or over
-- An agent who leaves the live view keeps the request: the same call goes on when they are back in time, a new one starts after that, and past `assist.claim_timeout_seconds` the request returns to the list
-- Limits against floods: one request per recording, `assist.requests_per_hour`, `assist.max_open_requests`, and a budget of their own for guests (`assist.guests`, `assist.guest_requests_per_hour`)
-- `SessionReplay::canAssistUsing()` decides who may help (the viewer gate by default); a grants log and an `assist` marker on the recording say what was asked, what was allowed and for how long
-- Events: `AssistRequested`, `AssistClaimed`, `AssistStarted`, `AssistEnded`
-- The stage can sit in a page of your own ([Hosting the stage](docs/assist.md#hosting-the-stage-in-a-page-of-your-own)); Filament Session Replay puts it in a panel
+- **Ask or offer:** a visitor asks with the optional "Get help" button or `SessionReplay.assist.request()`; support offers help from the new **Live now** tab, and the visitor answers Accept or Not now
+- **The live stage:** the visitor's page as it happens, masked exactly like the recording, with the agent's pointer and annotations that fade
+- **Everything is asked:** remote control, typing, audio, video and screen share are each asked of the visitor separately; Escape takes control back, and a password field is never filled
+- **Built for real support work:** Put on hold and Resume, one live assist per agent, and a request that waits while the agent steps away and comes back
+- **Safe by default:** limits per recording, per hour and for guests, `SessionReplay::canAssistUsing()` for who may help, and a grants log plus an `assist` marker on the recording saying what was allowed and for how long
+- **Yours to place:** events for every step (`AssistRequested`, `AssistClaimed`, `AssistStarted`, `AssistEnded`), a stage you can host in a page of your own, and in a Filament panel with Filament Session Replay
+
+**Getting started:** set `SESSION_REPLAY_ASSIST=true`, run `php artisan migrate` (new `replay_assist_requests` table) and `composer require packstub/holler` for the live view; without Holler, requests work as a plain queue. Everything else is in the [Assist guide](docs/assist.md).
+
+### Also in this release
+
+- **Security:** the upload endpoints (and the new Assist routes) read the signed token, the write key and a request's secret from the request body only, never from the query string, which access logs, proxies and error trackers keep
 - `data-replay-skip` leaves an element out of the recording with everything inside it
-- `composer.json`'s homepage and docs link point at packstub.dev
-- After a server outage, tabs no longer all upload at once: retries are jittered, and a window triggered by a request that got no answer (or a 502, 503, 504) waits 30 to 120 s at random before it goes up ([When the upload fails](docs/recording.md#when-the-upload-fails))
-- The recorder honours `Retry-After` on a 503 or 429, pausing every upload of the tab for up to ten minutes
-- `ingest.global_requests_per_minute` caps uploads for the whole app and answers 503 with `Retry-After`; off by default
-- **Fixed:** a window kept in the browser during an outage is sent again on the tab's next page load (since 1.1.0 it waited until it expired)
-- **Fixed:** on SQLite, an upload or an Assist grant that arrives while another request is writing waits its turn instead of failing with "database is locked"
+- After a server outage, tabs spread their uploads over 30 to 120 s and honour `Retry-After`; `ingest.global_requests_per_minute` caps uploads for the whole app (off by default) ([When the upload fails](docs/recording.md#when-the-upload-fails))
+- **Fixed:** a window kept in the browser during an outage is sent on the tab's next page load (since 1.1.0 it waited until it expired)
+- **Fixed:** on SQLite, uploads and Assist grants wait their turn instead of failing with "database is locked"
 
 ## 1.1.0 — 2026-11-04
 
