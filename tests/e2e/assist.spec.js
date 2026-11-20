@@ -220,6 +220,24 @@ test('an agent claims a request and helps on the live stage: mirror, control, an
     await expect(visitor.locator('#list li')).toHaveCount(1);
     await expect(mirror.locator('#list li')).toHaveCount(1);
 
+    // ---- typing into a masked field: the box waits for Ada's answer, then Ana's typing lands -----------
+
+    const street = await mirror.locator('#street').boundingBox();
+
+    await agent.mouse.click(street.x + street.width / 2, street.y + street.height / 2);
+    await expect(agent.locator('[data-ref="editor-hint"]')).toHaveText(/Waiting for the visitor to allow typing/);
+    await expect(agent.locator('[data-ref="editor-text"]')).toHaveAttribute('readonly', '');
+    await expect(visitor.getByText(/would like to type into fields that are hidden/)).toBeVisible();
+    if (process.env.ASSIST_E2E_SHOTS) await visitor.screenshot({ path: `${process.env.ASSIST_E2E_SHOTS}/masked-question.png` });
+    await visitor.getByRole('button', { name: 'Allow', exact: true }).click();
+
+    await expect(agent.getByText('The visitor allowed typing into fields you cannot see.')).toBeVisible();
+    await expect(agent.locator('[data-ref="editor-text"]')).not.toHaveAttribute('readonly', '');
+    // Right after Ada's press on Allow: her press in the panel does not pause Ana.
+    await agent.locator('[data-ref="editor-text"]').fill('Main Street 1');
+    await agent.locator('[data-ref="editor-text"]').press('Enter');
+    await expect(visitor.locator('#street')).toHaveValue('Main Street 1');
+
     // ---- an annotation drawn over Ada's page -------------------------------------------------------
 
     await agent.getByRole('button', { name: 'Draw' }).click();
