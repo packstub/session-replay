@@ -2,6 +2,7 @@
 
 namespace Workbench\App\Providers;
 
+use Illuminate\Http\Middleware\TrustProxies;
 use Illuminate\Support\Facades\Gate;
 use Illuminate\Support\ServiceProvider;
 use Packstub\Holler\HollerServiceProvider;
@@ -40,6 +41,12 @@ class WorkbenchServiceProvider extends ServiceProvider
 
     public function boot(): void
     {
+        // TRUST_PROXIES=1 composer serve behind an https tunnel (cloudflared, Expose): URLs follow X-Forwarded-Proto,
+        // so the page loads its scripts over https. Microphone, camera and screen share need https off localhost.
+        if (env('TRUST_PROXIES')) {
+            TrustProxies::at('*');
+        }
+
         // CSP=1 composer serve: a strict policy with a nonce on script-src and style-src, to see what the recorder,
         // the question and the player need (?csp=inline and ?csp=both on a page try the other style-src forms).
         if (env('CSP')) {
