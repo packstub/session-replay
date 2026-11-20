@@ -290,7 +290,13 @@ test('an agent claims a request and helps on the live stage: mirror, control, an
 
     // The grants log on the server shows what was asked and what was allowed.
     const requestId = new URL(agent.url()).pathname.split('/').at(-2);
-    const grants = await agent.evaluate(async (id) => (await (await fetch(`/session-replay/assist/requests/${id}/status`, { headers: { Accept: 'application/json' } })).json()).grants, requestId);
+    const readGrants = () => agent.evaluate(async (id) => (await (await fetch(`/session-replay/assist/requests/${id}/status`, { headers: { Accept: 'application/json' } })).json()).grants, requestId);
+    // The visitor's page posts each grant on its own: the end of control may land a moment after the stage saw it.
+    let grants = [];
+
+    await expect
+        .poll(async () => (grants = await readGrants()).filter((entry) => entry.by === 'visitor' && entry.kind === 'control').length, { timeout: 15_000 })
+        .toBeGreaterThanOrEqual(2);
 
     expect(grants.filter((entry) => entry.by === 'agent').map((entry) => entry.kind)).toEqual(expect.arrayContaining(['control', 'audio']));
     expect(grants.filter((entry) => entry.by === 'visitor' && entry.granted).map((entry) => entry.kind)).toEqual(expect.arrayContaining(['control', 'audio']));
