@@ -550,6 +550,7 @@ class SessionReplayManager
             'video' => $calls && $assist->videoAllowed(),
             'button' => (bool) config('session-replay.assist.button', false),
             'controlMasked' => (bool) config('session-replay.assist.control_masked', false),
+            'controlAcrossPages' => (bool) config('session-replay.assist.control_across_pages', true),
             'heartbeatMs' => max(5, (int) config('session-replay.assist.heartbeat_seconds', 15)) * 1000,
             'poll' => [
                 'waiting' => max(1000, (int) config('session-replay.assist.poll.waiting_ms', 3000)),

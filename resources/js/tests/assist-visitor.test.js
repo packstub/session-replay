@@ -188,18 +188,19 @@ function fakeTimers() {
 
     return {
         set(fn, ms) {
-            pending.set(next, fn);
+            pending.set(next, { fn, ms });
 
             return next++;
         },
         clear(id) {
             pending.delete(id);
         },
-        async run() {
-            const due = [...pending.values()];
+        /** Every timer due within `within` ms (the polls; not the hand-over's or the reminder's, unless asked). */
+        async run(within = 5000) {
+            const due = [...pending.entries()].filter(([, timer]) => (timer.ms ?? 0) <= within);
 
-            pending.clear();
-            for (const fn of due) await fn();
+            for (const [id] of due) pending.delete(id);
+            for (const [, timer] of due) await timer.fn();
         },
     };
 }
@@ -207,9 +208,12 @@ function fakeTimers() {
 const routes = Object.fromEntries(['poll', 'accept', 'decline', 'cancel', 'hangup', 'leave', 'signal', 'grants'].map((name) => [name, `/sr/assist/requests/__ID__/${name}`]));
 
 /** A visitor whose request is live with Ana (agent 5), the channel open and both hellos said. */
-async function live({ stored = {}, video = false, devices = { media: true, screen: true } } = {}) {
-    let clock = 1_000_000;
-    const store = new Map([['sr:assist', JSON.stringify({ id: 'r1', secret: 's3cret', status: 'active', openedBy: 'visitor', agent: { id: '5', name: 'Ana' }, grants: {}, ...stored })]]);
+async function live({ stored = {}, video = false, devices = { media: true, screen: true }, assist = {}, store: carriedStore = null, clock: startAt = 1_000_000, arrival = null, href = 'https://shop.test/checkout', mirrored = true, onInstall = null } = {}) {
+    let clock = startAt;
+    // A store from a page before (the same tab's sessionStorage), or a fresh request.
+    const store = carriedStore ?? new Map([['sr:assist', JSON.stringify({ id: 'r1', secret: 's3cret', status: 'active', openedBy: 'visitor', agent: { id: '5', name: 'Ana' }, grants: {}, ...stored })]]);
+    // What the recorder says of the page: identity, whether rrweb runs on it (a test flips them for a wire:navigate).
+    const page = { identity: null, mirrors: true };
     const grants = [];
     const ui = fakeUi();
     const timers = fakeTimers();
@@ -218,7 +222,7 @@ async function live({ stored = {}, video = false, devices = { media: true, scree
 
     globalThis.window = Object.assign(new EventTarget(), { innerWidth: 1280, innerHeight: 800 });
     globalThis.document = Object.assign(new EventTarget(), { visibilityState: 'visible' });
-    globalThis.location = { href: 'https://shop.test/checkout', origin: 'https://shop.test' };
+    globalThis.location = { href, origin: 'https://shop.test' };
 
     const fetch = async (url, init) => {
         const body = JSON.parse(init.body);
@@ -238,9 +242,10 @@ async function live({ stored = {}, video = false, devices = { media: true, scree
     };
 
     const recorder = {
-        config: () => ({ token: 'tok', privacy: { maskAllInputs: true }, assist: { routes, calls: true, video, labels: {}, poll: { waiting: 3000, active: 2000 } } }),
+        config: () => ({ token: 'tok', identity: page.identity, privacy: { maskAllInputs: true }, assist: { routes, calls: true, video, labels: {}, poll: { waiting: 3000, active: 2000 }, ...assist } }),
         recording: () => ({ id: 'rec-1', key: 'k1' }),
-        snapshot: () => true,
+        snapshot: () => mirrored,
+        mirrors: () => page.mirrors,
         node: () => null,
         goLive() {},
         touch() {},
@@ -250,7 +255,8 @@ async function live({ stored = {}, video = false, devices = { media: true, scree
         tab: 'tab-1',
     };
 
-    installAssist(recorder, { ui, timers, Client: FakeClient, drain: async () => {}, fetch, now: () => clock, devices: () => devices });
+    installAssist(recorder, { ui, timers, Client: FakeClient, drain: async () => {}, fetch, now: () => clock, devices: () => devices, ...(arrival ? { arrival: () => arrival } : {}) });
+    await onInstall?.({ ui, grants, store, timers });
 
     // The reload's first poll finds the call; the client joins it.
     await timers.run();
@@ -281,8 +287,12 @@ async function live({ stored = {}, video = false, devices = { media: true, scree
         server,
         grants,
         store,
+        page,
         /** What the visitor's page sent the agent, apart from the mirror. */
         said: () => received.filter((message) => !['rr', 'css', 'state'].includes(message.t)),
+        /** Everything it sent, in order. */
+        all: () => received,
+        now: () => clock,
         async send(message) {
             agent.send(message);
             await settle();
@@ -623,4 +633,218 @@ test('a microphone the browser refuses after the visitor\'s Allow is reported as
     } finally {
         FakeClient.mediaError = null;
     }
+});
+
+// ---- remote control across pages (assist.control_across_pages) --------------------------------
+
+/** The page acts on a control message: it looked an element up for it. */
+function watchActions() {
+    const reached = [];
+
+    globalThis.document.elementFromPoint = (x, y) => (reached.push(`${x},${y}`), null);
+    globalThis.document.elementsFromPoint = (x, y) => (reached.push(`${x},${y}`), []);
+
+    return reached;
+}
+
+/** A page with control granted, left for the next one (pagehide). */
+async function handedOver({ assist = { controlAcrossPages: true } } = {}) {
+    const first = await live({ assist });
+
+    await first.send({ t: 'control.request' });
+    await first.answer(true);
+
+    globalThis.window.dispatchEvent(new Event('pagehide'));
+    await settle();
+
+    return first;
+}
+
+test('control goes on to the next page of the tab: no new question, the outline and the reminder at once, one grant period', async () => {
+    const first = await handedOver();
+    const carry = JSON.parse(first.store.get('sr:assist')).carry;
+
+    assert.equal(carry.from, 'https://shop.test/checkout');
+    // Left with control handed over: no end of control in the log.
+    assert.deepEqual(first.grants, [['control', true]]);
+
+    let before = null;
+    const next = await live({
+        store: first.store,
+        clock: first.now() + 1500,
+        href: 'https://shop.test/checkout/address',
+        arrival: { type: 'navigate', referrer: 'https://shop.test/checkout', href: 'https://shop.test/checkout/address' },
+        assist: { controlAcrossPages: true },
+        onInstall: ({ ui }) => {
+            before = { outlined: ui.outlined, text: ui.shown?.text, buttons: ui.shown?.actions.map((action) => action.label) };
+        },
+    });
+
+    // Before the channel: the frame and "… still controls this page" with End remote control, no control yet.
+    assert.deepEqual(before, { outlined: true, text: 'stillControlling', buttons: ['endControl', 'end'] });
+    // Taken from storage: a later page never sees it.
+    assert.equal(JSON.parse(next.store.get('sr:assist')).carry, undefined);
+
+    // On the channel: the grant (continued) before the first state, nothing asked, nothing logged.
+    const order = next.all().map((message) => message.t);
+
+    assert.ok(order.indexOf('control.granted') < order.indexOf('state'));
+    assert.deepEqual(next.said(), [{ t: 'control.granted', continued: true }]);
+    assert.equal(next.ui.open().length, 0);
+    assert.deepEqual(next.grants, []);
+    assert.equal(next.ui.cursorState.mode, 'control');
+
+    const reached = watchActions();
+
+    await next.send({ t: 'click', x: 40, y: 50 });
+    assert.ok(reached.length > 0);
+
+    // End remote control ends it, logged once.
+    next.ui.press('endControl');
+    await settle();
+    assert.deepEqual(next.said().at(-1), { t: 'control.released', reason: 'visitor' });
+    assert.deepEqual(next.grants, [['control', false]]);
+});
+
+test('control does not go on past a page the assist did not run on, the back button, or a late page: ended and logged once', async () => {
+    const cases = [
+        // A page in between (not recorded, another site): the referrer is that page.
+        { type: 'navigate', referrer: 'https://shop.test/excluded', later: 1500 },
+        { type: 'navigate', referrer: '', later: 1500 },
+        { type: 'back_forward', referrer: 'https://shop.test/checkout', later: 1500 },
+        { type: 'navigate', referrer: 'https://shop.test/checkout', later: 31_000 },
+    ];
+
+    for (const { type, referrer, later } of cases) {
+        const first = await handedOver();
+        const next = await live({ store: first.store, clock: first.now() + later, href: 'https://shop.test/account', arrival: { type, referrer, href: 'https://shop.test/account' }, assist: { controlAcrossPages: true } });
+
+        assert.equal(next.ui.outlined, false, `${type} ${referrer} ${later}`);
+        assert.deepEqual(next.grants, [['control', false]]);
+        // The agent's stage hears it ended, before the new page's first state.
+        assert.deepEqual(next.said(), [{ t: 'control.released', reason: 'navigation' }]);
+        assert.ok(next.all().findIndex((message) => message.t === 'control.released') < next.all().findIndex((message) => message.t === 'state'));
+        assert.equal(JSON.parse(next.store.get('sr:assist')).carry, undefined);
+
+        const reached = watchActions();
+
+        await next.send({ t: 'click', x: 40, y: 50 });
+        assert.deepEqual(reached, []);
+    }
+});
+
+test('a reload of the same page keeps control; its fragment does not matter', async () => {
+    const first = await handedOver();
+    const next = await live({ store: first.store, clock: first.now() + 900, href: 'https://shop.test/checkout#top', arrival: { type: 'reload', referrer: '', href: 'https://shop.test/checkout#top' }, assist: { controlAcrossPages: true } });
+
+    assert.deepEqual(next.said(), [{ t: 'control.granted', continued: true }]);
+});
+
+test('a new page the agent does not see (no snapshot) ends control instead of taking it over', async () => {
+    const first = await handedOver();
+    const next = await live({ store: first.store, clock: first.now() + 900, mirrored: false, arrival: { type: 'navigate', referrer: 'https://shop.test/checkout', href: 'https://shop.test/checkout' }, assist: { controlAcrossPages: true } });
+
+    assert.deepEqual(next.said(), [{ t: 'control.released', reason: 'not_recorded' }]);
+    assert.equal(next.ui.outlined, false);
+    assert.deepEqual(next.grants, [['control', false]]);
+});
+
+test('a channel that does not come back in time ends the control handed over, logged once', async () => {
+    const first = await handedOver();
+    const next = await live({
+        store: first.store,
+        clock: first.now() + 900,
+        arrival: { type: 'navigate', referrer: 'https://shop.test/checkout', href: 'https://shop.test/checkout' },
+        assist: { controlAcrossPages: true },
+        // Every timer runs before the channel comes: the hand-over's runs out.
+        onInstall: async ({ timers }) => {
+            await timers.run(Infinity);
+            await settle();
+        },
+    });
+
+    assert.equal(next.ui.outlined, false);
+    assert.deepEqual(next.grants, [['control', false]]);
+    assert.deepEqual(next.said(), [{ t: 'control.released', reason: 'reconnect' }]);
+    assert.equal(next.ui.cursorState.mode, null);
+});
+
+test('the masked-typing consent goes on with control and ends with it', async () => {
+    const first = await handedOver();
+    const stored = JSON.parse(first.store.get('sr:assist'));
+
+    // As a page left with the visitor's yes to typing into masked fields.
+    stored.carry.masked = true;
+    first.store.set('sr:assist', JSON.stringify(stored));
+
+    const next = await live({ store: first.store, clock: first.now() + 900, arrival: { type: 'navigate', referrer: 'https://shop.test/checkout', href: 'https://shop.test/checkout' }, assist: { controlAcrossPages: true, controlMasked: true } });
+
+    assert.deepEqual(next.said(), [{ t: 'control.granted', continued: true }]);
+
+    await next.send({ t: 'control.release' });
+    assert.deepEqual(next.grants, [['control', false], ['control_masked', false]]);
+});
+
+test('with control_across_pages off, leaving the page ends control as before', async () => {
+    const first = await handedOver({ assist: { controlAcrossPages: false } });
+
+    assert.equal(JSON.parse(first.store.get('sr:assist')).carry, undefined);
+    assert.deepEqual(first.grants, [['control', true], ['control', false]]);
+});
+
+test('wire:navigate: control pauses during the swap, nothing is acted on, and goes on once the new page\'s snapshot went out', async () => {
+    const page = await live({ assist: { controlAcrossPages: true } });
+
+    await page.send({ t: 'control.request' });
+    await page.answer(true);
+
+    const reached = watchActions();
+
+    globalThis.document.dispatchEvent(new Event('livewire:navigating'));
+    await settle();
+    assert.deepEqual(page.said().at(-1), { t: 'control.released', reason: 'navigation', paused: true });
+
+    await page.send({ t: 'click', x: 40, y: 50 });
+    assert.deepEqual(reached, []);
+
+    globalThis.document.dispatchEvent(new Event('livewire:navigated'));
+    await settle();
+    assert.deepEqual(page.said().at(-1), { t: 'control.granted', continued: true });
+    assert.equal(page.ui.shown.text, 'stillControlling');
+    assert.equal(page.ui.outlined, true);
+
+    await page.send({ t: 'click', x: 40, y: 50 });
+    assert.ok(reached.length > 0);
+    // One grant period.
+    assert.deepEqual(page.grants, [['control', true]]);
+});
+
+test('wire:navigate to a page the app does not record, or signed for someone else, ends control', async () => {
+    for (const change of [(page) => (page.mirrors = false), (page) => (page.identity = 'other')]) {
+        const page = await live({ assist: { controlAcrossPages: true } });
+
+        await page.send({ t: 'control.request' });
+        await page.answer(true);
+
+        globalThis.document.dispatchEvent(new Event('livewire:navigating'));
+        change(page.page);
+        globalThis.document.dispatchEvent(new Event('livewire:navigated'));
+        await settle();
+
+        assert.equal(page.said().at(-1).t, 'control.released');
+        assert.equal(page.ui.outlined, false);
+        assert.deepEqual(page.grants, [['control', true], ['control', false]]);
+    }
+});
+
+test('wire:navigate with control_across_pages off ends control at once', async () => {
+    const page = await live();
+
+    await page.send({ t: 'control.request' });
+    await page.answer(true);
+
+    globalThis.document.dispatchEvent(new Event('livewire:navigating'));
+    await settle();
+
+    assert.deepEqual(page.said().at(-1), { t: 'control.released', reason: 'navigation' });
 });

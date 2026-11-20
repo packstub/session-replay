@@ -23,21 +23,25 @@ it('hands the recorder the visitor routes, the timings and the strings while Ass
         ->and($assist['module'])->toBe(SessionReplay::scriptUrl('assist.js'))
         ->and($assist['button'])->toBeFalse()
         ->and($assist['controlMasked'])->toBeFalse()
+        // Remote control goes on across pages unless the app turns it off.
+        ->and($assist['controlAcrossPages'])->toBeTrue()
         ->and($assist['heartbeatMs'])->toBe(15000)
         ->and($assist['poll'])->toBe(['waiting' => 3000, 'active' => 2000])
         ->and($assist['labels']['offer'])->toBe(':name would like to help you with this page.')
-        ->and($assist['labels'])->toHaveKeys(['getHelp', 'askControl', 'askMasked', 'askAudio', 'askScreen', 'endControl']);
+        ->and($assist['labels'])->toHaveKeys(['getHelp', 'askControl', 'askMasked', 'askAudio', 'askScreen', 'endControl', 'stillControlling']);
 });
 
 it('keeps the active poll under Holler\'s claim and turns on the button and masked typing from the config', function () {
     config()->set('session-replay.assist.button', true);
     config()->set('session-replay.assist.control_masked', true);
     config()->set('session-replay.assist.poll.active_ms', 9000);
+    config()->set('session-replay.assist.control_across_pages', false);
 
     $assist = assistConfig((string) SessionReplay::recorder(['user' => $this->user()]));
 
     expect($assist['button'])->toBeTrue()
         ->and($assist['controlMasked'])->toBeTrue()
+        ->and($assist['controlAcrossPages'])->toBeFalse()
         ->and($assist['poll']['active'])->toBe(4000);
 });
 

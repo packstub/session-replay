@@ -4,7 +4,7 @@ import './stage.css';
 import { HttpSignaling, drain } from '@packstub/holler';
 import { AssistClient, workerTimers } from './lib/assist-client.js';
 import { AGENT_RATE, CHANNEL_LABEL, Endpoint, FEATURE_POINT, FROM_VISITOR } from './lib/assist-protocol.js';
-import { AgentState, FINISHED, Gesture, LiveFeed, Pointer, ago, editable, handleVisitorMessage, pointerWhy, reasonKey, stageDelta, stagePhase, stagePoint, stageStop } from './lib/assist-stage.js';
+import { AgentState, FINISHED, Gesture, LIVE_BUFFER_MS, LiveFeed, Pointer, ago, editable, handleVisitorMessage, pointerWhy, reasonKey, stageDelta, stagePhase, stagePoint, stageStop } from './lib/assist-stage.js';
 
 /**
  * The agent's live stage in the built-in viewer ({path}/assist/requests/{id}/stage):
@@ -101,6 +101,8 @@ function mountStage(root) {
     let clientCall = null;
     let endpoint = null;
     let replayer = null;
+    // When the agent may act on the page again after control went on to a new one (see acting()).
+    let actFrom = 0;
     let drawing = false;
     let finished = false;
     let destroyed = false;
@@ -258,8 +260,8 @@ function mountStage(root) {
         });
         setButton('control', {
             why: control,
-            pressed: state.control === 'on',
-            label: state.control === 'on' ? t('buttons.release') : state.control === 'asking' ? t('buttons.control_asking') : t('buttons.control'),
+            pressed: state.hasControl,
+            label: state.hasControl ? t('buttons.release') : state.control === 'asking' ? t('buttons.control_asking') : t('buttons.control'),
         });
         setButton('draw', { why: why('draw'), pressed: drawing });
         const noPointer = pointerWhy({ why: why('draw'), connected: state.connected, peerCan: !!endpoint?.peerCan(FEATURE_POINT) });
@@ -565,6 +567,10 @@ function mountStage(root) {
                 closeEditor();
             }
             if (effect.note === 'action_refused') refuseEditor(effect.reason ?? null);
+            // Control went on to the visitor's next page: its snapshot is in the feed, played LIVE_BUFFER_MS late.
+            if (effect.continued) actFrom = performance.now() + LIVE_BUFFER_MS + 100;
+            // Let go of while the page loaded, and the new page took it over: given back.
+            if (effect.release) send({ t: 'control.release' });
             if (effect.state && feed.started) fit();
         }
 
@@ -589,7 +595,7 @@ function mountStage(root) {
     // ---- controls ---------------------------------------------------------------
 
     buttons.control?.addEventListener('click', () => {
-        if (state.control === 'on') {
+        if (state.hasControl) {
             send(state.releaseControl());
             note('control_released', 'agent');
         } else {
@@ -736,6 +742,14 @@ function mountStage(root) {
     let pendingMove = null;
     let moveFrame = null;
 
+    /**
+     * The agent's pointer and keys act on the visitor's page: control is on, the mirror shows their page, and after
+     * control went on to a new page, that page's snapshot has played (nothing aimed at the page before reaches it).
+     */
+    function acting() {
+        return state.control === 'on' && feed.started && performance.now() >= actFrom;
+    }
+
     function flushMove() {
         moveFrame = null;
 
@@ -759,7 +773,7 @@ function mountStage(root) {
      * the page view is up and seen, and the agent has no control (then `move` drives the one cursor there).
      */
     function canPoint() {
-        return pointing && !finished && !!endpoint?.peerCan(FEATURE_POINT) && state.connected && state.mode === 'mirror' && state.control !== 'on' && !state.hidden;
+        return pointing && !finished && !!endpoint?.peerCan(FEATURE_POINT) && state.connected && state.mode === 'mirror' && !state.hasControl && !state.hidden;
     }
 
     function flushPoint() {
@@ -799,7 +813,7 @@ function mountStage(root) {
             return;
         }
 
-        if (state.control !== 'on') return;
+        if (!acting()) return;
 
         closeEditor();
         sendAll(gesture.down(point));
@@ -817,7 +831,7 @@ function mountStage(root) {
             return;
         }
 
-        if (state.control !== 'on' || !point) return;
+        if (!acting() || !point) return;
 
         pendingMove = point;
         moveFrame ??= requestAnimationFrame(flushMove);
@@ -833,7 +847,7 @@ function mountStage(root) {
             return;
         }
 
-        if (state.control !== 'on') return;
+        if (!acting()) return;
 
         if (moveFrame !== null) {
             cancelAnimationFrame(moveFrame);
@@ -855,7 +869,7 @@ function mountStage(root) {
     els.overlay.addEventListener(
         'wheel',
         (event) => {
-            if (state.control !== 'on' || drawing) return;
+            if (!acting() || drawing) return;
 
             event.preventDefault();
 
@@ -875,7 +889,7 @@ function mountStage(root) {
             return;
         }
 
-        if (state.control !== 'on' || drawing) return;
+        if (!acting() || drawing) return;
 
         const page = (frame()?.height || 800) * 0.8;
         const steps = { ArrowDown: [0, 60], ArrowUp: [0, -60], ArrowRight: [60, 0], ArrowLeft: [-60, 0], PageDown: [0, page], PageUp: [0, -page], ' ': [0, page] };

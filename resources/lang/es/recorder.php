@@ -38,6 +38,7 @@ return [
         'rejoining' => ':name se ha ausentado y se está reconectando…',
         'onHold' => ':name ha puesto la sesión en espera y vuelve enseguida.',
         'controlling' => ':name está controlando esta página. Pulsa Escape para detenerlo.',
+        'stillControlling' => ':name sigue controlando esta página. Pulsa Escape para detenerlo.',
         'end' => 'Terminar',
         'endControl' => 'Terminar el control remoto',
         'mute' => 'Silenciar',

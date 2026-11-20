@@ -38,6 +38,7 @@ return [
         'rejoining' => ':name ist kurz weg und verbindet sich neu…',
         'onHold' => ':name hat die Sitzung kurz gehalten und ist gleich zurück.',
         'controlling' => ':name steuert diese Seite. Mit Escape beenden.',
+        'stillControlling' => ':name steuert diese Seite weiterhin. Mit Escape beenden.',
         'end' => 'Beenden',
         'endControl' => 'Fernsteuerung beenden',
         'mute' => 'Stumm',

@@ -335,24 +335,39 @@ export class AgentState {
         this.width = 0;
         this.height = 0;
         this.control = 'off';
+        // Control the agent had when the visitor's page went (a page load, a wire:navigate swap): the next page may
+        // take it over (assist.control_across_pages) with a `control.granted` that is `continued`. Until it says,
+        // nothing is sent, and the agent can still let go of it.
+        this.continuing = false;
+        // A new channel: its first `state` settles a control still continuing (the page sends the grant before it).
+        this.settling = false;
         this.audio = 'off';
         this.video = 'off';
         this.screen = 'off';
         this.mode = 'mirror';
     }
 
-    /** The live view is up (the peer's hello came). Control never survives a new channel. */
+    /** The agent has control, or had it when the page went and the next one may take it over. */
+    get hasControl() {
+        return this.control === 'on' || this.continuing;
+    }
+
+    /** The live view is up (the peer's hello came). Control never comes with a new channel; the page grants it again or goes on with it. */
     open() {
         this.connected = true;
         this.version = false;
         this.control = 'off';
+        this.settling = this.continuing;
 
         if (this.screen === 'asking') this.screen = 'off';
     }
 
-    /** The channel is gone (reconnecting, the visitor left). */
+    /** The channel is gone (reconnecting, the visitor's page loading the next one, the visitor left). */
     close() {
         this.connected = false;
+
+        if (this.control === 'on') this.continuing = true;
+
         this.control = 'off';
     }
 
@@ -361,12 +376,14 @@ export class AgentState {
         this.version = true;
         this.connected = false;
         this.control = 'off';
+        this.continuing = false;
     }
 
     end() {
         this.ended = true;
         this.connected = false;
         this.control = 'off';
+        this.continuing = false;
         this.audio = 'off';
         this.video = 'off';
         this.screen = 'off';
@@ -386,7 +403,7 @@ export class AgentState {
             case 'control':
                 if (this.mode !== 'mirror') return 'screen_mode';
                 if (this.control === 'asking') return 'asking';
-                if (this.control === 'on') return null;
+                if (this.hasControl) return null;
 
                 return this.hidden ? 'hidden' : null;
             case 'draw':
@@ -407,7 +424,7 @@ export class AgentState {
     }
 
     askControl() {
-        if (this.control !== 'off' || this.why('control')) return null;
+        if (this.control !== 'off' || this.continuing || this.why('control')) return null;
 
         this.control = 'asking';
 
@@ -415,7 +432,12 @@ export class AgentState {
     }
 
     releaseControl() {
-        if (this.control === 'off') return null;
+        // Let go of while the next page loads: nothing to send now, and a page that takes it over is told at once.
+        if (this.control === 'off') {
+            this.continuing = false;
+
+            return null;
+        }
 
         this.control = 'off';
 
@@ -466,26 +488,70 @@ export class AgentState {
      * One message from the visitor. Effects: { note: key, reason? } for the
      * agent to read, { media: kind } (start the agent's own media of that
      * kind), { mode } (the view switched), { state: true } (the visitor's
-     * page state changed), { stopControl: true } (control ended).
+     * page state changed), { stopControl: true } (control ended or paused),
+     * { continued: true } (control went on to a new page: wait for its
+     * mirror), { release: true } (send control.release: the agent let go of
+     * it before the new page took it over).
      */
     receive(message) {
         switch (message.t) {
             case 'state': {
                 const wasHidden = this.hidden;
+                const effects = [];
 
                 this.hidden = message.hidden;
                 this.url = message.url;
                 this.width = message.width;
                 this.height = message.height;
 
-                return wasHidden === message.hidden ? [{ state: true }] : [{ state: true }, { note: message.hidden ? 'visitor_hidden' : 'visitor_back' }];
+                // The new page said nothing of the control the agent had before its first state: it did not go on.
+                if (this.settling) {
+                    this.settling = false;
+
+                    if (this.continuing) {
+                        this.continuing = false;
+                        effects.push({ note: 'control_released', reason: 'navigation' });
+                    }
+                }
+
+                effects.push({ state: true });
+
+                return wasHidden === message.hidden ? effects : [...effects, { note: message.hidden ? 'visitor_hidden' : 'visitor_back' }];
             }
             case 'control.granted':
+                if (message.continued) {
+                    // The agent let go of it while the page loaded: given back at once.
+                    if (this.control !== 'on' && !this.continuing) return [{ release: true }];
+
+                    this.control = 'on';
+                    this.continuing = false;
+                    this.settling = false;
+
+                    return [{ continued: true }, { note: 'control_continued' }];
+                }
+
                 this.control = 'on';
+                this.continuing = false;
 
                 return [{ note: 'control_granted' }];
             case 'control.released':
-                if (this.control === 'off') return [];
+                // A wire:navigate swap: nothing goes to the page until it is known; then granted (continued) or released.
+                if (message.paused) {
+                    if (this.control !== 'on') return [];
+
+                    this.control = 'off';
+                    this.continuing = true;
+
+                    return [{ stopControl: true }];
+                }
+
+                if (this.control === 'off') {
+                    if (!this.continuing) return [];
+
+                    this.continuing = false;
+
+                    return [{ note: 'control_released', reason: message.reason }];
+                }
 
                 this.control = 'off';
 
@@ -552,7 +618,7 @@ export function handleVisitorMessage(message, { feed, state }) {
 }
 
 /** The label key for a reason the visitor's page gave, or 'other'. */
-export const REASONS = ['declined', 'cooldown', 'password', 'masked', 'blocked', 'not_visible', 'readonly', 'unsupported', 'own_ui', 'unknown_node', 'unknown_option', 'visitor', 'agent', 'hidden', 'navigation', 'reconnect', 'replaced', 'ended', 'unload'];
+export const REASONS = ['declined', 'cooldown', 'password', 'masked', 'blocked', 'not_visible', 'readonly', 'unsupported', 'own_ui', 'unknown_node', 'unknown_option', 'visitor', 'agent', 'hidden', 'navigation', 'not_recorded', 'reconnect', 'replaced', 'ended', 'unload'];
 
 export function reasonKey(reason) {
     return REASONS.includes(reason) ? reason : 'other';

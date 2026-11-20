@@ -21,8 +21,9 @@
  *
  * From the visitor: hello, rr (one rrweb event in `e`, already masked), css
  * (`key`, `text`: a stylesheet the events point at with liveStylePlaceholder),
- * state (`hidden`, `url`, `width`, `height`), control.granted,
- * control.released (`reason`), control.refused (`reason`), media.granted /
+ * state (`hidden`, `url`, `width`, `height`), control.granted (`continued`:
+ * from the page before), control.released (`reason`, `paused` during a
+ * wire:navigate swap), control.refused (`reason`), media.granted /
  * media.refused / media.stopped (`kind`; refused also `reason`),
  * screen.granted / screen.refused (`reason`) / screen.stopped, annot.ack, bye.
  *
@@ -341,8 +342,10 @@ export const FROM_VISITOR = {
 
         return ok({ t: 'state', hidden: message.hidden, url: message.url ?? null, width: message.width, height: message.height });
     },
-    'control.granted': bare,
-    'control.released': (message) => ok({ t: message.t, reason: reason(message.reason) }),
+    // `continued`: control went on from the page before (assist.control_across_pages), not a new Allow.
+    'control.granted': (message) => ok(message.continued === true ? { t: message.t, continued: true } : { t: message.t }),
+    // `paused`: a wire:navigate swap; a control.granted (continued) or control.released follows once the page is known.
+    'control.released': (message) => ok({ t: message.t, reason: reason(message.reason), ...(message.paused === true ? { paused: true } : {}) }),
     'control.refused': (message) => ok({ t: message.t, reason: reason(message.reason) }),
     'media.granted': mediaKind,
     // `reason`: 'declined', or 'cooldown' when the visitor said no to the same a moment ago (asked again too soon).

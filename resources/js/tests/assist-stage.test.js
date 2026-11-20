@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { Endpoint, FROM_AGENT, FROM_VISITOR, LiveStyles, encodeEvent } from '../lib/assist-protocol.js';
+import { Endpoint, FROM_AGENT, FROM_VISITOR, LiveStyles, encodeEvent, validate } from '../lib/assist-protocol.js';
 import { AgentState, Gesture, LIVE_BUFFER_MS, LiveFeed, POINT_INTERVAL_MS, Pointer, ago, editable, handleVisitorMessage, pointerWhy, reasonKey, stageDelta, stagePoint } from '../lib/assist-stage.js';
 
 // ---- fakes ---------------------------------------------------------------------
@@ -334,6 +334,69 @@ test('control: the visitor says no, and a new channel never keeps it', () => {
 
     assert.equal(state.control, 'off');
     assert.deepEqual(state.releaseControl(), null);
+});
+
+test('control across pages: the next page takes it over (continued), and the stage says so instead of "ended"', () => {
+    const state = new AgentState();
+
+    state.open();
+    state.askControl();
+    state.receive({ t: 'control.granted' });
+
+    // A page load: the channel goes, and control is kept for the next page to take over.
+    state.close();
+    assert.equal(state.control, 'off');
+    assert.equal(state.hasControl, true);
+    assert.equal(state.askControl(), null);
+
+    state.open();
+    assert.deepEqual(state.receive({ t: 'control.granted', continued: true }), [{ continued: true }, { note: 'control_continued' }]);
+    assert.equal(state.control, 'on');
+    // Its first state settles nothing more.
+    assert.deepEqual(state.receive({ t: 'state', hidden: false, url: null, width: 1, height: 1 }), [{ state: true }]);
+
+    // A wire:navigate swap pauses it on the same channel, then it goes on.
+    assert.deepEqual(state.receive({ t: 'control.released', reason: 'navigation', paused: true }), [{ stopControl: true }]);
+    assert.equal(state.control, 'off');
+    assert.equal(state.hasControl, true);
+    assert.deepEqual(state.receive({ t: 'control.granted', continued: true }), [{ continued: true }, { note: 'control_continued' }]);
+
+    // Or ends there: then the agent reads why.
+    state.receive({ t: 'control.released', reason: 'navigation', paused: true });
+    assert.deepEqual(state.receive({ t: 'control.released', reason: 'not_recorded' }), [{ note: 'control_released', reason: 'not_recorded' }]);
+    assert.equal(state.hasControl, false);
+});
+
+test('control across pages: a new page that does not take it over ends it on its first state; one the agent let go of meanwhile is given back', () => {
+    const state = new AgentState();
+
+    state.open();
+    state.askControl();
+    state.receive({ t: 'control.granted' });
+    state.close();
+    state.open();
+
+    assert.deepEqual(state.receive({ t: 'state', hidden: false, url: null, width: 1, height: 1 }), [{ note: 'control_released', reason: 'navigation' }, { state: true }]);
+    assert.equal(state.hasControl, false);
+
+    // Let go of during the page load: nothing to send then, and the page that takes it over gets it back at once.
+    state.askControl();
+    state.receive({ t: 'control.granted' });
+    state.close();
+    assert.equal(state.releaseControl(), null);
+    assert.equal(state.hasControl, false);
+
+    state.open();
+    assert.deepEqual(state.receive({ t: 'control.granted', continued: true }), [{ release: true }]);
+    assert.equal(state.control, 'off');
+});
+
+test('the protocol keeps continued and paused, and only as true', () => {
+    assert.deepEqual(validate({ t: 'control.granted', continued: true }, FROM_VISITOR).message, { t: 'control.granted', continued: true });
+    assert.deepEqual(validate({ t: 'control.granted', continued: 'yes' }, FROM_VISITOR).message, { t: 'control.granted' });
+    assert.deepEqual(validate({ t: 'control.released', reason: 'navigation', paused: true }, FROM_VISITOR).message, { t: 'control.released', reason: 'navigation', paused: true });
+    assert.deepEqual(validate({ t: 'control.released', reason: 'navigation', paused: 1 }, FROM_VISITOR).message, { t: 'control.released', reason: 'navigation' });
+    assert.equal(reasonKey('not_recorded'), 'not_recorded');
 });
 
 test('audio and video: asked, granted (the agent\'s own media starts), refused, ended', () => {
