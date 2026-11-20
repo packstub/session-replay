@@ -7,7 +7,7 @@ use RuntimeException;
 /**
  * An assist action that may not happen: `status` is the HTTP status the routes answer with, `reason` a word a client
  * can tell the refusals apart by (`taken`, `exists`, `not_allowed`, `guard_mismatch`, `too_many`, `full`, `not_live`,
- * `no_calls`, `state`).
+ * `declined_recently`, `no_calls`, `state`).
  */
 class AssistRefused extends RuntimeException
 {

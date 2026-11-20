@@ -2,6 +2,7 @@
 
 namespace Workbench\App\Providers;
 
+use Illuminate\Http\Middleware\TrustProxies;
 use Illuminate\Support\Facades\Gate;
 use Illuminate\Support\ServiceProvider;
 use Packstub\Holler\HollerServiceProvider;
@@ -12,7 +13,7 @@ use Workbench\App\Http\Middleware\Csp;
 
 /**
  * A page to record and a viewer anyone may open: `composer serve`, click around, then visit /session-replay.
- * Assist is on, with the "Get help" button; with packstub/holler installed (see AGENTS.md) the live stage works
+ * Assist is on, with the "Get help" button; with packstub/holler installed (require-dev) the live stage works
  * too: ask for help on /, then open /agent in another browser (Ana Support) and claim the request.
  */
 class WorkbenchServiceProvider extends ServiceProvider
@@ -22,10 +23,21 @@ class WorkbenchServiceProvider extends ServiceProvider
         // Before the package boots: Assist's routes and its Holler listener are registered at boot.
         config()->set('session-replay.assist.enabled', (bool) env('SESSION_REPLAY_ASSIST', true));
         config()->set('session-replay.assist.button', (bool) env('SESSION_REPLAY_ASSIST_BUTTON', true));
+        // Every field is masked (mask_all_inputs): the agent types into one only after the visitor allows it, a
+        // prompt of its own. On here, so the "Delivery details" box can be filled from the stage.
+        config()->set('session-replay.assist.control_masked', (bool) env('SESSION_REPLAY_ASSIST_CONTROL_MASKED', true));
 
         // The visitor's page and the agent's stage poll at once (PHP_CLI_SERVER_WORKERS): wait for a lock, never fail.
         config()->set('database.connections.sqlite.busy_timeout', 10000);
         config()->set('database.connections.sqlite.journal_mode', 'wal');
+        // The rate limiters and Assist's sweeps on the database store upgrade a read lock to a write lock inside a
+        // transaction, which SQLite answers "database is locked" at once, busy timeout or not: files instead.
+        config()->set('cache.default', 'file');
+
+        // The e2e server's own cache directory (playwright.config.js), apart from `composer serve`'s.
+        if (env('WORKBENCH_CACHE_PATH')) {
+            config()->set('cache.stores.file.path', env('WORKBENCH_CACHE_PATH'));
+        }
 
         if (class_exists(HollerServiceProvider::class)) {
             $this->app->register(HollerServiceProvider::class);
@@ -34,6 +46,12 @@ class WorkbenchServiceProvider extends ServiceProvider
 
     public function boot(): void
     {
+        // TRUST_PROXIES=1 composer serve behind an https tunnel (cloudflared, Expose): URLs follow X-Forwarded-Proto,
+        // so the page loads its scripts over https. Microphone, camera and screen share need https off localhost.
+        if (env('TRUST_PROXIES')) {
+            TrustProxies::at('*');
+        }
+
         // CSP=1 composer serve: a strict policy with a nonce on script-src and style-src, to see what the recorder,
         // the question and the player need (?csp=inline and ?csp=both on a page try the other style-src forms).
         if (env('CSP')) {

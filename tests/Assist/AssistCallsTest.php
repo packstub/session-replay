@@ -1,6 +1,7 @@
 <?php
 
 use Illuminate\Support\Facades\Event;
+use Illuminate\Support\Facades\Gate;
 use Packstub\Holler\Facades\Holler;
 use Packstub\Holler\Holler as CallsService;
 use Packstub\Holler\Models\Call;
@@ -251,6 +252,10 @@ it('lets the visitor say not now to an offer, and expires one nobody answers', f
 
     $this->visitorPost('decline', $id, $secret, $browser['token'])->assertOk()->assertJson(['status' => 'declined']);
     $this->getJson(route('session-replay.assist.status', $id))->assertJson(['status' => 'declined']);
+
+    // Past the cool-down after a "Not now".
+    $this->travel(301)->seconds();
+    $browser['session']->forceFill(['last_activity_at' => now()])->save();
 
     $id = $this->postJson(route('session-replay.assist.propose', $browser['session']))->assertCreated()->json('id');
 
@@ -539,4 +544,137 @@ it('revokes what the visitor allowed when a lapsed claim goes back to the list',
     $this->poll($asked['id'], $asked['secret'], $browser['token'], ['tab' => 'tab-1'])->assertJson(['status' => 'open']);
 
     expect(collect(AssistRequest::query()->sole()->grants)->last())->toMatchArray(['kind' => 'video', 'granted' => false, 'by' => 'server', 'reason' => 'unclaimed']);
+});
+
+it('takes an agent who lost the right to assist off a live assist at their next status poll', function () {
+    [$browser, $asked, $agent, $call] = $this->liveAssist();
+
+    // The role taken away mid-call: the stage's status poll is refused, and the assist and its call end.
+    SessionReplay::canAssistUsing(fn () => false);
+
+    $this->getJson(route('session-replay.assist.status', $asked['id']))->assertForbidden();
+
+    expect(AssistRequest::query()->sole())->status->toBe('ended')->end_reason->toBe('not_allowed')
+        ->and($call->refresh()->isEnded())->toBeTrue();
+
+    $this->poll($asked['id'], $asked['secret'], $browser['token'], ['tab' => 'tab-1'])->assertJson(['status' => 'ended']);
+});
+
+it('puts a claim back in the list when its agent lost the right to assist before the call started', function () {
+    [, $asked] = $this->claimed();
+
+    SessionReplay::canAssistUsing(fn () => false);
+
+    $this->getJson(route('session-replay.assist.status', $asked['id']))->assertForbidden();
+
+    expect(AssistRequest::query()->sole())->status->toBe('open')->agent_id->toBeNull();
+});
+
+it('asks canAssist again from the visitor\'s poll, so a live assist ends when its agent stopped polling', function () {
+    [$browser, $asked, , $call] = $this->liveAssist();
+
+    SessionReplay::canAssistUsing(fn () => false);
+
+    // Checked at most every few seconds, not on every poll.
+    $this->travel(11)->seconds();
+    $this->poll($asked['id'], $asked['secret'], $browser['token'], ['tab' => 'tab-1'])->assertJson(['status' => 'ended']);
+
+    expect(AssistRequest::query()->sole()->end_reason)->toBe('not_allowed')
+        ->and($call->refresh()->isEnded())->toBeTrue();
+});
+
+it('waits after a "Not now" before anyone offers help on the same recording again', function () {
+    $browser = $this->browser();
+    $agent = $this->staff();
+
+    $id = $this->actingAs($agent)->postJson(route('session-replay.assist.propose', $browser['session']))->json('id');
+    $secret = $this->poll($id, null, $browser['token'], ['session' => $browser['session']->id, 'key' => $browser['key']])->json('secret');
+    $this->visitorPost('decline', $id, $secret, $browser['token'])->assertOk();
+
+    $live = function () use ($browser): void {
+        $browser['session']->forceFill(['last_activity_at' => now()])->save();
+    };
+
+    // Not on the next heartbeat, and not by a colleague either.
+    $this->travel(15)->seconds();
+    $live();
+    $this->postJson(route('session-replay.assist.propose', $browser['session']))->assertStatus(429)->assertJson(['reason' => 'declined_recently']);
+    $this->actingAs($this->staff(['name' => 'Bo Support']))->postJson(route('session-replay.assist.propose', $browser['session']))->assertStatus(429);
+
+    // The visitor may still ask for help themselves.
+    $this->asked($browser);
+    AssistRequest::query()->where('opened_by', 'visitor')->update(['status' => 'cancelled', 'lock_key' => null]);
+
+    // assist.decline_cooldown_seconds (300) later, an offer is fine again.
+    $this->travel(290)->seconds();
+    $live();
+    $this->actingAs($agent)->postJson(route('session-replay.assist.propose', $browser['session']))->assertCreated();
+});
+
+it('waits after a "Not now" on the same person\'s other recordings too, not on someone else\'s', function () {
+    $visitor = $this->user();
+    $first = $this->browser($visitor);
+    // The same person in another tab: a recording of its own.
+    $second = $this->browser($visitor);
+    $someoneElse = $this->browser();
+    $agent = $this->staff();
+
+    $id = $this->actingAs($agent)->postJson(route('session-replay.assist.propose', $first['session']))->json('id');
+    $secret = $this->poll($id, null, $first['token'], ['session' => $first['session']->id, 'key' => $first['key']])->json('secret');
+    $this->visitorPost('decline', $id, $secret, $first['token'])->assertOk();
+
+    $this->actingAs($agent)->postJson(route('session-replay.assist.propose', $second['session']))->assertStatus(429)->assertJson(['reason' => 'declined_recently']);
+    $this->postJson(route('session-replay.assist.propose', $someoneElse['session']))->assertCreated();
+});
+
+it('relays empty strings in a signal as sent, like Holler\'s own route (the end of candidates)', function () {
+    [$browser, $asked, $agent] = $this->claimed();
+
+    $call = $this->poll($asked['id'], $asked['secret'], $browser['token'], ['tab' => 'tab-1'])->json('call.id');
+
+    $this->visitorPost('signal', $asked['id'], $asked['secret'], $browser['token'], ['type' => 'ice', 'payload' => ['candidate' => '', 'sdpMid' => '0', 'usernameFragment' => '']])->assertCreated();
+
+    $payload = Holler::poll((string) $agent->id, 0, $call, 'agent-tab', claim: true, kind: 'assist')['signals'][0]['payload'];
+
+    expect($payload['candidate'])->toBe('')->and($payload['usernameFragment'])->toBe('');
+});
+
+it('takes an agent off a live assist when the viewSessionReplay gate itself turns them away, at their next status poll', function () {
+    [, $asked, $agent, $call] = $this->liveAssist();
+
+    // The most common way access goes: the gate says no to this agent now. The middleware answers before the route.
+    Gate::define('viewSessionReplay', fn ($user, $session = null) => $user->getKey() !== $agent->getKey() && (bool) $user->is_staff);
+
+    config()->set('app.debug', false);
+
+    $response = $this->getJson(route('session-replay.assist.status', $asked['id']))->assertForbidden();
+
+    // A bare refusal: nothing of the request in it.
+    expect(array_keys($response->json()))->toBe(['message'])
+        ->and(AssistRequest::query()->sole())->status->toBe('ended')->end_reason->toBe('not_allowed')
+        ->and($call->refresh()->isEnded())->toBeTrue();
+});
+
+it('takes an agent off a live assist when the gate turns them away, from the visitor\'s poll once the recheck is due', function () {
+    [$browser, $asked, $agent, $call] = $this->liveAssist();
+
+    Gate::define('viewSessionReplay', fn ($user, $session = null) => $user->getKey() !== $agent->getKey() && (bool) $user->is_staff);
+
+    $this->travel(11)->seconds();
+    $this->poll($asked['id'], $asked['secret'], $browser['token'], ['tab' => 'tab-1'])->assertJson(['status' => 'ended']);
+
+    expect(AssistRequest::query()->sole()->end_reason)->toBe('not_allowed')
+        ->and($call->refresh()->isEnded())->toBeTrue();
+});
+
+it('leaves a request alone when the gate turns away someone who does not hold it', function () {
+    [, $asked, $agent] = $this->liveAssist();
+
+    $this->actingAs($other = $this->staff(['name' => 'Bo Support']));
+    Gate::define('viewSessionReplay', fn ($user, $session = null) => $user->getKey() !== $other->getKey() && (bool) $user->is_staff);
+
+    $this->getJson(route('session-replay.assist.status', $asked['id']))->assertForbidden();
+    $this->postJson(route('session-replay.assist.end', $asked['id']))->assertForbidden();
+
+    expect(AssistRequest::query()->sole()->status)->toBe('active');
 });

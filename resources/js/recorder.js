@@ -1664,6 +1664,8 @@ if (config && !window.SessionReplay) {
                             return false;
                         }
                     },
+                    // rrweb runs on the page shown now: after a wire:navigate, on a page the app records.
+                    mirrors: () => !!stopRrweb && !stopped && !navigation.isExcluded() && !navigation.isAwaiting(),
                     node: (id) => {
                         try {
                             return stopRrweb ? record.mirror.getNode(id) : null;

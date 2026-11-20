@@ -3,8 +3,8 @@ import '@rrweb/replay/dist/style.css';
 import './stage.css';
 import { HttpSignaling, drain } from '@packstub/holler';
 import { AssistClient, workerTimers } from './lib/assist-client.js';
-import { AGENT_RATE, CHANNEL_LABEL, Endpoint, FEATURE_POINT, FROM_VISITOR } from './lib/assist-protocol.js';
-import { AgentState, FINISHED, Gesture, LiveFeed, Pointer, ago, editable, handleVisitorMessage, pointerWhy, reasonKey, stageDelta, stagePhase, stagePoint, stageStop } from './lib/assist-stage.js';
+import { AGENT_RATE, CHANNEL_LABEL, Endpoint, FEATURE_MASKED, FEATURE_POINT, FROM_VISITOR } from './lib/assist-protocol.js';
+import { AgentState, FINISHED, Gesture, LIVE_BUFFER_MS, LiveFeed, Pointer, ago, editable, handleVisitorMessage, pointerWhy, reasonKey, stageDelta, stagePhase, stagePoint, stageStop } from './lib/assist-stage.js';
 
 /**
  * The agent's live stage in the built-in viewer ({path}/assist/requests/{id}/stage):
@@ -79,6 +79,7 @@ function mountStage(root) {
         editor: ref('editor'),
         editorText: ref('editor-text'),
         editorSelect: ref('editor-select'),
+        editorHint: ref('editor-hint'),
         notes: ref('notes'),
         url: ref('url'),
         audiobar: ref('audiobar'),
@@ -100,6 +101,8 @@ function mountStage(root) {
     let clientCall = null;
     let endpoint = null;
     let replayer = null;
+    // When the agent may act on the page again after control went on to a new one (see acting()).
+    let actFrom = 0;
     let drawing = false;
     let finished = false;
     let destroyed = false;
@@ -257,8 +260,8 @@ function mountStage(root) {
         });
         setButton('control', {
             why: control,
-            pressed: state.control === 'on',
-            label: state.control === 'on' ? t('buttons.release') : state.control === 'asking' ? t('buttons.control_asking') : t('buttons.control'),
+            pressed: state.hasControl,
+            label: state.hasControl ? t('buttons.release') : state.control === 'asking' ? t('buttons.control_asking') : t('buttons.control'),
         });
         setButton('draw', { why: why('draw'), pressed: drawing });
         const noPointer = pointerWhy({ why: why('draw'), connected: state.connected, peerCan: !!endpoint?.peerCan(FEATURE_POINT) });
@@ -507,6 +510,8 @@ function mountStage(root) {
             drain,
             // A page that sends more than the replay can take is let go (the visitor's side reconnects).
             rate: AGENT_RATE,
+            // Where the masked-typing question stands: the typing box waits for the visitor's answer.
+            can: [FEATURE_MASKED],
             onReady() {
                 state.open();
                 note('connected');
@@ -563,7 +568,14 @@ function mountStage(root) {
                 gesture.cancel();
                 closeEditor();
             }
-            if (effect.note === 'action_refused') closeEditor();
+            if (effect.note === 'action_refused') refuseEditor(effect.reason ?? null);
+            if (effect.masked === 'asking') waitEditor();
+            if (effect.masked === 'granted') resumeEditor();
+            if (effect.masked === 'declined') refuseEditor(null, t(effect.reason === 'cooldown' ? 'notes.masked_cooldown' : effect.reason === 'timeout' ? 'notes.masked_timeout' : 'notes.masked_refused'));
+            // Control went on to the visitor's next page: its snapshot is in the feed, played LIVE_BUFFER_MS late.
+            if (effect.continued) actFrom = performance.now() + LIVE_BUFFER_MS + 100;
+            // Let go of while the page loaded, and the new page took it over: given back.
+            if (effect.release) send({ t: 'control.release' });
             if (effect.state && feed.started) fit();
         }
 
@@ -588,7 +600,7 @@ function mountStage(root) {
     // ---- controls ---------------------------------------------------------------
 
     buttons.control?.addEventListener('click', () => {
-        if (state.control === 'on') {
+        if (state.hasControl) {
             send(state.releaseControl());
             note('control_released', 'agent');
         } else {
@@ -735,6 +747,14 @@ function mountStage(root) {
     let pendingMove = null;
     let moveFrame = null;
 
+    /**
+     * The agent's pointer and keys act on the visitor's page: control is on, the mirror shows their page, and after
+     * control went on to a new page, that page's snapshot has played (nothing aimed at the page before reaches it).
+     */
+    function acting() {
+        return state.control === 'on' && feed.started && performance.now() >= actFrom;
+    }
+
     function flushMove() {
         moveFrame = null;
 
@@ -758,7 +778,7 @@ function mountStage(root) {
      * the page view is up and seen, and the agent has no control (then `move` drives the one cursor there).
      */
     function canPoint() {
-        return pointing && !finished && !!endpoint?.peerCan(FEATURE_POINT) && state.connected && state.mode === 'mirror' && state.control !== 'on' && !state.hidden;
+        return pointing && !finished && !!endpoint?.peerCan(FEATURE_POINT) && state.connected && state.mode === 'mirror' && !state.hasControl && !state.hidden;
     }
 
     function flushPoint() {
@@ -798,7 +818,7 @@ function mountStage(root) {
             return;
         }
 
-        if (state.control !== 'on') return;
+        if (!acting()) return;
 
         closeEditor();
         sendAll(gesture.down(point));
@@ -816,7 +836,7 @@ function mountStage(root) {
             return;
         }
 
-        if (state.control !== 'on' || !point) return;
+        if (!acting() || !point) return;
 
         pendingMove = point;
         moveFrame ??= requestAnimationFrame(flushMove);
@@ -832,7 +852,7 @@ function mountStage(root) {
             return;
         }
 
-        if (state.control !== 'on') return;
+        if (!acting()) return;
 
         if (moveFrame !== null) {
             cancelAnimationFrame(moveFrame);
@@ -854,7 +874,7 @@ function mountStage(root) {
     els.overlay.addEventListener(
         'wheel',
         (event) => {
-            if (state.control !== 'on' || drawing) return;
+            if (!acting() || drawing) return;
 
             event.preventDefault();
 
@@ -874,7 +894,7 @@ function mountStage(root) {
             return;
         }
 
-        if (state.control !== 'on' || drawing) return;
+        if (!acting() || drawing) return;
 
         const page = (frame()?.height || 800) * 0.8;
         const steps = { ArrowDown: [0, 60], ArrowUp: [0, -60], ArrowRight: [60, 0], ArrowLeft: [-60, 0], PageDown: [0, page], PageUp: [0, -page], ' ': [0, page] };
@@ -887,6 +907,9 @@ function mountStage(root) {
     });
 
     // ---- typing: an editor over the mirrored field ---------------------------------
+
+    // The hint under the typing box, put back when a refused box gives way to the next field.
+    const editorHint = els.editorHint?.textContent ?? '';
 
     function openEditor(point) {
         closeEditor();
@@ -929,6 +952,9 @@ function mountStage(root) {
         }
 
         editing = { id, kind, timer: null };
+        els.editorText.readOnly = false;
+        els.editor.classList.remove('is-refused', 'is-waiting');
+        if (els.editorHint) els.editorHint.textContent = editorHint;
         els.editor.hidden = false;
         send({ t: 'focus', id });
         (kind === 'select' ? els.editorSelect : els.editorText).focus();
@@ -942,8 +968,53 @@ function mountStage(root) {
         els.editor.hidden = true;
     }
 
-    els.editorText?.addEventListener('input', () => {
+    /**
+     * The visitor's page refused the field (masked, a password, read-only): the box stays where the agent looks,
+     * says why and takes no more typing; Escape, a click elsewhere or the next field closes it.
+     */
+    function refuseEditor(reason, text = null) {
         if (!editing) return;
+
+        clearTimeout(editing.timer);
+        editing.refused = true;
+        editing.waiting = false;
+        els.editor.classList.remove('is-waiting');
+        // Read-only rather than disabled: the box keeps the focus, so Escape still closes it.
+        els.editorText.value = '';
+        els.editorText.readOnly = true;
+        els.editorText.hidden = false;
+        els.editorSelect.hidden = true;
+        els.editorText.focus();
+        els.editor.classList.add('is-refused');
+        if (els.editorHint) els.editorHint.textContent = text ?? t('notes.action_refused', { reason: reason === null ? '' : t(`reasons.${reasonKey(reason)}`) });
+    }
+
+    /** The field is masked and the visitor is being asked whether the agent may type into it: the box waits, read-only. */
+    function waitEditor() {
+        if (!editing || editing.refused) return;
+
+        clearTimeout(editing.timer);
+        editing.waiting = true;
+        els.editorText.readOnly = true;
+        els.editor.classList.add('is-waiting');
+        if (els.editorHint) els.editorHint.textContent = t('editor_waiting');
+    }
+
+    /** The visitor allowed typing into masked fields: the box takes typing again and the field gets its focus. */
+    function resumeEditor() {
+        if (!editing) return;
+
+        editing.waiting = false;
+        editing.refused = false;
+        els.editorText.readOnly = false;
+        els.editor.classList.remove('is-waiting', 'is-refused');
+        if (els.editorHint) els.editorHint.textContent = editorHint;
+        send({ t: 'focus', id: editing.id });
+        (editing.kind === 'select' ? els.editorSelect : els.editorText).focus();
+    }
+
+    els.editorText?.addEventListener('input', () => {
+        if (!editing || editing.refused || editing.waiting) return;
 
         clearTimeout(editing.timer);
 
@@ -957,7 +1028,7 @@ function mountStage(root) {
 
         event.preventDefault();
 
-        if (editing && event.key === 'Enter') {
+        if (editing && !editing.refused && !editing.waiting && event.key === 'Enter') {
             clearTimeout(editing.timer);
             send({ t: 'input', id: editing.id, value: els.editorText.value.slice(0, 4096) });
         }
@@ -967,7 +1038,7 @@ function mountStage(root) {
     });
 
     els.editorSelect?.addEventListener('change', () => {
-        if (editing) send({ t: 'select', id: editing.id, value: els.editorSelect.value });
+        if (editing && !editing.refused && !editing.waiting) send({ t: 'select', id: editing.id, value: els.editorSelect.value });
     });
 
     els.editorSelect?.addEventListener('keydown', (event) => {

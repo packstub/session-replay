@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { Endpoint, FROM_AGENT, FROM_VISITOR, LiveStyles, encodeEvent } from '../lib/assist-protocol.js';
+import { Endpoint, FROM_AGENT, FROM_VISITOR, LiveStyles, encodeEvent, validate } from '../lib/assist-protocol.js';
 import { AgentState, Gesture, LIVE_BUFFER_MS, LiveFeed, POINT_INTERVAL_MS, Pointer, ago, editable, handleVisitorMessage, pointerWhy, reasonKey, stageDelta, stagePoint } from '../lib/assist-stage.js';
 
 // ---- fakes ---------------------------------------------------------------------
@@ -336,6 +336,98 @@ test('control: the visitor says no, and a new channel never keeps it', () => {
     assert.deepEqual(state.releaseControl(), null);
 });
 
+test('control across pages: the next page takes it over (continued), and the stage says so instead of "ended"', () => {
+    const state = new AgentState();
+
+    state.open();
+    state.askControl();
+    state.receive({ t: 'control.granted' });
+
+    // A page load: the channel goes, and control is kept for the next page to take over.
+    state.close();
+    assert.equal(state.control, 'off');
+    assert.equal(state.hasControl, true);
+    assert.equal(state.askControl(), null);
+
+    state.open();
+    assert.deepEqual(state.receive({ t: 'control.granted', continued: true }), [{ continued: true }, { note: 'control_continued' }]);
+    assert.equal(state.control, 'on');
+    // Its first state settles nothing more.
+    assert.deepEqual(state.receive({ t: 'state', hidden: false, url: null, width: 1, height: 1 }), [{ state: true }]);
+
+    // A wire:navigate swap pauses it on the same channel, then it goes on.
+    assert.deepEqual(state.receive({ t: 'control.released', reason: 'navigation', paused: true }), [{ stopControl: true }]);
+    assert.equal(state.control, 'off');
+    assert.equal(state.hasControl, true);
+    assert.deepEqual(state.receive({ t: 'control.granted', continued: true }), [{ continued: true }, { note: 'control_continued' }]);
+
+    // Or ends there: then the agent reads why.
+    state.receive({ t: 'control.released', reason: 'navigation', paused: true });
+    assert.deepEqual(state.receive({ t: 'control.released', reason: 'not_recorded' }), [{ note: 'control_released', reason: 'not_recorded' }]);
+    assert.equal(state.hasControl, false);
+});
+
+test('control across pages: a new page that does not take it over ends it on its first state; one the agent let go of meanwhile is given back', () => {
+    const state = new AgentState();
+
+    state.open();
+    state.askControl();
+    state.receive({ t: 'control.granted' });
+    state.close();
+    state.open();
+
+    assert.deepEqual(state.receive({ t: 'state', hidden: false, url: null, width: 1, height: 1 }), [{ note: 'control_released', reason: 'navigation' }, { state: true }]);
+    assert.equal(state.hasControl, false);
+
+    // Let go of during the page load: nothing to send then, and the page that takes it over gets it back at once.
+    state.askControl();
+    state.receive({ t: 'control.granted' });
+    state.close();
+    assert.equal(state.releaseControl(), null);
+    assert.equal(state.hasControl, false);
+
+    state.open();
+    assert.deepEqual(state.receive({ t: 'control.granted', continued: true }), [{ release: true }]);
+    assert.equal(state.control, 'off');
+});
+
+test('the masked-typing question as the stage sees it: asking, granted, and each kind of no with its own note', () => {
+    const state = new AgentState();
+
+    state.open();
+    state.askControl();
+    state.receive({ t: 'control.granted' });
+
+    assert.deepEqual(state.receive({ t: 'masked.asking' }), [{ masked: 'asking' }, { note: 'masked_asked' }]);
+    assert.equal(state.masked, 'asking');
+    assert.deepEqual(state.receive({ t: 'masked.granted' }), [{ masked: 'granted' }, { note: 'masked_granted' }]);
+    assert.equal(state.masked, 'on');
+
+    assert.deepEqual(state.receive({ t: 'masked.declined', reason: 'declined' }), [{ masked: 'declined', reason: 'declined' }, { note: 'masked_refused' }]);
+    assert.deepEqual(state.receive({ t: 'masked.declined', reason: 'timeout' }), [{ masked: 'declined', reason: 'timeout' }, { note: 'masked_timeout' }]);
+    assert.deepEqual(state.receive({ t: 'masked.declined', reason: 'cooldown' }), [{ masked: 'declined', reason: 'cooldown' }, { note: 'cooldown' }]);
+    assert.equal(state.masked, 'off');
+
+    // The consent ends with control.
+    state.receive({ t: 'masked.granted' });
+    state.receive({ t: 'control.released', reason: 'visitor' });
+    assert.equal(state.masked, 'off');
+});
+
+test('the masked messages are optional: valid from the visitor, named in the stage\'s hello', () => {
+    assert.deepEqual(validate({ t: 'masked.asking' }, FROM_VISITOR).message, { t: 'masked.asking' });
+    assert.deepEqual(validate({ t: 'masked.declined', reason: 'timeout', extra: 1 }, FROM_VISITOR).message, { t: 'masked.declined', reason: 'timeout' });
+    assert.equal(validate({ t: 'masked.asking' }, FROM_AGENT).ok, false);
+});
+
+test('the protocol keeps continued and paused, and only as true', () => {
+    assert.deepEqual(validate({ t: 'control.granted', continued: true }, FROM_VISITOR).message, { t: 'control.granted', continued: true });
+    assert.deepEqual(validate({ t: 'control.granted', continued: 'yes' }, FROM_VISITOR).message, { t: 'control.granted' });
+    assert.deepEqual(validate({ t: 'control.released', reason: 'navigation', paused: true }, FROM_VISITOR).message, { t: 'control.released', reason: 'navigation', paused: true });
+    assert.deepEqual(validate({ t: 'control.released', reason: 'navigation', paused: 1 }, FROM_VISITOR).message, { t: 'control.released', reason: 'navigation' });
+    assert.equal(reasonKey('not_recorded'), 'not_recorded');
+});
+
 test('audio and video: asked, granted (the agent\'s own media starts), refused, ended', () => {
     const state = new AgentState({ video: true });
 
@@ -503,6 +595,48 @@ test('stagePhase: one word for the host\'s status badge', async () => {
     assert.equal(stagePhase({ status: 'ended', held: true }), 'ended');
 });
 
+test('a visitor\'s page cannot make the mirror preconnect or prefetch to a host of its choosing', () => {
+    const { live, made } = feed();
+    const link = (id, attributes) => ({ type: 2, id, tagName: 'link', attributes, childNodes: [] });
+
+    live.event({
+        type: 2,
+        timestamp: 1,
+        data: {
+            node: {
+                type: 0,
+                id: 1,
+                childNodes: [
+                    link(2, { rel: 'preconnect', href: 'https://spy.example/' }),
+                    link(3, { REL: 'dns-prefetch', href: 'https://spy.example/' }),
+                    { type: 2, id: 4, tagName: 'LINK', attributes: { rel: 'preload', as: 'fetch', href: 'https://spy.example/x' }, childNodes: [] },
+                    link(5, { rel: 'stylesheet', href: 'https://shop.test/app.css', _cssText: 'a{}' }),
+                    link(6, { rel: 'alternate stylesheet', href: 'https://shop.test/print.css' }),
+                    link(7, { href: 'https://spy.example/' }),
+                ],
+            },
+            initialOffset: { top: 0, left: 0 },
+        },
+    });
+    // Added later, and switched later: a link that was a stylesheet becomes a prefetch, one with no rel gets one.
+    live.event({ type: 3, timestamp: 2, data: { source: 0, adds: [{ parentId: 1, nextId: null, node: link(8, { rel: 'prefetch', href: 'https://spy.example/y' }) }], removes: [], texts: [], attributes: [] } });
+    live.event({ type: 3, timestamp: 3, data: { source: 0, adds: [], removes: [], texts: [], attributes: [{ id: 5, attributes: { rel: 'prefetch' } }, { id: 7, attributes: { Rel: 'preconnect' } }, { id: 99, attributes: { rel: 'nofollow' } }] } });
+
+    const [full, added, changed] = made[0].events;
+    const nodes = Object.fromEntries(full.data.node.childNodes.map((node) => [node.id, node.attributes]));
+
+    assert.equal(nodes[2].rel, null);
+    assert.equal(nodes[3].REL, null);
+    assert.equal(nodes[4].rel, null);
+    assert.equal(nodes[5].rel, 'stylesheet');
+    assert.equal(nodes[6].rel, 'alternate stylesheet');
+    assert.equal(added.data.adds[0].node.attributes.rel, null);
+    assert.equal(changed.data.attributes[0].attributes.rel, null);
+    assert.equal(changed.data.attributes[1].attributes.Rel, null);
+    // Not a link: left as sent.
+    assert.equal(changed.data.attributes[2].attributes.rel, 'nofollow');
+});
+
 // ---- limits and holding the request ------------------------------------------------
 
 test('keeps a bounded number of stylesheets per channel, in keys and in characters', async () => {
@@ -665,4 +799,16 @@ test('Show my pointer says so when the visitor\'s page cannot show it, instead o
         await tick();
         assert.equal(pointerWhy({ why: null, connected: agent.ready, peerCan: agent.peerCan('point') }), expected);
     }
+});
+
+test('the agent hears why the visitor\'s microphone did not start: unavailable on the page, blocked, failed, or their no', () => {
+    const note = (reason, kind = 'audio') => new AgentState().receive({ t: 'media.refused', kind, reason }).find((effect) => effect.note)?.note;
+
+    assert.equal(note('unavailable'), 'visitor_media_unavailable');
+    assert.equal(note('blocked'), 'visitor_media_blocked');
+    assert.equal(note('failed', 'video'), 'visitor_media_failed');
+    assert.equal(note('declined'), 'audio_refused');
+    assert.equal(note(null, 'video'), 'video_refused');
+    assert.equal(note('constructor'), 'audio_refused');
+    assert.equal(new AgentState().receive({ t: 'screen.refused', reason: 'unavailable' }).find((effect) => effect.note)?.note, 'visitor_screen_unavailable');
 });

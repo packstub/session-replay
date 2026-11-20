@@ -5,7 +5,9 @@ namespace Packstub\SessionReplay\Http\Middleware;
 use Closure;
 use Illuminate\Http\Request;
 use Packstub\SessionReplay\Facades\SessionReplay;
+use Packstub\SessionReplay\Models\AssistRequest;
 use Packstub\SessionReplay\Models\ReplaySession;
+use Packstub\SessionReplay\Support\Assist;
 use Symfony\Component\HttpFoundation\Response;
 
 /**
@@ -31,8 +33,34 @@ class AuthorizeViewer
             $request->route()->setParameter('session', $session);
         }
 
-        abort_unless(SessionReplay::check($session instanceof ReplaySession ? $session : null), 403);
+        if (! SessionReplay::check($session instanceof ReplaySession ? $session : null)) {
+            $this->letGoOfHeldAssist($request);
+
+            abort(403);
+        }
 
         return $next($request);
+    }
+
+    /**
+     * The gate turned away an agent on one of Assist's request routes (the stage's status poll, most often): when they
+     * hold that request, it does not go on without them having access (a live assist ends with its call). The answer
+     * stays a bare 403 either way.
+     */
+    protected function letGoOfHeldAssist(Request $request): void
+    {
+        $id = $request->route('id');
+
+        if (! is_string($id) || ! str_starts_with((string) $request->route()?->getName(), 'session-replay.assist.')) {
+            return;
+        }
+
+        $agent = SessionReplay::viewer();
+        $assist = app(Assist::class);
+        $held = $agent === null ? null : AssistRequest::query()->find(strtolower($id));
+
+        if ($held !== null && $held->isPending() && $assist->holds($agent, $held)) {
+            $assist->notAllowedAnyMore($held);
+        }
     }
 }

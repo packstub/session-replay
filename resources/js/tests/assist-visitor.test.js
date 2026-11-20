@@ -70,6 +70,8 @@ class FakeClient extends EventTarget {
     }
 
     async startMedia(kind) {
+        if (FakeClient.mediaError) throw FakeClient.mediaError;
+
         this.cameraStream ||= { kind };
     }
 
@@ -147,7 +149,11 @@ function fakeUi() {
         get promptOpen() {
             return prompts.some((prompt) => !prompt.done);
         },
-        contains: () => false,
+        /** The panel's shadow host: what a press in the panel targets, seen from the document. */
+        host: { panel: true },
+        contains(element) {
+            return element === this.host;
+        },
         cursorState: cursor,
         outlined: false,
         cursor: {
@@ -186,18 +192,19 @@ function fakeTimers() {
 
     return {
         set(fn, ms) {
-            pending.set(next, fn);
+            pending.set(next, { fn, ms });
 
             return next++;
         },
         clear(id) {
             pending.delete(id);
         },
-        async run() {
-            const due = [...pending.values()];
+        /** Every timer due within `within` ms (the polls; not the hand-over's or the reminder's, unless asked). */
+        async run(within = 5000) {
+            const due = [...pending.entries()].filter(([, timer]) => (timer.ms ?? 0) <= within);
 
-            pending.clear();
-            for (const fn of due) await fn();
+            for (const [id] of due) pending.delete(id);
+            for (const [, timer] of due) await timer.fn();
         },
     };
 }
@@ -205,9 +212,12 @@ function fakeTimers() {
 const routes = Object.fromEntries(['poll', 'accept', 'decline', 'cancel', 'hangup', 'leave', 'signal', 'grants'].map((name) => [name, `/sr/assist/requests/__ID__/${name}`]));
 
 /** A visitor whose request is live with Ana (agent 5), the channel open and both hellos said. */
-async function live({ stored = {}, video = false } = {}) {
-    let clock = 1_000_000;
-    const store = new Map([['sr:assist', JSON.stringify({ id: 'r1', secret: 's3cret', status: 'active', openedBy: 'visitor', agent: { id: '5', name: 'Ana' }, grants: {}, ...stored })]]);
+async function live({ stored = {}, video = false, devices = { media: true, screen: true }, assist = {}, store: carriedStore = null, clock: startAt = 1_000_000, arrival = null, href = 'https://shop.test/checkout', mirrored = true, onInstall = null, agentCan = [], nodes = {} } = {}) {
+    let clock = startAt;
+    // A store from a page before (the same tab's sessionStorage), or a fresh request.
+    const store = carriedStore ?? new Map([['sr:assist', JSON.stringify({ id: 'r1', secret: 's3cret', status: 'active', openedBy: 'visitor', agent: { id: '5', name: 'Ana' }, grants: {}, ...stored })]]);
+    // What the recorder says of the page: identity, whether rrweb runs on it (a test flips them for a wire:navigate).
+    const page = { identity: null, mirrors: true };
     const grants = [];
     const ui = fakeUi();
     const timers = fakeTimers();
@@ -216,7 +226,7 @@ async function live({ stored = {}, video = false } = {}) {
 
     globalThis.window = Object.assign(new EventTarget(), { innerWidth: 1280, innerHeight: 800 });
     globalThis.document = Object.assign(new EventTarget(), { visibilityState: 'visible' });
-    globalThis.location = { href: 'https://shop.test/checkout', origin: 'https://shop.test' };
+    globalThis.location = { href, origin: 'https://shop.test' };
 
     const fetch = async (url, init) => {
         const body = JSON.parse(init.body);
@@ -236,10 +246,11 @@ async function live({ stored = {}, video = false } = {}) {
     };
 
     const recorder = {
-        config: () => ({ token: 'tok', privacy: { maskAllInputs: true }, assist: { routes, calls: true, video, labels: {}, poll: { waiting: 3000, active: 2000 } } }),
+        config: () => ({ token: 'tok', identity: page.identity, privacy: { maskAllInputs: true }, assist: { routes, calls: true, video, labels: {}, poll: { waiting: 3000, active: 2000 }, ...assist } }),
         recording: () => ({ id: 'rec-1', key: 'k1' }),
-        snapshot: () => true,
-        node: () => null,
+        snapshot: () => mirrored,
+        mirrors: () => page.mirrors,
+        node: (id) => nodes[id] ?? null,
         goLive() {},
         touch() {},
         redacted: (url) => url,
@@ -248,7 +259,8 @@ async function live({ stored = {}, video = false } = {}) {
         tab: 'tab-1',
     };
 
-    installAssist(recorder, { ui, timers, Client: FakeClient, drain: async () => {}, fetch, now: () => clock });
+    installAssist(recorder, { ui, timers, Client: FakeClient, drain: async () => {}, fetch, now: () => clock, devices: () => devices, ...(arrival ? { arrival: () => arrival } : {}) });
+    await onInstall?.({ ui, grants, store, timers });
 
     // The reload's first poll finds the call; the client joins it.
     await timers.run();
@@ -265,7 +277,7 @@ async function live({ stored = {}, video = false } = {}) {
 
     client.dispatchEvent(Object.assign(new Event('datachannel'), { detail: { channel: visitorSide, peer: { id: '5' } } }));
 
-    const agent = new Endpoint({ channel: agentSide, role: 'agent', schema: FROM_VISITOR, drain: async () => {}, onMessage: (message) => received.push(message) }).start();
+    const agent = new Endpoint({ channel: agentSide, role: 'agent', schema: FROM_VISITOR, drain: async () => {}, can: agentCan, onMessage: (message) => received.push(message) }).start();
 
     await settle();
 
@@ -279,8 +291,12 @@ async function live({ stored = {}, video = false } = {}) {
         server,
         grants,
         store,
+        page,
         /** What the visitor's page sent the agent, apart from the mirror. */
         said: () => received.filter((message) => !['rr', 'css', 'state'].includes(message.t)),
+        /** Everything it sent, in order. */
+        all: () => received,
+        now: () => clock,
         async send(message) {
             agent.send(message);
             await settle();
@@ -595,4 +611,364 @@ test('while the agent has the assist on hold the page says they will be right ba
     page.client.dispatchEvent(new Event('statechange'));
 
     assert.equal(page.ui.shown.text, 'sees');
+});
+
+test('on a page that cannot share media (plain http), the visitor is not asked and the agent is told why', async () => {
+    const page = await live({ devices: { media: false, screen: false } });
+    const prompts = page.ui.prompts.length;
+
+    await page.send({ t: 'media.request', kind: 'audio' });
+    assert.deepEqual(page.said().at(-1), { t: 'media.refused', kind: 'audio', reason: 'unavailable' });
+
+    await page.send({ t: 'screen.request' });
+    assert.deepEqual(page.said().at(-1), { t: 'screen.refused', reason: 'unavailable' });
+    assert.equal(page.ui.prompts.length, prompts);
+});
+
+test('a microphone the browser refuses after the visitor\'s Allow is reported as blocked, not as their no', async () => {
+    const page = await live();
+
+    FakeClient.mediaError = Object.assign(new Error('denied'), { name: 'NotAllowedError' });
+
+    try {
+        await page.send({ t: 'media.request', kind: 'audio' });
+        await page.answer(true);
+        assert.deepEqual(page.said().at(-1), { t: 'media.refused', kind: 'audio', reason: 'blocked' });
+    } finally {
+        FakeClient.mediaError = null;
+    }
+});
+
+// ---- remote control across pages (assist.control_across_pages) --------------------------------
+
+/** The page acts on a control message: it looked an element up for it. */
+function watchActions() {
+    const reached = [];
+
+    globalThis.document.elementFromPoint = (x, y) => (reached.push(`${x},${y}`), null);
+    globalThis.document.elementsFromPoint = (x, y) => (reached.push(`${x},${y}`), []);
+
+    return reached;
+}
+
+/** A page with control granted, left for the next one (pagehide). */
+async function handedOver({ assist = { controlAcrossPages: true } } = {}) {
+    const first = await live({ assist });
+
+    await first.send({ t: 'control.request' });
+    await first.answer(true);
+
+    globalThis.window.dispatchEvent(new Event('pagehide'));
+    await settle();
+
+    return first;
+}
+
+test('control goes on to the next page of the tab: no new question, the outline and the reminder at once, one grant period', async () => {
+    const first = await handedOver();
+    const carry = JSON.parse(first.store.get('sr:assist')).carry;
+
+    assert.equal(carry.from, 'https://shop.test/checkout');
+    // Left with control handed over: no end of control in the log.
+    assert.deepEqual(first.grants, [['control', true]]);
+
+    let before = null;
+    const next = await live({
+        store: first.store,
+        clock: first.now() + 1500,
+        href: 'https://shop.test/checkout/address',
+        arrival: { type: 'navigate', referrer: 'https://shop.test/checkout', href: 'https://shop.test/checkout/address' },
+        assist: { controlAcrossPages: true },
+        onInstall: ({ ui }) => {
+            before = { outlined: ui.outlined, text: ui.shown?.text, buttons: ui.shown?.actions.map((action) => action.label) };
+        },
+    });
+
+    // Before the channel: the frame and "… still controls this page" with End remote control, no control yet.
+    assert.deepEqual(before, { outlined: true, text: 'stillControlling', buttons: ['endControl', 'end'] });
+    // Taken from storage: a later page never sees it.
+    assert.equal(JSON.parse(next.store.get('sr:assist')).carry, undefined);
+
+    // On the channel: the grant (continued) before the first state, nothing asked, nothing logged.
+    const order = next.all().map((message) => message.t);
+
+    assert.ok(order.indexOf('control.granted') < order.indexOf('state'));
+    assert.deepEqual(next.said(), [{ t: 'control.granted', continued: true }]);
+    assert.equal(next.ui.open().length, 0);
+    assert.deepEqual(next.grants, []);
+    assert.equal(next.ui.cursorState.mode, 'control');
+
+    const reached = watchActions();
+
+    await next.send({ t: 'click', x: 40, y: 50 });
+    assert.ok(reached.length > 0);
+
+    // End remote control ends it, logged once.
+    next.ui.press('endControl');
+    await settle();
+    assert.deepEqual(next.said().at(-1), { t: 'control.released', reason: 'visitor' });
+    assert.deepEqual(next.grants, [['control', false]]);
+});
+
+test('control does not go on past a page the assist did not run on, the back button, or a late page: ended and logged once', async () => {
+    const cases = [
+        // A page in between (not recorded, another site): the referrer is that page.
+        { type: 'navigate', referrer: 'https://shop.test/excluded', later: 1500 },
+        { type: 'navigate', referrer: '', later: 1500 },
+        { type: 'back_forward', referrer: 'https://shop.test/checkout', later: 1500 },
+        { type: 'navigate', referrer: 'https://shop.test/checkout', later: 31_000 },
+    ];
+
+    for (const { type, referrer, later } of cases) {
+        const first = await handedOver();
+        const next = await live({ store: first.store, clock: first.now() + later, href: 'https://shop.test/account', arrival: { type, referrer, href: 'https://shop.test/account' }, assist: { controlAcrossPages: true } });
+
+        assert.equal(next.ui.outlined, false, `${type} ${referrer} ${later}`);
+        assert.deepEqual(next.grants, [['control', false]]);
+        // The agent's stage hears it ended, before the new page's first state.
+        assert.deepEqual(next.said(), [{ t: 'control.released', reason: 'navigation' }]);
+        assert.ok(next.all().findIndex((message) => message.t === 'control.released') < next.all().findIndex((message) => message.t === 'state'));
+        assert.equal(JSON.parse(next.store.get('sr:assist')).carry, undefined);
+
+        const reached = watchActions();
+
+        await next.send({ t: 'click', x: 40, y: 50 });
+        assert.deepEqual(reached, []);
+    }
+});
+
+test('a reload of the same page keeps control; its fragment does not matter', async () => {
+    const first = await handedOver();
+    const next = await live({ store: first.store, clock: first.now() + 900, href: 'https://shop.test/checkout#top', arrival: { type: 'reload', referrer: '', href: 'https://shop.test/checkout#top' }, assist: { controlAcrossPages: true } });
+
+    assert.deepEqual(next.said(), [{ t: 'control.granted', continued: true }]);
+});
+
+test('a new page the agent does not see (no snapshot) ends control instead of taking it over', async () => {
+    const first = await handedOver();
+    const next = await live({ store: first.store, clock: first.now() + 900, mirrored: false, arrival: { type: 'navigate', referrer: 'https://shop.test/checkout', href: 'https://shop.test/checkout' }, assist: { controlAcrossPages: true } });
+
+    assert.deepEqual(next.said(), [{ t: 'control.released', reason: 'not_recorded' }]);
+    assert.equal(next.ui.outlined, false);
+    assert.deepEqual(next.grants, [['control', false]]);
+});
+
+test('a channel that does not come back in time ends the control handed over, logged once', async () => {
+    const first = await handedOver();
+    const next = await live({
+        store: first.store,
+        clock: first.now() + 900,
+        arrival: { type: 'navigate', referrer: 'https://shop.test/checkout', href: 'https://shop.test/checkout' },
+        assist: { controlAcrossPages: true },
+        // Every timer runs before the channel comes: the hand-over's runs out.
+        onInstall: async ({ timers }) => {
+            await timers.run(Infinity);
+            await settle();
+        },
+    });
+
+    assert.equal(next.ui.outlined, false);
+    assert.deepEqual(next.grants, [['control', false]]);
+    assert.deepEqual(next.said(), [{ t: 'control.released', reason: 'reconnect' }]);
+    assert.equal(next.ui.cursorState.mode, null);
+});
+
+test('the masked-typing consent goes on with control and ends with it', async () => {
+    const first = await handedOver();
+    const stored = JSON.parse(first.store.get('sr:assist'));
+
+    // As a page left with the visitor's yes to typing into masked fields.
+    stored.carry.masked = true;
+    first.store.set('sr:assist', JSON.stringify(stored));
+
+    const next = await live({ store: first.store, clock: first.now() + 900, arrival: { type: 'navigate', referrer: 'https://shop.test/checkout', href: 'https://shop.test/checkout' }, assist: { controlAcrossPages: true, controlMasked: true } });
+
+    assert.deepEqual(next.said(), [{ t: 'control.granted', continued: true }]);
+
+    await next.send({ t: 'control.release' });
+    assert.deepEqual(next.grants, [['control', false], ['control_masked', false]]);
+});
+
+test('with control_across_pages off, leaving the page ends control as before', async () => {
+    const first = await handedOver({ assist: { controlAcrossPages: false } });
+
+    assert.equal(JSON.parse(first.store.get('sr:assist')).carry, undefined);
+    assert.deepEqual(first.grants, [['control', true], ['control', false]]);
+});
+
+test('wire:navigate: control pauses during the swap, nothing is acted on, and goes on once the new page\'s snapshot went out', async () => {
+    const page = await live({ assist: { controlAcrossPages: true } });
+
+    await page.send({ t: 'control.request' });
+    await page.answer(true);
+
+    const reached = watchActions();
+
+    globalThis.document.dispatchEvent(new Event('livewire:navigating'));
+    await settle();
+    assert.deepEqual(page.said().at(-1), { t: 'control.released', reason: 'navigation', paused: true });
+
+    await page.send({ t: 'click', x: 40, y: 50 });
+    assert.deepEqual(reached, []);
+
+    globalThis.document.dispatchEvent(new Event('livewire:navigated'));
+    await settle();
+    assert.deepEqual(page.said().at(-1), { t: 'control.granted', continued: true });
+    assert.equal(page.ui.shown.text, 'stillControlling');
+    assert.equal(page.ui.outlined, true);
+
+    await page.send({ t: 'click', x: 40, y: 50 });
+    assert.ok(reached.length > 0);
+    // One grant period.
+    assert.deepEqual(page.grants, [['control', true]]);
+});
+
+test('wire:navigate to a page the app does not record, or signed for someone else, ends control', async () => {
+    for (const change of [(page) => (page.mirrors = false), (page) => (page.identity = 'other')]) {
+        const page = await live({ assist: { controlAcrossPages: true } });
+
+        await page.send({ t: 'control.request' });
+        await page.answer(true);
+
+        globalThis.document.dispatchEvent(new Event('livewire:navigating'));
+        change(page.page);
+        globalThis.document.dispatchEvent(new Event('livewire:navigated'));
+        await settle();
+
+        assert.equal(page.said().at(-1).t, 'control.released');
+        assert.equal(page.ui.outlined, false);
+        assert.deepEqual(page.grants, [['control', true], ['control', false]]);
+    }
+});
+
+test('wire:navigate with control_across_pages off ends control at once', async () => {
+    const page = await live();
+
+    await page.send({ t: 'control.request' });
+    await page.answer(true);
+
+    globalThis.document.dispatchEvent(new Event('livewire:navigating'));
+    await settle();
+
+    assert.deepEqual(page.said().at(-1), { t: 'control.released', reason: 'navigation' });
+});
+
+// ---- typing into masked fields (assist.control_masked) ---------------------------------------------
+
+/** A text field on the visitor's page, in view; every field is masked for the agent (mask_all_inputs). */
+function textField() {
+    const field = Object.assign(new EventTarget(), {
+        nodeType: 1,
+        tagName: 'INPUT',
+        type: 'text',
+        value: '',
+        getBoundingClientRect: () => ({ left: 10, top: 10, right: 210, bottom: 40, width: 200, height: 30 }),
+        closest: () => null,
+        getRootNode() {
+            return this;
+        },
+        hasAttribute: () => false,
+        getAttribute: () => null,
+        focus() {},
+    });
+
+    return field;
+}
+
+/** A trusted event, as the browser's own (Node's Event takes the getter from a subclass). */
+class Trusted extends Event {
+    get isTrusted() {
+        return true;
+    }
+}
+
+async function withControl(options = {}) {
+    const field = textField();
+    const page = await live({ assist: { controlMasked: true }, nodes: { 7: field }, ...options });
+
+    globalThis.window.Event = Event;
+    await page.send({ t: 'control.request' });
+    await page.answer(true);
+
+    return { page, field };
+}
+
+test('the masked-typing question is told to a stage that takes it: asking, then granted, and the typing goes through', async () => {
+    const { page, field } = await withControl({ agentCan: ['masked'] });
+
+    await page.send({ t: 'focus', id: 7 });
+    assert.deepEqual(page.said().at(-1), { t: 'masked.asking' });
+    assert.equal(page.ui.open()[0].tag, 'masked');
+
+    await page.answer(true);
+    assert.deepEqual(page.said().slice(-1), [{ t: 'masked.granted' }]);
+    assert.deepEqual(page.grants.at(-1), ['control_masked', true]);
+
+    await page.send({ t: 'input', id: 7, value: 'Main Street 1' });
+    assert.equal(field.value, 'Main Street 1');
+});
+
+test('a no, a no a moment ago and a question left unanswered each reach the stage as their own reason, never as "masked"', async () => {
+    const { page } = await withControl({ agentCan: ['masked'] });
+
+    await page.send({ t: 'focus', id: 7 });
+    await page.answer(false);
+    assert.deepEqual(page.said().at(-1), { t: 'masked.declined', reason: 'declined' });
+
+    await page.send({ t: 'focus', id: 7 });
+    assert.equal(page.ui.open().length, 0);
+    assert.deepEqual(page.said().at(-1), { t: 'masked.declined', reason: 'cooldown' });
+
+    page.advance(10_000);
+    await page.send({ t: 'focus', id: 7 });
+    assert.deepEqual(page.said().at(-1), { t: 'masked.asking' });
+    page.advance(30_000);
+    await page.answer(false);
+    assert.deepEqual(page.said().at(-1), { t: 'masked.declined', reason: 'timeout' });
+
+    assert.equal(page.said().some((message) => message.t === 'control.refused' && message.reason === 'masked'), false);
+});
+
+test('a stage that does not name masked hears the refusal as before', async () => {
+    const { page } = await withControl();
+
+    await page.send({ t: 'focus', id: 7 });
+    assert.equal(page.said().some((message) => message.t.startsWith('masked.')), false);
+    await page.answer(false);
+    assert.deepEqual(page.said().at(-1), { t: 'control.refused', reason: 'masked' });
+});
+
+test('a press in the Assist panel (Allow) does not pause the agent', async () => {
+    const { page, field } = await withControl({ agentCan: ['masked'] });
+
+    await page.send({ t: 'focus', id: 7 });
+
+    // The visitor presses Allow: the pointerdown reaches the document with the panel's host as its target.
+    const press = new Trusted('pointerdown');
+
+    Object.defineProperty(press, 'target', { value: page.ui.host });
+    globalThis.document.dispatchEvent(press);
+    await page.answer(true);
+
+    // The agent types at once, and it lands.
+    await page.send({ t: 'input', id: 7, value: 'At once' });
+    assert.equal(field.value, 'At once');
+});
+
+test('typing that comes while the visitor\'s own activity pauses the agent is applied once the pause is over, the latest value', async () => {
+    const { page, field } = await withControl({ agentCan: ['masked'] });
+
+    await page.send({ t: 'focus', id: 7 });
+    await page.answer(true);
+
+    // The visitor moves their own mouse on the page: the agent pauses for a second.
+    globalThis.document.dispatchEvent(new Trusted('pointermove'));
+    await page.send({ t: 'input', id: 7, value: 'Main' });
+    await page.send({ t: 'input', id: 7, value: 'Main Street' });
+    assert.equal(field.value, '');
+
+    page.advance(1100);
+    await page.timers.run();
+    await settle();
+    assert.equal(field.value, 'Main Street');
 });

@@ -38,6 +38,7 @@ return [
         'rejoining' => ':name s-a deconectat și revine…',
         'onHold' => ':name a pus sesiunea în așteptare și revine imediat.',
         'controlling' => ':name controlează această pagină. Apasă Escape ca să oprești.',
+        'stillControlling' => ':name controlează în continuare această pagină. Apasă Escape ca să oprești.',
         'end' => 'Încheie',
         'endControl' => 'Oprește controlul de la distanță',
         'mute' => 'Fără sunet',

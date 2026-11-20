@@ -38,6 +38,7 @@ return [
         'rejoining' => ':name stepped away and is reconnecting…',
         'onHold' => ':name put this session on hold and will be right back.',
         'controlling' => ':name is controlling this page. Press Escape to stop.',
+        'stillControlling' => ':name still controls this page. Press Escape to stop.',
         'end' => 'End',
         'endControl' => 'End remote control',
         'mute' => 'Mute',

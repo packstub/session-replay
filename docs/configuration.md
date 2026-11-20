@@ -148,13 +148,16 @@ Help requests, off by default; see [Assist](assist.md#configuration) for what ea
 | `assist.guest_requests_per_hour` | `20` | `SESSION_REPLAY_ASSIST_GUEST_REQUESTS_PER_HOUR`. New requests per hour from all guests of a workspace together; while set, a guest asks only from a recording with events. |
 | `assist.claim_timeout_seconds` | `30` | An unacknowledged claim goes back to the list, and so does the claim of an agent who left the live view and did not come back in time. |
 | `assist.proposal_timeout_seconds` | `60` | An unanswered offer expires. |
+| `assist.decline_cooldown_seconds` | `300` | After "Not now", no new offer on that recording or another of the same signed-in person for this long; `0`: no wait. |
 | `assist.visitor_timeout_seconds` | `60` | A page that stopped polling: the request expires or ends. |
 | `assist.max_duration_minutes` | `120` | `SESSION_REPLAY_ASSIST_MAX_DURATION_MINUTES`. An assist ends after this long. |
 | `assist.button` | `false` | `SESSION_REPLAY_ASSIST_BUTTON`. A floating "Get help" button on recorded pages. |
 | `assist.control_masked` | `false` | `SESSION_REPLAY_ASSIST_CONTROL_MASKED`. Remote typing into masked fields, after its own question. |
+| `assist.control_across_pages` | `true` | `SESSION_REPLAY_ASSIST_CONTROL_ACROSS_PAGES`. Remote control granted once goes on to the tab's next pages of the site; off: asked again on every page. |
 | `assist.heartbeat_seconds` | `15` | A visible tab's heartbeat, which brings an agent's offer. |
 | `assist.poll.waiting_ms` / `assist.poll.active_ms` | `3000` / `2000` | How often the visitor's page polls its request while it waits / during an assist. |
 | `assist.calls_routes` | `holler.` | The name prefix of Holler's routes (`Holler::routes(as: …)`) that the agent's live stage polls. |
+| `assist.mirror_sources` | `[]` | `SESSION_REPLAY_ASSIST_MIRROR_SOURCES` (comma-separated). More origins the live mirror may load assets from, besides the app's own; `*` sends no policy. |
 
 ## Log context
 

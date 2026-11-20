@@ -21,10 +21,14 @@
  *
  * From the visitor: hello, rr (one rrweb event in `e`, already masked), css
  * (`key`, `text`: a stylesheet the events point at with liveStylePlaceholder),
- * state (`hidden`, `url`, `width`, `height`), control.granted,
- * control.released (`reason`), control.refused (`reason`), media.granted /
+ * state (`hidden`, `url`, `width`, `height`), control.granted (`continued`:
+ * from the page before), control.released (`reason`, `paused` during a
+ * wire:navigate swap), control.refused (`reason`), media.granted /
  * media.refused / media.stopped (`kind`; refused also `reason`),
- * screen.granted / screen.refused (`reason`) / screen.stopped, annot.ack, bye.
+ * screen.granted / screen.refused (`reason`) / screen.stopped, annot.ack, bye;
+ * masked.asking / masked.granted / masked.declined (`reason`: declined,
+ * timeout or cooldown), the question about typing into masked fields
+ * (optional: `can`).
  *
  * From the agent: hello, point (`x`, `y` in the visitor's viewport pixels: the
  * agent's pointer while they only watch) / point.hide (optional: `can`),
@@ -68,6 +72,8 @@ const MAX_FEATURES = 32;
 
 /** Optional message types a side may take beyond the version's own, named in its hello (`can`). */
 export const FEATURE_POINT = 'point';
+/** The stage takes masked.asking / masked.granted / masked.declined: where the masked-typing question stands. */
+export const FEATURE_MASKED = 'masked';
 
 /** The `can` list of a hello as a clean list of names: anything else in it is left out. */
 export function features(list) {
@@ -341,8 +347,10 @@ export const FROM_VISITOR = {
 
         return ok({ t: 'state', hidden: message.hidden, url: message.url ?? null, width: message.width, height: message.height });
     },
-    'control.granted': bare,
-    'control.released': (message) => ok({ t: message.t, reason: reason(message.reason) }),
+    // `continued`: control went on from the page before (assist.control_across_pages), not a new Allow.
+    'control.granted': (message) => ok(message.continued === true ? { t: message.t, continued: true } : { t: message.t }),
+    // `paused`: a wire:navigate swap; a control.granted (continued) or control.released follows once the page is known.
+    'control.released': (message) => ok({ t: message.t, reason: reason(message.reason), ...(message.paused === true ? { paused: true } : {}) }),
     'control.refused': (message) => ok({ t: message.t, reason: reason(message.reason) }),
     'media.granted': mediaKind,
     // `reason`: 'declined', or 'cooldown' when the visitor said no to the same a moment ago (asked again too soon).
@@ -356,6 +364,10 @@ export const FROM_VISITOR = {
     'screen.refused': (message) => ok({ t: message.t, reason: reason(message.reason) }),
     'screen.stopped': bare,
     'annot.ack': bare,
+    // The masked-typing question (assist.control_masked): sent only to a stage whose hello says `can: ['masked']`.
+    'masked.asking': bare,
+    'masked.granted': bare,
+    'masked.declined': (message) => ok({ t: message.t, reason: reason(message.reason) }),
     bye: bare,
 };
 

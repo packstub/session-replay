@@ -1,6 +1,6 @@
 import { workerTimers } from './worker-timers.js';
 import { AssistSignaling } from './assist-signaling.js';
-import { CHANNEL_LABEL, Endpoint, FEATURE_POINT, FROM_AGENT, LiveStyles, encodeEvent } from './assist-protocol.js';
+import { CHANNEL_LABEL, Endpoint, FEATURE_MASKED, FEATURE_POINT, FROM_AGENT, LiveStyles, encodeEvent } from './assist-protocol.js';
 import { RemoteControl, maskedField } from './assist-control.js';
 import { isPointerSample } from './process.js';
 import { createUi, label } from '../assist-ui.js';
@@ -19,10 +19,12 @@ import { STATE_KEY, randomId, storedRequest } from './assist-hook.js';
  * grants log.
  *
  * The request id and secret live in sessionStorage beside sr:session, with
- * the grants a reload keeps (watch, audio, video; control is asked again
- * after every reload or navigation). Polling runs on a Web Worker timer: a
- * hidden tab's own timers slow to once a minute, which would lose the call
- * (lib/assist-client.js, shared with the agent's stage).
+ * the grants a reload keeps (watch, audio, video). Remote control goes on to
+ * the tab's next page of the site with assist.control_across_pages (see
+ * handOver() and continues()); without it, it is asked again on every page.
+ * Polling runs on a Web Worker timer: a hidden tab's own timers slow to once a
+ * minute, which would lose the call (lib/assist-client.js, shared with the
+ * agent's stage).
  *
  * The call is a @packstub/holler CallClient with media 'none' and the channel
  * "assist"; its signaling is AssistSignaling over Session Replay's visitor
@@ -36,12 +38,49 @@ const PENDING = ['open', 'claimed', 'active'];
 const GRANT_TIMEOUT_MS = 30_000;
 // After a no, the agent cannot ask for the same thing again this soon (refused with reason `cooldown`).
 export const ASK_COOLDOWN_MS = 10_000;
+// Remote control handed over to the next page (assist.control_across_pages): that page must take it within this
+// long of the last one being left, its channel to the agent included; past it, control has ended.
+export const CARRY_MS = 30_000;
+// How long a page that took control over says so ("… still controls this page"), before the usual line.
+export const STILL_MS = 8_000;
+
+/** How this page was reached: the navigation type, the referrer and its own URL. */
+export function arrival() {
+    let type = null;
+
+    try {
+        type = globalThis.performance?.getEntriesByType?.('navigation')?.[0]?.type ?? null;
+    } catch {
+        // No Navigation Timing: no type, so nothing is taken over.
+    }
+
+    return { type, referrer: globalThis.document?.referrer || '', href: globalThis.location?.href || '' };
+}
+
+const withoutHash = (url) => String(url || '').split('#')[0];
+
+/**
+ * Whether remote control handed over by the page this tab left (`carry`: its URL and when) goes on here. Only on
+ * the very next page of the tab, so never past a page the assist did not run on (not recorded, another site): a
+ * reload of the same URL, or a navigation whose referrer is the page that handed control over (a link, a form and
+ * its redirect, a script's location change). A referrer the app's Referrer-Policy strips, the back and forward
+ * buttons, and a hand-over older than CARRY_MS end control instead: it fails closed.
+ */
+export function continues(carry, { type, referrer, href } = {}, now = Date.now()) {
+    if (!carry || typeof carry.from !== 'string' || !Number.isFinite(carry.at)) return false;
+    if (now < carry.at || now - carry.at > CARRY_MS) return false;
+    if (type === 'reload') return withoutHash(href) !== '' && withoutHash(href) === withoutHash(carry.from);
+    if (type === 'navigate') return withoutHash(referrer) !== '' && withoutHash(referrer) === withoutHash(carry.from);
+
+    return false;
+}
 
 /**
  * @param {object} recorder  what the recorder lends Assist
  * @param {() => object} recorder.config  the page's config (window.__sessionReplay)
  * @param {() => ({ id: string, key: string|null }|null)} recorder.recording  the recording this tab makes, if any
  * @param {() => boolean} recorder.snapshot  rrweb's takeFullSnapshot(), false while rrweb is not running
+ * @param {() => boolean} [recorder.mirrors]  rrweb runs on the page shown now (after a wire:navigate: a recorded page)
  * @param {(id: number) => Node|null} recorder.node  rrweb's mirror
  * @param {() => void} recorder.goLive  mode on_error: start uploading now
  * @param {() => void} recorder.touch  the visitor is here: the idle timeout must not end the recording
@@ -49,8 +88,21 @@ export const ASK_COOLDOWN_MS = 10_000;
  * @param {(key: string) => string|null} recorder.read  sessionStorage
  * @param {(key: string, value: string) => void} recorder.write
  * @param {string} recorder.tab  the tab's own id (sessionStorage), sent with a new request
- * @param {object} env  the engine (`Client`, a CallClient class, and `drain`), plus the tests' fakes: `ui`, `timers`, `fetch`, `now`
+ * @param {object} env  the engine (`Client`, a CallClient class, and `drain`), plus the tests' fakes: `ui`, `timers`, `fetch`, `now`, `arrival`
  */
+/** What the browser can share: getUserMedia and getDisplayMedia exist only in a secure context (https, localhost). */
+export function mediaDevices() {
+    const secure = globalThis.isSecureContext !== false;
+    const devices = secure ? globalThis.navigator?.mediaDevices : undefined;
+
+    return { media: typeof devices?.getUserMedia === 'function', screen: typeof devices?.getDisplayMedia === 'function' };
+}
+
+/** Why the microphone or camera did not start, for the agent: `blocked` (a permission said no) or `failed`. */
+export function mediaError(error) {
+    return ['NotAllowedError', 'SecurityError', 'PermissionDeniedError'].includes(error?.name) ? 'blocked' : 'failed';
+}
+
 export function installAssist(recorder, env) {
     if (typeof env?.Client !== 'function' || typeof env?.drain !== 'function') throw new TypeError('installAssist needs the calls engine: env.Client and env.drain.');
 
@@ -60,6 +112,9 @@ export function installAssist(recorder, env) {
     const Client = env.Client;
     const drain = env.drain;
     const now = env.now || (() => Date.now());
+    // What this browser can share at all: nothing on a page served over plain http (not a secure context), where
+    // navigator.mediaDevices does not exist, so no permission prompt could ever open.
+    const devices = env.devices || mediaDevices;
     // This page's window on the call (in Holler a window claims its side); a reload is a new one.
     const tab = randomId();
     const ui = env.ui || createUi({ labels });
@@ -75,6 +130,25 @@ export function installAssist(recorder, env) {
     let control = null;
     let controlling = false;
     let maskedGranted = false;
+    // Control handed over by the page before (state.carry): the outline and the panel say so at once, and it starts
+    // once this page's channel is up and its snapshot went out; until then nothing of the agent's is acted on.
+    let carried = null;
+    let resuming = false;
+    let resumeTimer = null;
+    // A wire:navigate swap under control: nothing is acted on until the new page is known and its snapshot went out.
+    let suspended = false;
+    let identityBefore = null;
+    // The page is being left with control handed over: what ends now is logged by the page that takes it, or not.
+    let leaving = false;
+    // "… still controls this page" until then.
+    let stillUntil = 0;
+    let stillTimer = null;
+    // Control ended while no channel was up (a reconnect, a page that did not take it over): said on the next one.
+    let untold = null;
+    // The agent's typing that came while the visitor's own activity paused them: the latest value per field,
+    // applied once the pause is over (an input or a select carries the whole value, so nothing is lost).
+    const deferred = new Map();
+    let deferTimer = null;
     let lastPoll = null;
     let busy = false;
     // The microphone: muted by the visitor's own button (only that button unmutes; a reload keeps it), or by the
@@ -210,6 +284,9 @@ export function installAssist(recorder, env) {
 
         if (TERMINAL.includes(data.status)) return finish(data.status, data.end_reason);
 
+        // Control waiting for this page's channel goes on only into a live assist with the same agent.
+        if (resuming && data.status !== 'active') endControl('reconnect');
+
         if (data.status === 'open') {
             if (data.opened_by === 'agent') offer();
             else ui.show({ text: label(labels, 'waiting'), actions: [{ label: label(labels, 'cancel'), onClick: () => cancel() }] });
@@ -251,10 +328,11 @@ export function installAssist(recorder, env) {
         const actions = [{ label: label(labels, 'end'), kind: 'danger', onClick: () => end() }];
 
         if (client?.cameraStream) actions.unshift({ label: label(labels, client.muted ? 'unmute' : 'mute'), onClick: () => mute(!client.muted) });
-        if (controlling) actions.unshift({ label: label(labels, 'endControl'), kind: 'primary', onClick: () => endControl('visitor') });
+        if (controlling || resuming) actions.unshift({ label: label(labels, 'endControl'), kind: 'primary', onClick: () => endControl('visitor') });
 
         // 'waiting': the agent put the assist on hold (Holler's hold: they are on another call and come back).
-        const text = controlling ? 'controlling' : client?.state === 'waiting' ? 'onHold' : client?.state === 'reconnecting' ? 'reconnecting' : client?.sharing ? 'seesScreen' : 'sees';
+        const text =
+            controlling || resuming ? (now() < stillUntil ? 'stillControlling' : 'controlling') : client?.state === 'waiting' ? 'onHold' : client?.state === 'reconnecting' ? 'reconnecting' : client?.sharing ? 'seesScreen' : 'sees';
 
         ui.show({ text: label(labels, text, agentName()), agent: state.agent, actions });
     }
@@ -482,7 +560,8 @@ export function installAssist(recorder, env) {
     function open(channel, peer) {
         if (!state?.agent || String(peer.id) !== String(state.agent.id) || channel.label !== CHANNEL_LABEL) return;
 
-        closeChannel('replaced');
+        // The first channel of the page leaves control handed over from the page before waiting for it.
+        if (endpoint) closeChannel('replaced');
 
         endpoint = new Endpoint({
             channel,
@@ -496,7 +575,20 @@ export function installAssist(recorder, env) {
                 liveStyles = new LiveStyles();
                 streaming = true;
                 // The agent's mirror starts from a fresh snapshot (it goes into the stored recording too).
-                recorder.snapshot();
+                const mirrored = recorder.snapshot();
+
+                // Control from the page before goes on only once the agent sees this one, and says so before the
+                // first state message (the stage settles a control it lost with the channel on that message).
+                if (resuming) {
+                    if (!mirrored) endControl('not_recorded');
+                    else if (document.visibilityState === 'hidden') endControl('hidden');
+                    else resume();
+                }
+
+                if (untold && !controlling) endpoint.send({ t: 'control.released', reason: untold });
+
+                untold = null;
+
                 sendState();
 
                 // Audio and video allowed before a reload are not asked again.
@@ -521,7 +613,10 @@ export function installAssist(recorder, env) {
     }
 
     function sendState() {
-        endpoint?.send({ t: 'state', hidden: document.visibilityState === 'hidden', url: recorder.redacted(location.href), width: window.innerWidth, height: window.innerHeight });
+        // Not before the channel's own first one (onReady): the stage settles control from the page before on it.
+        if (!endpoint?.ready) return;
+
+        endpoint.send({ t: 'state', hidden: document.visibilityState === 'hidden', url: recorder.redacted(location.href), width: window.innerWidth, height: window.innerHeight });
     }
 
     /**
@@ -622,7 +717,7 @@ export function installAssist(recorder, env) {
     }
 
     async function askControl() {
-        if (controlling || document.visibilityState === 'hidden') return;
+        if (controlling || resuming || document.visibilityState === 'hidden') return;
 
         const { yes, refused } = await ask('control', label(labels, 'askControl', agentName()));
 
@@ -637,11 +732,14 @@ export function installAssist(recorder, env) {
         startControl();
     }
 
-    function startControl() {
+    /** Control starts: after the visitor's Allow, or taken over from the page before (`continued`, with its masked-typing consent). */
+    function startControl({ continued = false, masked = false } = {}) {
         const config = recorder.config();
 
         controlling = true;
-        maskedGranted = false;
+        suspended = false;
+        untold = null;
+        maskedGranted = masked;
         control = new RemoteControl({
             win: window,
             doc: document,
@@ -651,11 +749,34 @@ export function installAssist(recorder, env) {
             blockSelector: config.privacy?.blockSelector || null,
             maskedAllowed: () => maskedGranted,
             onCursor: (x, y) => ui.cursor.move(x, y),
+            now,
         });
         ui.outline(true);
         ui.cursor.show(agentName());
         activeView();
-        endpoint?.send({ t: 'control.granted' });
+        endpoint?.send(continued ? { t: 'control.granted', continued: true } : { t: 'control.granted' });
+    }
+
+    /** The control handed over from the page before goes on here: no new question, no new grant in the log. */
+    function resume() {
+        const carry = carried;
+
+        resuming = false;
+        carried = null;
+        timers.clear(resumeTimer);
+        resumeTimer = null;
+        startControl({ continued: true, masked: !!carry?.masked });
+    }
+
+    /** "… still controls this page. Press Escape to stop.": on a page that took control over, for STILL_MS. */
+    function remind() {
+        stillUntil = now() + STILL_MS;
+        timers.clear(stillTimer);
+        stillTimer = timers.set(() => {
+            stillTimer = null;
+            activeView();
+        }, STILL_MS);
+        activeView();
     }
 
     /** Control ends: by either side, a hidden tab, a navigation, a lost channel. */
@@ -663,25 +784,128 @@ export function installAssist(recorder, env) {
         ui.cancelPrompts('control');
         ui.cancelPrompts('masked');
 
+        if (resuming) return dropCarry(reason);
         if (!controlling) return;
 
         controlling = false;
+        suspended = false;
+        dropDeferred();
         control?.release();
         control = null;
         ui.outline(false);
         ui.cursor.hide();
-        grant('control', false);
 
-        if (maskedGranted) grant('control_masked', false);
+        // Leaving with control handed over: the next page logs the end if it does not take it.
+        if (!leaving) {
+            grant('control', false);
+
+            if (maskedGranted) grant('control_masked', false);
+        }
 
         maskedGranted = false;
-        endpoint?.send({ t: 'control.released', reason });
+        stillUntil = 0;
+        released(reason);
         activeView();
     }
 
-    /** One control message, only while control is granted now and no question is up. */
+    /** Control handed over from the page before does not go on here: it ends, logged once. */
+    function dropCarry(reason) {
+        const carry = carried;
+
+        resuming = false;
+        carried = null;
+        timers.clear(resumeTimer);
+        resumeTimer = null;
+        ui.outline(false);
+        ui.cursor.hide();
+
+        if (carry && !leaving) logEnd(carry);
+
+        maskedGranted = false;
+        stillUntil = 0;
+        released(reason);
+        activeView();
+    }
+
+    /**
+     * Tell the agent control ended, now or on the next channel's first message: a stage that lost the channel with
+     * control on keeps it for a next page until then. Not while the page is being left with control handed over.
+     */
+    function released(reason) {
+        if (endpoint?.ready && !endpoint.closed) return endpoint.send({ t: 'control.released', reason });
+        if (!leaving) untold = reason;
+    }
+
+    /** The grants log: the control period (and its masked-typing consent) that began on an earlier page is over. */
+    function logEnd(carry) {
+        grant('control', false);
+
+        if (carry.masked) grant('control_masked', false);
+    }
+
+    /**
+     * The page is being left (pagehide): control goes on to the tab's next page, which takes it if it continues()
+     * from here. Also control this page was still waiting to take over (left before its channel came).
+     */
+    function handOver() {
+        if (!state || !settings().controlAcrossPages || document.visibilityState === 'hidden') return;
+        if (!controlling && !resuming) return;
+
+        state.carry = { from: location.href, at: now(), masked: controlling ? maskedGranted : !!carried?.masked };
+        leaving = true;
+        save();
+    }
+
+    /** Control the page before handed over, if it goes on here; removed from storage either way, and its end logged if not. */
+    function takeCarry() {
+        const carry = state?.carry;
+
+        if (!carry) return null;
+
+        delete state.carry;
+        save();
+
+        if (settings().controlAcrossPages && state.status === 'active' && document.visibilityState !== 'hidden' && continues(carry, (env.arrival || arrival)(), now())) return carry;
+
+        logEnd(carry);
+        untold = 'navigation';
+
+        return null;
+    }
+
+    /** A wire:navigate swap under control: control pauses (the agent is told), nothing is acted on until afterSwap(). */
+    function beforeSwap() {
+        if (!controlling || !settings().controlAcrossPages) return endControl('navigation');
+
+        suspended = true;
+        identityBefore = recorder.config().identity ?? null;
+        dropDeferred();
+        control?.release();
+        ui.cancelPrompts('masked');
+        endpoint?.send({ t: 'control.released', reason: 'navigation', paused: true });
+    }
+
+    /**
+     * The new page is in place. The recorder's own listener ran first and restarted rrweb, so a recorded page's full
+     * snapshot already went to the agent: control goes on, after it on the channel. Not on a page the app does not
+     * record, nor when the page was signed for another person or workspace.
+     */
+    function afterSwap() {
+        if (!suspended) return;
+
+        suspended = false;
+
+        if (!controlling) return;
+        if ((recorder.config().identity ?? null) !== identityBefore) return endControl('navigation');
+        if (!recorder.mirrors?.()) return endControl('not_recorded');
+
+        remind();
+        endpoint?.send({ t: 'control.granted', continued: true });
+    }
+
+    /** One control message, only while control is granted now, on a page the agent sees, and no question is up. */
     async function act(message) {
-        if (!controlling || !control || ui.promptOpen) return;
+        if (!controlling || suspended || !control || ui.promptOpen) return;
 
         const run = () => {
             switch (message.t) {
@@ -710,20 +934,61 @@ export function installAssist(recorder, env) {
 
         const result = run();
 
+        // Typing that came while the visitor's own mouse or keys paused the agent: applied once the pause is over.
+        if (result.ignored === 'visitor' && (message.t === 'input' || message.t === 'select')) return defer(message);
+
         if (result.refused === 'masked' && settings().controlMasked && !maskedGranted) {
+            // A stage that takes it hears where the question stands: asking, then granted or declined (and why).
+            const tell = !!endpoint?.peerCan(FEATURE_MASKED);
+
+            // Asked already: the stage waits for the answer, and this action goes with the question.
+            if (asking.has('masked')) return;
+            if (tell && !(saidNoAt.has('masked') && now() - saidNoAt.get('masked') < ASK_COOLDOWN_MS)) endpoint.send({ t: 'masked.asking' });
+
+            const started = now();
             const { yes, refused } = await ask('masked', label(labels, 'askMasked', agentName()));
 
             if (refused === 'pending') return;
-            if (refused) return reply(result);
+            if (refused) return tell ? endpoint?.send({ t: 'masked.declined', reason: refused }) : reply(result);
             if (!controlling) return;
 
             grant('control_masked', yes);
             maskedGranted = yes;
 
-            if (yes) return reply(run());
+            if (yes) {
+                if (tell) endpoint?.send({ t: 'masked.granted' });
+
+                return reply(run());
+            }
+
+            // A question left unanswered counts as no; the stage says which it was.
+            if (tell) return endpoint?.send({ t: 'masked.declined', reason: now() - started >= GRANT_TIMEOUT_MS ? 'timeout' : 'declined' });
         }
 
         reply(result);
+    }
+
+    /** Keep the latest typing for a field until the visitor's pause is over, then act on it. */
+    function defer(message) {
+        deferred.set(message.id, message);
+        timers.clear(deferTimer);
+        deferTimer = timers.set(
+            () => {
+                deferTimer = null;
+
+                const due = [...deferred.values()];
+
+                deferred.clear();
+                for (const next of due) act(next);
+            },
+            Math.max(0, (control?.pausedUntil ?? 0) - now()) + 50,
+        );
+    }
+
+    function dropDeferred() {
+        deferred.clear();
+        timers.clear(deferTimer);
+        deferTimer = null;
     }
 
     function reply(result) {
@@ -734,6 +999,8 @@ export function installAssist(recorder, env) {
         if (!client || !state) return;
 
         if (kind === 'video' && !settings().video) return endpoint?.send({ t: 'media.refused', kind });
+        // Not asked: an Allow could not open the microphone or the camera here.
+        if (!devices().media) return endpoint?.send({ t: 'media.refused', kind, reason: 'unavailable' });
 
         // Allowed earlier in this request (a reload keeps it): not asked again, unless the agent ended the audio
         // since; then only a fresh Allow brings the microphone back.
@@ -764,8 +1031,9 @@ export function installAssist(recorder, env) {
     async function startMedia(kind, announce) {
         try {
             await client?.startMedia(kind);
-        } catch {
-            endpoint?.send({ t: 'media.refused', kind });
+        } catch (error) {
+            // The browser's own prompt said no (or the site is blocked in its settings), or no device could be opened.
+            endpoint?.send({ t: 'media.refused', kind, reason: mediaError(error) });
 
             if (announce) grant(kind, false);
 
@@ -805,6 +1073,7 @@ export function installAssist(recorder, env) {
 
     async function askScreen() {
         if (!client || client.sharing) return;
+        if (!devices().screen) return endpoint?.send({ t: 'screen.refused', reason: 'unavailable' });
 
         const { yes, refused } = await ask('screen', label(labels, 'askScreen', agentName()));
 
@@ -917,8 +1186,11 @@ export function installAssist(recorder, env) {
 
     function mountedListeners() {
         const visitor = (event) => {
-            if (!event.isTrusted || !controlling) return;
+            if (!event.isTrusted || !(controlling || resuming)) return;
             if (event.type === 'keydown' && event.key === 'Escape') return endControl('visitor');
+            // A press in the Assist panel (an Allow, End remote control) is no activity on the page: it never pauses
+            // the agent. The panel is a closed shadow root, so the event's target here is its host.
+            if (ui.contains(event.target)) return;
 
             control?.visitorActivity();
         };
@@ -926,22 +1198,57 @@ export function installAssist(recorder, env) {
         for (const type of ['pointerdown', 'pointermove', 'keydown', 'wheel', 'touchstart']) document.addEventListener(type, visitor, { capture: true, passive: true });
 
         document.addEventListener('visibilitychange', visibility);
-        document.addEventListener('livewire:navigating', () => endControl('navigation'));
+        document.addEventListener('livewire:navigating', () => beforeSwap());
         document.addEventListener('livewire:navigated', () => {
             ui.remount();
+            afterSwap();
             sendState();
         });
         window.addEventListener('resize', () => sendState());
         window.addEventListener('pagehide', () => {
+            handOver();
             // The guest's side of the call is free for the tab's next page (the leave beacon).
             client?.leave();
             endpoint?.close('unload');
+        });
+        window.addEventListener('pageshow', (event) => {
+            if (!event.persisted) return;
+
+            // Back from the browser's back-forward cache: not a next page, so control handed over (by this page or
+            // the one after it) ends here. Read from storage: what this page holds in memory is from before.
+            leaving = false;
+
+            if (state) delete state.carry;
+
+            const saved = load();
+
+            if (!saved?.carry) return;
+
+            const carry = saved.carry;
+
+            delete saved.carry;
+            recorder.write(STATE_KEY, JSON.stringify(saved));
+            logEnd(carry);
         });
     }
 
     ui.mount();
     mountedListeners();
     launcher();
+
+    // Control handed over by the page before: the outline and the panel at once, control once the channel is up.
+    carried = takeCarry();
+
+    if (carried) {
+        resuming = true;
+        maskedGranted = !!carried.masked;
+        ui.outline(true);
+        resumeTimer = timers.set(() => {
+            resumeTimer = null;
+            endControl('reconnect');
+        }, CARRY_MS);
+        remind();
+    }
 
     // A reload in the middle of a request: the request goes on from where it was.
     if (state) schedulePoll(0);

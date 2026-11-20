@@ -7,6 +7,7 @@
  */
 
 import { mapPoint, restoreLiveStyles } from './assist-protocol.js';
+import { quietLinks } from './process.js';
 
 // rrweb event types: what the stage looks at.
 const FULL_SNAPSHOT = 2;
@@ -35,6 +36,9 @@ export const MAX_LIVE_CSS_CHARS = 32 * 1024 * 1024;
  *   ids start again, so the Replayer starts again too.
  * - Stylesheets are capped per channel (MAX_LIVE_CSS_KEYS, MAX_LIVE_CSS_CHARS):
  *   past the cap a new one is dropped (its events show an empty sheet).
+ * - A <link> that is not a stylesheet loses its `rel` (quietLinks()): a
+ *   preconnect or a prefetch would reach a host of the visitor's choosing
+ *   past the stage's Content-Security-Policy.
  */
 export class LiveFeed {
     /**
@@ -57,6 +61,7 @@ export class LiveFeed {
         this.offset = null;
         this.meta = null;
         this.events = 0;
+        this.links = new Set();
     }
 
     get started() {
@@ -79,6 +84,7 @@ export class LiveFeed {
     /** An `rr` message's event (validated already, a fresh object: it is mutated). */
     event(event) {
         restoreLiveStyles(event, this.texts);
+        quietLinks(event, this.links);
 
         if (this.offset === null) this.offset = this.now() - event.timestamp;
 
@@ -124,6 +130,7 @@ export class LiveFeed {
         this.offset = null;
         this.meta = null;
         this.events = 0;
+        this.links = new Set();
     }
 }
 
@@ -307,6 +314,14 @@ export function editable(element) {
  * stage puts in place of connecting while the assist is on hold, and no_pointer,
  * see pointerWhy()).
  */
+/** Why the visitor's microphone or camera did not start, when it was not their no (media.refused `reason`). */
+const VISITOR_MEDIA_NOTES = {
+    cooldown: 'cooldown',
+    unavailable: 'visitor_media_unavailable',
+    blocked: 'visitor_media_blocked',
+    failed: 'visitor_media_failed',
+};
+
 export class AgentState {
     constructor({ calls = true, routes = true, video = false } = {}) {
         this.calls = calls;
@@ -320,24 +335,42 @@ export class AgentState {
         this.width = 0;
         this.height = 0;
         this.control = 'off';
+        // Control the agent had when the visitor's page went (a page load, a wire:navigate swap): the next page may
+        // take it over (assist.control_across_pages) with a `control.granted` that is `continued`. Until it says,
+        // nothing is sent, and the agent can still let go of it.
+        this.continuing = false;
+        // A new channel: its first `state` settles a control still continuing (the page sends the grant before it).
+        this.settling = false;
+        // The visitor's answer about typing into masked fields (assist.control_masked): 'off', 'asking' or 'on'.
+        // Ends with control.
+        this.masked = 'off';
         this.audio = 'off';
         this.video = 'off';
         this.screen = 'off';
         this.mode = 'mirror';
     }
 
-    /** The live view is up (the peer's hello came). Control never survives a new channel. */
+    /** The agent has control, or had it when the page went and the next one may take it over. */
+    get hasControl() {
+        return this.control === 'on' || this.continuing;
+    }
+
+    /** The live view is up (the peer's hello came). Control never comes with a new channel; the page grants it again or goes on with it. */
     open() {
         this.connected = true;
         this.version = false;
         this.control = 'off';
+        this.settling = this.continuing;
 
         if (this.screen === 'asking') this.screen = 'off';
     }
 
-    /** The channel is gone (reconnecting, the visitor left). */
+    /** The channel is gone (reconnecting, the visitor's page loading the next one, the visitor left). */
     close() {
         this.connected = false;
+
+        if (this.control === 'on') this.continuing = true;
+
         this.control = 'off';
     }
 
@@ -346,12 +379,14 @@ export class AgentState {
         this.version = true;
         this.connected = false;
         this.control = 'off';
+        this.continuing = false;
     }
 
     end() {
         this.ended = true;
         this.connected = false;
         this.control = 'off';
+        this.continuing = false;
         this.audio = 'off';
         this.video = 'off';
         this.screen = 'off';
@@ -371,7 +406,7 @@ export class AgentState {
             case 'control':
                 if (this.mode !== 'mirror') return 'screen_mode';
                 if (this.control === 'asking') return 'asking';
-                if (this.control === 'on') return null;
+                if (this.hasControl) return null;
 
                 return this.hidden ? 'hidden' : null;
             case 'draw':
@@ -392,7 +427,7 @@ export class AgentState {
     }
 
     askControl() {
-        if (this.control !== 'off' || this.why('control')) return null;
+        if (this.control !== 'off' || this.continuing || this.why('control')) return null;
 
         this.control = 'asking';
 
@@ -400,7 +435,12 @@ export class AgentState {
     }
 
     releaseControl() {
-        if (this.control === 'off') return null;
+        // Let go of while the next page loads: nothing to send now, and a page that takes it over is told at once.
+        if (this.control === 'off') {
+            this.continuing = false;
+
+            return null;
+        }
 
         this.control = 'off';
 
@@ -451,28 +491,73 @@ export class AgentState {
      * One message from the visitor. Effects: { note: key, reason? } for the
      * agent to read, { media: kind } (start the agent's own media of that
      * kind), { mode } (the view switched), { state: true } (the visitor's
-     * page state changed), { stopControl: true } (control ended).
+     * page state changed), { stopControl: true } (control ended or paused),
+     * { continued: true } (control went on to a new page: wait for its
+     * mirror), { release: true } (send control.release: the agent let go of
+     * it before the new page took it over).
      */
     receive(message) {
         switch (message.t) {
             case 'state': {
                 const wasHidden = this.hidden;
+                const effects = [];
 
                 this.hidden = message.hidden;
                 this.url = message.url;
                 this.width = message.width;
                 this.height = message.height;
 
-                return wasHidden === message.hidden ? [{ state: true }] : [{ state: true }, { note: message.hidden ? 'visitor_hidden' : 'visitor_back' }];
+                // The new page said nothing of the control the agent had before its first state: it did not go on.
+                if (this.settling) {
+                    this.settling = false;
+
+                    if (this.continuing) {
+                        this.continuing = false;
+                        effects.push({ note: 'control_released', reason: 'navigation' });
+                    }
+                }
+
+                effects.push({ state: true });
+
+                return wasHidden === message.hidden ? effects : [...effects, { note: message.hidden ? 'visitor_hidden' : 'visitor_back' }];
             }
             case 'control.granted':
+                if (message.continued) {
+                    // The agent let go of it while the page loaded: given back at once.
+                    if (this.control !== 'on' && !this.continuing) return [{ release: true }];
+
+                    this.control = 'on';
+                    this.continuing = false;
+                    this.settling = false;
+
+                    return [{ continued: true }, { note: 'control_continued' }];
+                }
+
                 this.control = 'on';
+                this.continuing = false;
 
                 return [{ note: 'control_granted' }];
             case 'control.released':
-                if (this.control === 'off') return [];
+                // A wire:navigate swap: nothing goes to the page until it is known; then granted (continued) or released.
+                if (message.paused) {
+                    if (this.control !== 'on') return [];
+
+                    this.control = 'off';
+                    this.continuing = true;
+
+                    return [{ stopControl: true }];
+                }
+
+                if (this.control === 'off') {
+                    if (!this.continuing) return [];
+
+                    this.continuing = false;
+
+                    return [{ note: 'control_released', reason: message.reason }];
+                }
 
                 this.control = 'off';
+                this.masked = 'off';
 
                 return [{ stopControl: true }, { note: 'control_released', reason: message.reason }];
             case 'control.refused':
@@ -491,7 +576,7 @@ export class AgentState {
             case 'media.refused':
                 this[message.kind] = 'off';
 
-                return [{ note: message.reason === 'cooldown' ? 'cooldown' : message.kind === 'video' ? 'video_refused' : 'audio_refused' }];
+                return [{ note: Object.hasOwn(VISITOR_MEDIA_NOTES, message.reason ?? '') ? VISITOR_MEDIA_NOTES[message.reason] : (message.kind === 'video' ? 'video_refused' : 'audio_refused') }];
             case 'media.stopped':
                 this[message.kind] = 'off';
 
@@ -506,7 +591,22 @@ export class AgentState {
                 this.screen = 'off';
                 this.mode = 'mirror';
 
-                return [{ mode: 'mirror' }, { note: message.t === 'screen.stopped' ? 'screen_stopped' : message.reason === 'cooldown' ? 'cooldown' : 'screen_refused' }];
+                return [{ mode: 'mirror' }, { note: message.t === 'screen.stopped' ? 'screen_stopped' : message.reason === 'cooldown' ? 'cooldown' : message.reason === 'unavailable' ? 'visitor_screen_unavailable' : 'screen_refused' }];
+            case 'masked.asking':
+                this.masked = 'asking';
+
+                return [{ masked: 'asking' }, { note: 'masked_asked' }];
+            case 'masked.granted':
+                this.masked = 'on';
+
+                return [{ masked: 'granted' }, { note: 'masked_granted' }];
+            case 'masked.declined': {
+                this.masked = 'off';
+
+                const note = message.reason === 'cooldown' ? 'cooldown' : message.reason === 'timeout' ? 'masked_timeout' : 'masked_refused';
+
+                return [{ masked: 'declined', reason: message.reason }, { note }];
+            }
             case 'bye':
                 return [{ note: 'visitor_left' }];
             default:
@@ -537,7 +637,7 @@ export function handleVisitorMessage(message, { feed, state }) {
 }
 
 /** The label key for a reason the visitor's page gave, or 'other'. */
-export const REASONS = ['declined', 'cooldown', 'password', 'masked', 'blocked', 'not_visible', 'readonly', 'unsupported', 'own_ui', 'unknown_node', 'unknown_option', 'visitor', 'agent', 'hidden', 'navigation', 'reconnect', 'replaced', 'ended', 'unload'];
+export const REASONS = ['declined', 'cooldown', 'password', 'masked', 'blocked', 'not_visible', 'readonly', 'unsupported', 'own_ui', 'unknown_node', 'unknown_option', 'visitor', 'agent', 'hidden', 'navigation', 'not_recorded', 'reconnect', 'replaced', 'ended', 'unload'];
 
 export function reasonKey(reason) {
     return REASONS.includes(reason) ? reason : 'other';

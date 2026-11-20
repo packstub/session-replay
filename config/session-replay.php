@@ -358,6 +358,8 @@ return [
         'claim_timeout_seconds' => 30,
         // An agent's offer nobody answered expires.
         'proposal_timeout_seconds' => 60,
+        // After the visitor says "Not now" to an offer, nobody may offer help on that recording (or another of the same signed-in person) for this long. 0: no wait.
+        'decline_cooldown_seconds' => 300,
         // A request whose page has not polled for this long expires (the tab was closed); a live one ends.
         'visitor_timeout_seconds' => 60,
         // An assist ends after this many minutes, whatever is going on.
@@ -368,6 +370,10 @@ return [
         // Let the agent type into fields they see masked (every field with privacy.mask_all_inputs), after a
         // separate question to the visitor. Off: unmasked fields only; password fields never.
         'control_masked' => (bool) env('SESSION_REPLAY_ASSIST_CONTROL_MASKED', false),
+        // Remote control granted once goes on across the tab's pages of the site (links, forms, reloads,
+        // wire:navigate) until the visitor or the agent ends it; it ends on a page that is not recorded, on another
+        // site, on a hidden tab and when the connection cannot be re-established. Off: asked again on every page.
+        'control_across_pages' => (bool) env('SESSION_REPLAY_ASSIST_CONTROL_ACROSS_PAGES', true),
         // A visible tab's sign of life, which also brings an agent's offer to a page that uploads nothing.
         'heartbeat_seconds' => 15,
         // How often the page polls its request: while it waits, and during an assist (the call's heartbeat;
@@ -379,6 +385,11 @@ return [
         // The name prefix of Holler's routes (Holler::routes(as: …)), which the agent's live stage polls: in a plain app,
         // register Holler::routes() in routes/web.php (the `web` middleware and the viewer's guard).
         'calls_routes' => 'holler.',
+        // The live stage sends a Content-Security-Policy so the mirror loads images, styles, fonts and media only from
+        // the app (its own origin, app.url, app.asset_url) and these origins: the visitor's page cannot make the agent's
+        // browser fetch a URL of its choosing. Add the hosts your pages load assets from (a CDN, a font service);
+        // ['*'] sends no policy.
+        'mirror_sources' => array_values(array_filter(explode(',', (string) env('SESSION_REPLAY_ASSIST_MIRROR_SOURCES', '')))),
     ],
 
     /*

@@ -37,7 +37,8 @@
         "laravel/pint": "^1.13",
         "pestphp/pest": "^4.0|^5.1",
         "pestphp/pest-plugin-laravel": "^4.0|^5.0",
-        "orchestra/pest-plugin-testbench": "^4.0|^5.0"
+        "orchestra/pest-plugin-testbench": "^4.0|^5.0",
+        "packstub/holler": "^1.0"
     },
     "autoload": {
         "psr-4": {
@@ -82,7 +83,7 @@
         "docs": "https://packstub.dev/docs/session-replay"
     },
     "suggest": {
-        "packstub/holler": "Assist: a visitor who asks for help and the agent who takes the request are put on a call (WebRTC, signaling over polled HTTP, no websockets).",
+        "packstub/holler": "Assist's live view (^1.0): a visitor who asks for help and the agent who takes the request are put on a call (WebRTC, signaling over polled HTTP, no websockets).",
         "packstub/filament-session-replay": "The sessions inside a Filament v5 panel: a filterable resource, the player with timeline tabs, a relation manager for your users, masking declared on the form field.",
         "packstub/filament-tenancy": "Database-per-tenant panels: recordings stay on the central connection with the workspace they belong to."
     },

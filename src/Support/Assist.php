@@ -60,6 +60,9 @@ class Assist
      */
     public const SWEEP_EVERY_SECONDS = 5;
 
+    /** How often the visitor's poll asks canAssist again for the agent of a claimed or live request. */
+    public const RECHECK_AGENT_SECONDS = 10;
+
     public function enabled(): bool
     {
         return (bool) config('session-replay.assist.enabled', false);
@@ -89,6 +92,56 @@ class Assist
     public function videoAllowed(): bool
     {
         return $this->callsAvailable() && app(CallContext::class)->hasVideo();
+    }
+
+    /**
+     * The Content-Security-Policy for a page that shows the live mirror (the built-in stage; a page of your own that
+     * hosts it should send it too). The mirror is rebuilt from what the visitor's browser sends, and rrweb's iframe
+     * inherits the page's policy, so without it a visitor could make the agent's browser fetch any URL (an image, a
+     * url() or an @import) and learn the agent's address. Images, styles, fonts, media and frames load from this
+     * origin, the app's own (app.url, app.asset_url) and assist.mirror_sources only; scripts and connections are
+     * left to the app's own policy. Null when assist.mirror_sources holds "*".
+     */
+    public function mirrorPolicy(): ?string
+    {
+        $extra = array_map('trim', array_values(array_filter((array) config('session-replay.assist.mirror_sources', []), 'is_string')));
+
+        if (in_array('*', $extra, true)) {
+            return null;
+        }
+
+        $sources = [];
+
+        foreach ([config('app.url'), config('app.asset_url'), ...$extra] as $source) {
+            $source = is_string($source) ? trim($source) : '';
+
+            // Printable ASCII only: no space, line break or control character a header would split on.
+            if (preg_match('/^[\x21-\x7E]+$/', $source) !== 1) {
+                continue;
+            }
+
+            $parts = parse_url($source);
+
+            if (is_array($parts) && isset($parts['scheme'], $parts['host'])) {
+                $source = strtolower($parts['scheme'].'://'.$parts['host']).(isset($parts['port']) ? ':'.$parts['port'] : '');
+            }
+
+            // A source expression, never a way into another directive or a keyword.
+            if (strpbrk($source, ';,\'"') === false) {
+                $sources[$source] = true;
+            }
+        }
+
+        $origins = implode('', array_map(fn (string $source) => ' '.$source, array_keys($sources)));
+
+        return implode('; ', [
+            "img-src 'self' data: blob:".$origins,
+            "style-src 'self' 'unsafe-inline'".$origins,
+            "font-src 'self' data:".$origins,
+            "media-src 'self' data: blob: mediastream:".$origins,
+            "frame-src 'self'".$origins,
+            "object-src 'none'",
+        ]);
     }
 
     /** packstub/holler is installed and booted, and assist.calls leaves it on. */
@@ -123,7 +176,7 @@ class Assist
         $existing = $lockKey === null ? null : AssistRequest::query()->pending()->where('lock_key', $lockKey)->first();
 
         if ($existing !== null) {
-            return [$existing, $this->issueSecret($existing, $context), false];
+            return [$this->sameAsker($existing, $context), $this->issueSecret($existing, $context), false];
         }
 
         $this->sweep([$context->tenantType, $context->tenantId]);
@@ -155,12 +208,28 @@ class Assist
             // The same tab asked twice at once: the other request is the one.
             $existing = AssistRequest::query()->pending()->where('lock_key', $lockKey)->firstOrFail();
 
-            return [$existing, $this->issueSecret($existing, $context), false];
+            return [$this->sameAsker($existing, $context), $this->issueSecret($existing, $context), false];
         }
 
         AssistRequested::dispatch($request);
 
         return [$request, $secret, true];
+    }
+
+    /**
+     * The request a recording or tab has going, handed back only to the person and workspace it belongs to: a page out
+     * of a full-page cache shares its nonce, so another person with the same tab id would otherwise read its status.
+     * An agent's offer whose secret was never issued has no identity yet (issueSecret() sets it).
+     *
+     * @throws AssistRefused
+     */
+    protected function sameAsker(AssistRequest $existing, ContextToken $context): AssistRequest
+    {
+        if (! $existing->sameTenantAs($context) || ($existing->secret_hash !== null && ! $existing->sameIdentityAs($context))) {
+            throw new AssistRefused(409, 'This tab has a request going for someone else.', 'state');
+        }
+
+        return $existing;
     }
 
     /**
@@ -231,6 +300,7 @@ class Assist
             AssistRequest::query()->whereKey($request->getKey())->update(['visitor_seen_at' => now()]);
             $request->refresh();
             $this->expire($request);
+            $this->recheckAgent($request);
         }
 
         // The claim is acknowledged by creating the call, once the agent's stage is there (a claim made a moment ago,
@@ -443,11 +513,15 @@ class Assist
             ->where(fn ($query) => $query->whereIn('status', [AssistRequest::OPEN, AssistRequest::CLAIMED])->orWhere(fn ($mine) => $this->whereHolder($mine, $agent)))
             ->when($tenant, fn ($query, Model $tenant) => $query->where('tenant_type', $tenant->getMorphClass())->where('tenant_id', (string) $tenant->getKey()))
             ->when($workspace, fn ($query, Model $workspace) => $query->where('tenant_type', $workspace->getMorphClass())->where('tenant_id', (string) $workspace->getKey()))
-            ->where(function ($query) use ($agent): void {
+            ->where(function ($query) use ($agent, $scopes): void {
                 // A request without a recording has nothing for visibleUsing() to look at: with a rule there, it is
                 // shown only when canAssistUsing() decides (fail closed), or a viewer of one workspace would see another's.
+                // One of a workspace needs the agent's workspace named (or the agent holding it), not the gate alone.
                 if (SessionReplay::assistsWithoutRecording()) {
-                    $query->whereNull('replay_session_id');
+                    $query->where(fn ($none) => $none->whereNull('replay_session_id')->when(
+                        ! SessionReplay::assistsWithoutRecording(true, $scopes !== []),
+                        fn ($none) => $none->where(fn ($ours) => $ours->whereNull('tenant_id')->orWhere(fn ($mine) => $this->whereHolder($mine, $agent))),
+                    ));
                 }
 
                 $query->orWhereIn('replay_session_id', SessionReplay::visibleTo(ReplaySession::query(), $agent)->select('id'));
@@ -463,10 +537,13 @@ class Assist
     /**
      * Whether this agent may see and act on this request: the workspace the app's tenantUsing() gives for the agent's
      * request (when it gives one), the recording in their list (visibleUsing()), and canAssist(). A request without a
-     * recording, while visibleUsing() narrows the list and no canAssistUsing() decides, is nobody's. Asked on every
+     * recording, while visibleUsing() narrows the list and no canAssistUsing() decides, is nobody's; one of a workspace
+     * is only for an agent placed in it (tenantUsing(), $workspace, or the agent holds it already). Asked on every
      * agent endpoint.
+     *
+     * @param  ?Model  $workspace  the agent's workspace when the caller knows it (a panel scoped to its tenant)
      */
-    public function visibleTo(AssistRequest $request, mixed $agent): bool
+    public function visibleTo(AssistRequest $request, mixed $agent, ?Model $workspace = null): bool
     {
         if (! $agent instanceof Authenticatable) {
             return false;
@@ -474,11 +551,13 @@ class Assist
 
         $tenant = $this->agentTenant();
 
-        if ($tenant !== null && ($request->tenant_type !== $tenant->getMorphClass() || $request->tenant_id !== (string) $tenant->getKey())) {
-            return false;
+        foreach ([$tenant, $workspace] as $scope) {
+            if ($scope !== null && ($request->tenant_type !== $scope->getMorphClass() || $request->tenant_id !== (string) $scope->getKey())) {
+                return false;
+            }
         }
 
-        if ($request->replay_session_id === null && ! SessionReplay::assistsWithoutRecording()) {
+        if ($request->replay_session_id === null && ! SessionReplay::assistsWithoutRecording($request->tenant_id !== null, $tenant !== null || $workspace !== null || $this->holds($agent, $request))) {
             return false;
         }
 
@@ -494,9 +573,9 @@ class Assist
      *
      * @throws AssistRefused
      */
-    public function claim(Authenticatable $agent, AssistRequest $request): void
+    public function claim(Authenticatable $agent, AssistRequest $request, ?Model $workspace = null): void
     {
-        if (! $this->visibleTo($request, $agent)) {
+        if (! $this->visibleTo($request, $agent, $workspace)) {
             throw new AssistRefused(403, __('session-replay::viewer.assist.not_allowed'), 'not_allowed');
         }
 
@@ -551,6 +630,24 @@ class Assist
             throw $this->exists($existing);
         }
 
+        // After a "Not now", nobody offers again on this recording for a while: the page would ask on every heartbeat.
+        // Nor on another recording of the same signed-in person (another tab, a recording started after an idle
+        // timeout): the no was theirs, not the tab's.
+        $cooldown = max(0, (int) config('session-replay.assist.decline_cooldown_seconds', 300));
+
+        if ($cooldown > 0 && AssistRequest::query()
+            ->where('status', AssistRequest::DECLINED)
+            ->where('ended_at', '>', now()->subSeconds($cooldown))
+            ->where(fn (Builder $query) => $query->where('replay_session_id', $session->getKey())->when(
+                $session->user_id !== null,
+                fn (Builder $query) => $query->orWhere(fn (Builder $person) => $person
+                    ->where('user_type', $session->user_type)->where('user_id', (string) $session->user_id)
+                    ->when($session->tenant_id === null, fn (Builder $query) => $query->whereNull('tenant_id'), fn (Builder $query) => $query->where('tenant_type', $session->tenant_type)->where('tenant_id', (string) $session->tenant_id))),
+            ))
+            ->exists()) {
+            throw new AssistRefused(429, __('session-replay::viewer.assist.declined_recently'), 'declined_recently');
+        }
+
         $request = (new AssistRequest)->forceFill([
             'id' => strtolower((string) Str::uuid()),
             'replay_session_id' => $session->getKey(),
@@ -596,6 +693,44 @@ class Assist
         }
 
         return $request;
+    }
+
+    /**
+     * The visitor's poll asks canAssist again for the agent of a claimed or live request, at most every
+     * RECHECK_AGENT_SECONDS: an agent whose rights were taken away goes, even when their stage stopped polling.
+     */
+    protected function recheckAgent(AssistRequest $request): void
+    {
+        if (! in_array($request->status, [AssistRequest::CLAIMED, AssistRequest::ACTIVE], true) || $request->agent_id === null) {
+            return;
+        }
+
+        if (! Cache::add('session-replay|assist-agent-check|'.$request->getKey(), true, self::RECHECK_AGENT_SECONDS)) {
+            return;
+        }
+
+        $agent = $this->agentModel($request);
+
+        if ($agent === null || ! SessionReplay::canAssist($agent, $request->session, $request)) {
+            $this->notAllowedAnyMore($request);
+        }
+    }
+
+    /**
+     * The agent who holds the request may not help with it any more (a role taken away, another workspace, the
+     * person removed): a live assist ends with its call, an agent's offer is withdrawn or ended, and a visitor's
+     * claimed request goes back to the list for someone else.
+     */
+    public function notAllowedAnyMore(AssistRequest $request): void
+    {
+        match (true) {
+            $request->status === AssistRequest::ACTIVE => $this->finish($request, [AssistRequest::ACTIVE], AssistRequest::ENDED, 'not_allowed'),
+            $request->status === AssistRequest::OPEN && $request->openedByAgent() => $this->finish($request, [AssistRequest::OPEN], AssistRequest::WITHDRAWN, 'not_allowed'),
+            $request->status === AssistRequest::CLAIMED && $request->openedByAgent() => $this->finish($request, [AssistRequest::CLAIMED], AssistRequest::ENDED, 'not_allowed'),
+            $request->status === AssistRequest::CLAIMED => $request->transition([AssistRequest::CLAIMED], AssistRequest::OPEN, AssistRequest::UNCLAIMED)
+                && $this->revokeGrants($request, 'not_allowed'),
+            default => null,
+        };
     }
 
     /**

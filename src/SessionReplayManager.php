@@ -174,11 +174,17 @@ class SessionReplayManager
 
     /**
      * Whether a request without a recording may be shown to agents at all: nothing there for visibleUsing() to look at,
-     * so while that rule narrows the list, only a canAssistUsing() rule decides (fail closed).
+     * so while that rule narrows the list, only a canAssistUsing() rule decides (fail closed). A request of a workspace
+     * ($ofAWorkspace) is shown without such a rule only to an agent placed in that workspace ($agentInIt: the workspace
+     * tenantUsing() or the caller names for them, or the agent already holds it), never on the gate alone.
      */
-    public function assistsWithoutRecording(): bool
+    public function assistsWithoutRecording(bool $ofAWorkspace = false, bool $agentInIt = false): bool
     {
-        return $this->visibleUsing === null || $this->canAssistUsing !== null;
+        if ($this->canAssistUsing !== null) {
+            return true;
+        }
+
+        return $this->visibleUsing === null && (! $ofAWorkspace || $agentInIt);
     }
 
     /** The workspace the app's tenantUsing() names for this request, or null (no rule, or none). */
@@ -544,6 +550,7 @@ class SessionReplayManager
             'video' => $calls && $assist->videoAllowed(),
             'button' => (bool) config('session-replay.assist.button', false),
             'controlMasked' => (bool) config('session-replay.assist.control_masked', false),
+            'controlAcrossPages' => (bool) config('session-replay.assist.control_across_pages', true),
             'heartbeatMs' => max(5, (int) config('session-replay.assist.heartbeat_seconds', 15)) * 1000,
             'poll' => [
                 'waiting' => max(1000, (int) config('session-replay.assist.poll.waiting_ms', 3000)),

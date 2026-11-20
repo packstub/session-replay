@@ -1,10 +1,10 @@
 // End-to-end: Assist for real between two browsers on the workbench (`composer serve`'s app): a visitor whose
 // page records and asks for help, and an agent who claims the request and works on the live stage. Headless
 // Chromium with a fake microphone and camera; WebRTC over loopback. `npm run test:e2e` (the server is started
-// here, with packstub/holler installed from the sibling checkout as AGENTS.md describes).
+// here; packstub/holler comes from require-dev).
 
 import { defineConfig, devices } from '@playwright/test';
-import { writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -36,6 +36,24 @@ function silentWav() {
     return path;
 }
 
+/**
+ * The e2e server's own database and cache, in a fresh temporary directory: `composer serve` (the workbench's
+ * shared SQLite file) keeps its requests and recordings, and the e2e runs never meet its rate limits.
+ */
+function ownState() {
+    const dir = mkdtempSync(join(tmpdir(), 'session-replay-e2e-'));
+    const database = join(dir, 'database.sqlite');
+    const cache = join(dir, 'cache');
+
+    writeFileSync(database, '');
+    mkdirSync(cache);
+
+    return `DB_CONNECTION=sqlite DB_DATABASE='${database}' WORKBENCH_CACHE_PATH='${cache}'`;
+}
+
+// Made once: the config is loaded again in every worker, which inherits the environment.
+const STATE = (process.env.SESSION_REPLAY_E2E_STATE ||= ownState());
+
 export default defineConfig({
     testDir: 'tests/e2e',
     timeout: 120_000,
@@ -58,9 +76,10 @@ export default defineConfig({
     projects: [{ name: 'chromium', use: { ...devices['Desktop Chrome'] } }],
 
     webServer: {
-        // Several PHP workers: the visitor's page and the agent's stage poll at the same time. Holler drops a side
+        // --no-reload: without it `serve` drops every variable it does not know before starting the workers, so the
+        // own database, cache and Holler's timeout would never reach them. Several PHP workers: the visitor's page and the agent's stage poll at the same time. Holler drops a side
         // after 6 s instead of 15, so the test of an agent leaving the live view and coming back is quick.
-        command: `php vendor/bin/testbench workbench:build && HOLLER_RECONNECT_TIMEOUT=6 PHP_CLI_SERVER_WORKERS=8 php vendor/bin/testbench serve --port=${PORT}`,
+        command: `${STATE} php vendor/bin/testbench migrate:fresh --force && ${STATE} HOLLER_RECONNECT_TIMEOUT=6 PHP_CLI_SERVER_WORKERS=8 php vendor/bin/testbench serve --no-reload --port=${PORT}`,
         url: `${BASE_URL}/login`,
         reuseExistingServer: !process.env.CI,
         timeout: 180_000,

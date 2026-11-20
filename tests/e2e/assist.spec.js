@@ -69,6 +69,14 @@ test('an agent claims a request and helps on the live stage: mirror, control, an
     agent.on('pageerror', (error) => consoleErrors.push(`agent: ${error.message}`));
     visitor.on('pageerror', (error) => consoleErrors.push(`visitor: ${error.message}`));
 
+    // What the agent's browser was made to fetch from a host the visitor's page chose: a request the CSP stopped
+    // fails with "csp" before it leaves the browser; anything else went out (or tried to: the host does not resolve).
+    const leaks = [];
+    const leaked = (request, how) => request.url().includes('leak.invalid') && how !== 'csp' && leaks.push(`${request.url()} (${how})`);
+
+    agent.on('requestfinished', (request) => leaked(request, 'finished'));
+    agent.on('requestfailed', (request) => leaked(request, request.failure()?.errorText));
+
     // ---- Ada's page records, then asks for help -------------------------------------------------
 
     const firstUpload = visitor.waitForResponse((response) => response.url().includes('/session-replay/ingest') && response.status() === 201, { timeout: 30_000 });
@@ -107,6 +115,17 @@ test('an agent claims a request and helps on the live stage: mirror, control, an
 
     await visitor.locator('#add').click();
     await expect(mirror.locator('#list li')).toHaveCount(1);
+
+    // An image the visitor's page adds from a host of its choosing reaches the mirror, but the stage's CSP keeps the
+    // agent's browser from fetching it (and so from telling that host the agent's address).
+    await visitor.evaluate(() => document.body.append(Object.assign(document.createElement('img'), { id: 'leak', src: 'http://leak.invalid/pixel.png', alt: '' })));
+    await expect(mirror.locator('#leak')).toHaveCount(1);
+    // A preload has no directive of the stage's policy to stop it: the mirror takes its rel off.
+    await visitor.evaluate(() => document.body.append(Object.assign(document.createElement('link'), { id: 'leak-link', rel: 'preload', as: 'fetch', href: 'http://leak.invalid/data.json' })));
+    await expect(mirror.locator('#leak-link')).toHaveCount(1);
+    expect(await mirror.locator('#leak-link').getAttribute('rel')).toBeNull();
+    await agent.waitForTimeout(500);
+    expect(leaks).toEqual([]);
 
     // ---- the pointer: Ana only watches, and Ada sees where she points ------------------------------
 
@@ -179,6 +198,46 @@ test('an agent claims a request and helps on the live stage: mirror, control, an
     await expect(visitor.locator('#list li')).toHaveCount(2);
     await expect(mirror.locator('#list li')).toHaveCount(2);
 
+    // ---- control goes on to the next page (assist.control_across_pages) ---------------------------
+
+    const nav = await mirror.locator('#nav').boundingBox();
+
+    await agent.mouse.click(nav.x + nav.width / 2, nav.y + nav.height / 2);
+    await expect(visitor).toHaveURL(/\/second$/);
+
+    // No new question: Ada is reminded, Ana keeps control and the stage says it went on.
+    await expect(visitor.getByText(/still controls this page/)).toBeVisible();
+    await expect(mirror.locator('h1')).toHaveText('Second page', { timeout: 30_000 });
+    await expect(agent.getByText('Control went on to the visitor’s next page.')).toBeVisible({ timeout: 30_000 });
+    await expect(agent.getByRole('button', { name: 'Release control' })).toBeVisible();
+    await expect(visitor.getByText(/would like to control this page/)).toBeHidden();
+    await expect.poll(async () => (await cursorOnVisitor(visitor))?.frame).toBe(true);
+
+    // And acts there.
+    const addHere = await mirror.locator('#add').boundingBox();
+
+    await agent.mouse.click(addHere.x + addHere.width / 2, addHere.y + addHere.height / 2);
+    await expect(visitor.locator('#list li')).toHaveCount(1);
+    await expect(mirror.locator('#list li')).toHaveCount(1);
+
+    // ---- typing into a masked field: the box waits for Ada's answer, then Ana's typing lands -----------
+
+    const street = await mirror.locator('#street').boundingBox();
+
+    await agent.mouse.click(street.x + street.width / 2, street.y + street.height / 2);
+    await expect(agent.locator('[data-ref="editor-hint"]')).toHaveText(/Waiting for the visitor to allow typing/);
+    await expect(agent.locator('[data-ref="editor-text"]')).toHaveAttribute('readonly', '');
+    await expect(visitor.getByText(/would like to type into fields that are hidden/)).toBeVisible();
+    if (process.env.ASSIST_E2E_SHOTS) await visitor.screenshot({ path: `${process.env.ASSIST_E2E_SHOTS}/masked-question.png` });
+    await visitor.getByRole('button', { name: 'Allow', exact: true }).click();
+
+    await expect(agent.getByText('The visitor allowed typing into fields you cannot see.')).toBeVisible();
+    await expect(agent.locator('[data-ref="editor-text"]')).not.toHaveAttribute('readonly', '');
+    // Right after Ada's press on Allow: her press in the panel does not pause Ana.
+    await agent.locator('[data-ref="editor-text"]').fill('Main Street 1');
+    await agent.locator('[data-ref="editor-text"]').press('Enter');
+    await expect(visitor.locator('#street')).toHaveValue('Main Street 1');
+
     // ---- an annotation drawn over Ada's page -------------------------------------------------------
 
     await agent.getByRole('button', { name: 'Draw' }).click();
@@ -231,10 +290,20 @@ test('an agent claims a request and helps on the live stage: mirror, control, an
 
     // The grants log on the server shows what was asked and what was allowed.
     const requestId = new URL(agent.url()).pathname.split('/').at(-2);
-    const grants = await agent.evaluate(async (id) => (await (await fetch(`/session-replay/assist/requests/${id}/status`, { headers: { Accept: 'application/json' } })).json()).grants, requestId);
+    const readGrants = () => agent.evaluate(async (id) => (await (await fetch(`/session-replay/assist/requests/${id}/status`, { headers: { Accept: 'application/json' } })).json()).grants, requestId);
+    // The visitor's page posts each grant on its own: the end of control may land a moment after the stage saw it.
+    let grants = [];
+
+    const settled = (list) =>
+        ['control', 'audio'].every((kind) => list.some((entry) => entry.by === 'visitor' && entry.granted && entry.kind === kind)) &&
+        list.filter((entry) => entry.by === 'visitor' && entry.kind === 'control').length >= 2;
+
+    await expect.poll(async () => settled((grants = await readGrants())), { timeout: 15_000 }).toBe(true);
 
     expect(grants.filter((entry) => entry.by === 'agent').map((entry) => entry.kind)).toEqual(expect.arrayContaining(['control', 'audio']));
     expect(grants.filter((entry) => entry.by === 'visitor' && entry.granted).map((entry) => entry.kind)).toEqual(expect.arrayContaining(['control', 'audio']));
+    // One control period across both pages: allowed once, ended once.
+    expect(grants.filter((entry) => entry.by === 'visitor' && entry.kind === 'control').map((entry) => entry.granted)).toEqual([true, false]);
 
     // ---- the end -------------------------------------------------------------------------------------
 

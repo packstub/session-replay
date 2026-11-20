@@ -569,6 +569,23 @@ test('typing uses the native setter and an input event, and refuses passwords an
     assert.deepEqual(name.events.map((event) => event.type), ['input', 'change']);
 });
 
+test('focus refuses a field the agent may not type into, so the typing box says why before a key is pressed', () => {
+    const name = new FakeInput('input', { type: 'text' });
+    const password = new FakeInput('input', { type: 'password' });
+    const masked = new FakeInput('input', { type: 'text' });
+    const readonly = new FakeInput('input', { type: 'text', readOnly: true });
+    let allowed = false;
+    const { control } = controlEnv({ nodes: { 1: name, 2: password, 3: masked, 4: readonly }, masked: (element) => element === masked || element === password, maskedAllowed: () => allowed });
+
+    assert.deepEqual(control.focus(1), { ok: true });
+    assert.deepEqual(control.focus(2), { refused: 'password' });
+    assert.deepEqual(control.focus(3), { refused: 'masked' });
+    assert.deepEqual(control.focus(4), { refused: 'readonly' });
+    allowed = true;
+    assert.deepEqual(control.focus(3), { ok: true });
+    assert.deepEqual(control.focus(2), { refused: 'password' });
+});
+
 test('select picks an existing option only', () => {
     const select = new FakeInput('select', { options: [{ value: 'ro' }, { value: 'de' }] });
     const { control } = controlEnv({ nodes: { 8: select } });
