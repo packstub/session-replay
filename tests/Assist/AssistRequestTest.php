@@ -1,6 +1,9 @@
 <?php
 
+use Illuminate\Database\QueryException;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Event;
+use Illuminate\Support\Facades\Schema;
 use Illuminate\Support\Str;
 use Packstub\SessionReplay\Events\AssistClaimed;
 use Packstub\SessionReplay\Events\AssistEnded;
@@ -614,4 +617,39 @@ it('places the marker at the server\'s time for a recording with nothing stored,
     $this->postJson(route('session-replay.assist.end', $second['id']))->assertOk();
 
     expect(ReplayMarker::query()->where('type', 'assist')->latest('id')->first()->at_ms)->toBe(now()->getTimestampMs());
+});
+
+it('keeps a grant whose write first found the database locked', function () {
+    [$browser, $asked] = $this->claimed();
+
+    // SQLite in WAL mode answers "database is locked" at once when another request wrote between this
+    // transaction's read and its write. Once here, on the first save of the log.
+    $locked = false;
+    AssistRequest::saving(function () use (&$locked): void {
+        if (! $locked) {
+            $locked = true;
+
+            throw new QueryException('testing', 'update "replay_assist_requests"', [], new PDOException('SQLSTATE[HY000]: General error: 5 database is locked'));
+        }
+    });
+
+    // Laravel retries only the outermost transaction: step out of the test's own for the grant, then put it back.
+    $connection = DB::connection();
+    $connection->commit();
+
+    try {
+        $this->visitorPost('grants', $asked['id'], $asked['secret'], $browser['token'], ['kind' => 'control', 'granted' => true])->assertOk();
+
+        expect($locked)->toBeTrue()
+            ->and(collect(AssistRequest::query()->findOrFail($asked['id'])->grants)->where('by', 'visitor')->pluck('kind')->all())->toBe(['control']);
+    } finally {
+        // What the test committed would outlive it: the in-memory database is shared by the whole run.
+        foreach (Schema::getTableListing(schemaQualified: false) as $table) {
+            if ($table !== 'migrations') {
+                DB::table($table)->delete();
+            }
+        }
+
+        $connection->beginTransaction();
+    }
 });
