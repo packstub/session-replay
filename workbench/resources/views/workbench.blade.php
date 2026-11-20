@@ -23,6 +23,21 @@
         <p data-replay-block>This whole box is blocked.</p>
     </div>
 
+    {{-- Assist: support can fill these with remote control, once the visitor allows typing into masked fields. --}}
+    <div class="box" id="delivery">
+        <strong>Delivery details</strong> <small>(support can fill these after you allow it)</small><br>
+        <label>Street <input id="street" type="text" placeholder="Street and number"></label><br>
+        <label>Country
+            <select id="country">
+                <option value="">Choose…</option>
+                <option value="de">Germany</option>
+                <option value="ro">Romania</option>
+                <option value="es">Spain</option>
+            </select>
+        </label><br>
+        <label>Note for the courier<br><textarea id="courier-note" rows="2" cols="40"></textarea></label>
+    </div>
+
     <button id="error">Throw an error</button>
     <button id="log">console.error</button>
     <button id="boom">Server error</button>

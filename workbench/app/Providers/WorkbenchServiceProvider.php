@@ -22,6 +22,9 @@ class WorkbenchServiceProvider extends ServiceProvider
         // Before the package boots: Assist's routes and its Holler listener are registered at boot.
         config()->set('session-replay.assist.enabled', (bool) env('SESSION_REPLAY_ASSIST', true));
         config()->set('session-replay.assist.button', (bool) env('SESSION_REPLAY_ASSIST_BUTTON', true));
+        // Every field is masked (mask_all_inputs): the agent types into one only after the visitor allows it, a
+        // prompt of its own. On here, so the "Delivery details" box can be filled from the stage.
+        config()->set('session-replay.assist.control_masked', (bool) env('SESSION_REPLAY_ASSIST_CONTROL_MASKED', true));
 
         // The visitor's page and the agent's stage poll at once (PHP_CLI_SERVER_WORKERS): wait for a lock, never fail.
         config()->set('database.connections.sqlite.busy_timeout', 10000);
