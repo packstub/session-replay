@@ -341,6 +341,9 @@ export class AgentState {
         this.continuing = false;
         // A new channel: its first `state` settles a control still continuing (the page sends the grant before it).
         this.settling = false;
+        // The visitor's answer about typing into masked fields (assist.control_masked): 'off', 'asking' or 'on'.
+        // Ends with control.
+        this.masked = 'off';
         this.audio = 'off';
         this.video = 'off';
         this.screen = 'off';
@@ -554,6 +557,7 @@ export class AgentState {
                 }
 
                 this.control = 'off';
+                this.masked = 'off';
 
                 return [{ stopControl: true }, { note: 'control_released', reason: message.reason }];
             case 'control.refused':
@@ -588,6 +592,21 @@ export class AgentState {
                 this.mode = 'mirror';
 
                 return [{ mode: 'mirror' }, { note: message.t === 'screen.stopped' ? 'screen_stopped' : message.reason === 'cooldown' ? 'cooldown' : message.reason === 'unavailable' ? 'visitor_screen_unavailable' : 'screen_refused' }];
+            case 'masked.asking':
+                this.masked = 'asking';
+
+                return [{ masked: 'asking' }, { note: 'masked_asked' }];
+            case 'masked.granted':
+                this.masked = 'on';
+
+                return [{ masked: 'granted' }, { note: 'masked_granted' }];
+            case 'masked.declined': {
+                this.masked = 'off';
+
+                const note = message.reason === 'cooldown' ? 'cooldown' : message.reason === 'timeout' ? 'masked_timeout' : 'masked_refused';
+
+                return [{ masked: 'declined', reason: message.reason }, { note }];
+            }
             case 'bye':
                 return [{ note: 'visitor_left' }];
             default:

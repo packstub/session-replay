@@ -3,7 +3,7 @@ import '@rrweb/replay/dist/style.css';
 import './stage.css';
 import { HttpSignaling, drain } from '@packstub/holler';
 import { AssistClient, workerTimers } from './lib/assist-client.js';
-import { AGENT_RATE, CHANNEL_LABEL, Endpoint, FEATURE_POINT, FROM_VISITOR } from './lib/assist-protocol.js';
+import { AGENT_RATE, CHANNEL_LABEL, Endpoint, FEATURE_MASKED, FEATURE_POINT, FROM_VISITOR } from './lib/assist-protocol.js';
 import { AgentState, FINISHED, Gesture, LIVE_BUFFER_MS, LiveFeed, Pointer, ago, editable, handleVisitorMessage, pointerWhy, reasonKey, stageDelta, stagePhase, stagePoint, stageStop } from './lib/assist-stage.js';
 
 /**
@@ -510,6 +510,8 @@ function mountStage(root) {
             drain,
             // A page that sends more than the replay can take is let go (the visitor's side reconnects).
             rate: AGENT_RATE,
+            // Where the masked-typing question stands: the typing box waits for the visitor's answer.
+            can: [FEATURE_MASKED],
             onReady() {
                 state.open();
                 note('connected');
@@ -567,6 +569,9 @@ function mountStage(root) {
                 closeEditor();
             }
             if (effect.note === 'action_refused') refuseEditor(effect.reason ?? null);
+            if (effect.masked === 'asking') waitEditor();
+            if (effect.masked === 'granted') resumeEditor();
+            if (effect.masked === 'declined') refuseEditor(null, t(effect.reason === 'cooldown' ? 'notes.masked_cooldown' : effect.reason === 'timeout' ? 'notes.masked_timeout' : 'notes.masked_refused'));
             // Control went on to the visitor's next page: its snapshot is in the feed, played LIVE_BUFFER_MS late.
             if (effect.continued) actFrom = performance.now() + LIVE_BUFFER_MS + 100;
             // Let go of while the page loaded, and the new page took it over: given back.
@@ -948,7 +953,7 @@ function mountStage(root) {
 
         editing = { id, kind, timer: null };
         els.editorText.readOnly = false;
-        els.editor.classList.remove('is-refused');
+        els.editor.classList.remove('is-refused', 'is-waiting');
         if (els.editorHint) els.editorHint.textContent = editorHint;
         els.editor.hidden = false;
         send({ t: 'focus', id });
@@ -967,11 +972,13 @@ function mountStage(root) {
      * The visitor's page refused the field (masked, a password, read-only): the box stays where the agent looks,
      * says why and takes no more typing; Escape, a click elsewhere or the next field closes it.
      */
-    function refuseEditor(reason) {
+    function refuseEditor(reason, text = null) {
         if (!editing) return;
 
         clearTimeout(editing.timer);
         editing.refused = true;
+        editing.waiting = false;
+        els.editor.classList.remove('is-waiting');
         // Read-only rather than disabled: the box keeps the focus, so Escape still closes it.
         els.editorText.value = '';
         els.editorText.readOnly = true;
@@ -979,11 +986,35 @@ function mountStage(root) {
         els.editorSelect.hidden = true;
         els.editorText.focus();
         els.editor.classList.add('is-refused');
-        if (els.editorHint) els.editorHint.textContent = t('notes.action_refused', { reason: reason === null ? '' : t(`reasons.${reasonKey(reason)}`) });
+        if (els.editorHint) els.editorHint.textContent = text ?? t('notes.action_refused', { reason: reason === null ? '' : t(`reasons.${reasonKey(reason)}`) });
+    }
+
+    /** The field is masked and the visitor is being asked whether the agent may type into it: the box waits, read-only. */
+    function waitEditor() {
+        if (!editing || editing.refused) return;
+
+        clearTimeout(editing.timer);
+        editing.waiting = true;
+        els.editorText.readOnly = true;
+        els.editor.classList.add('is-waiting');
+        if (els.editorHint) els.editorHint.textContent = t('editor_waiting');
+    }
+
+    /** The visitor allowed typing into masked fields: the box takes typing again and the field gets its focus. */
+    function resumeEditor() {
+        if (!editing) return;
+
+        editing.waiting = false;
+        editing.refused = false;
+        els.editorText.readOnly = false;
+        els.editor.classList.remove('is-waiting', 'is-refused');
+        if (els.editorHint) els.editorHint.textContent = editorHint;
+        send({ t: 'focus', id: editing.id });
+        (editing.kind === 'select' ? els.editorSelect : els.editorText).focus();
     }
 
     els.editorText?.addEventListener('input', () => {
-        if (!editing || editing.refused) return;
+        if (!editing || editing.refused || editing.waiting) return;
 
         clearTimeout(editing.timer);
 
@@ -997,7 +1028,7 @@ function mountStage(root) {
 
         event.preventDefault();
 
-        if (editing && !editing.refused && event.key === 'Enter') {
+        if (editing && !editing.refused && !editing.waiting && event.key === 'Enter') {
             clearTimeout(editing.timer);
             send({ t: 'input', id: editing.id, value: els.editorText.value.slice(0, 4096) });
         }
@@ -1007,7 +1038,7 @@ function mountStage(root) {
     });
 
     els.editorSelect?.addEventListener('change', () => {
-        if (editing && !editing.refused) send({ t: 'select', id: editing.id, value: els.editorSelect.value });
+        if (editing && !editing.refused && !editing.waiting) send({ t: 'select', id: editing.id, value: els.editorSelect.value });
     });
 
     els.editorSelect?.addEventListener('keydown', (event) => {

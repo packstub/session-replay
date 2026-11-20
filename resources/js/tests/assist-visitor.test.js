@@ -149,7 +149,11 @@ function fakeUi() {
         get promptOpen() {
             return prompts.some((prompt) => !prompt.done);
         },
-        contains: () => false,
+        /** The panel's shadow host: what a press in the panel targets, seen from the document. */
+        host: { panel: true },
+        contains(element) {
+            return element === this.host;
+        },
         cursorState: cursor,
         outlined: false,
         cursor: {
@@ -208,7 +212,7 @@ function fakeTimers() {
 const routes = Object.fromEntries(['poll', 'accept', 'decline', 'cancel', 'hangup', 'leave', 'signal', 'grants'].map((name) => [name, `/sr/assist/requests/__ID__/${name}`]));
 
 /** A visitor whose request is live with Ana (agent 5), the channel open and both hellos said. */
-async function live({ stored = {}, video = false, devices = { media: true, screen: true }, assist = {}, store: carriedStore = null, clock: startAt = 1_000_000, arrival = null, href = 'https://shop.test/checkout', mirrored = true, onInstall = null } = {}) {
+async function live({ stored = {}, video = false, devices = { media: true, screen: true }, assist = {}, store: carriedStore = null, clock: startAt = 1_000_000, arrival = null, href = 'https://shop.test/checkout', mirrored = true, onInstall = null, agentCan = [], nodes = {} } = {}) {
     let clock = startAt;
     // A store from a page before (the same tab's sessionStorage), or a fresh request.
     const store = carriedStore ?? new Map([['sr:assist', JSON.stringify({ id: 'r1', secret: 's3cret', status: 'active', openedBy: 'visitor', agent: { id: '5', name: 'Ana' }, grants: {}, ...stored })]]);
@@ -246,7 +250,7 @@ async function live({ stored = {}, video = false, devices = { media: true, scree
         recording: () => ({ id: 'rec-1', key: 'k1' }),
         snapshot: () => mirrored,
         mirrors: () => page.mirrors,
-        node: () => null,
+        node: (id) => nodes[id] ?? null,
         goLive() {},
         touch() {},
         redacted: (url) => url,
@@ -273,7 +277,7 @@ async function live({ stored = {}, video = false, devices = { media: true, scree
 
     client.dispatchEvent(Object.assign(new Event('datachannel'), { detail: { channel: visitorSide, peer: { id: '5' } } }));
 
-    const agent = new Endpoint({ channel: agentSide, role: 'agent', schema: FROM_VISITOR, drain: async () => {}, onMessage: (message) => received.push(message) }).start();
+    const agent = new Endpoint({ channel: agentSide, role: 'agent', schema: FROM_VISITOR, drain: async () => {}, can: agentCan, onMessage: (message) => received.push(message) }).start();
 
     await settle();
 
@@ -847,4 +851,124 @@ test('wire:navigate with control_across_pages off ends control at once', async (
     await settle();
 
     assert.deepEqual(page.said().at(-1), { t: 'control.released', reason: 'navigation' });
+});
+
+// ---- typing into masked fields (assist.control_masked) ---------------------------------------------
+
+/** A text field on the visitor's page, in view; every field is masked for the agent (mask_all_inputs). */
+function textField() {
+    const field = Object.assign(new EventTarget(), {
+        nodeType: 1,
+        tagName: 'INPUT',
+        type: 'text',
+        value: '',
+        getBoundingClientRect: () => ({ left: 10, top: 10, right: 210, bottom: 40, width: 200, height: 30 }),
+        closest: () => null,
+        getRootNode() {
+            return this;
+        },
+        hasAttribute: () => false,
+        getAttribute: () => null,
+        focus() {},
+    });
+
+    return field;
+}
+
+/** A trusted event, as the browser's own (Node's Event takes the getter from a subclass). */
+class Trusted extends Event {
+    get isTrusted() {
+        return true;
+    }
+}
+
+async function withControl(options = {}) {
+    const field = textField();
+    const page = await live({ assist: { controlMasked: true }, nodes: { 7: field }, ...options });
+
+    globalThis.window.Event = Event;
+    await page.send({ t: 'control.request' });
+    await page.answer(true);
+
+    return { page, field };
+}
+
+test('the masked-typing question is told to a stage that takes it: asking, then granted, and the typing goes through', async () => {
+    const { page, field } = await withControl({ agentCan: ['masked'] });
+
+    await page.send({ t: 'focus', id: 7 });
+    assert.deepEqual(page.said().at(-1), { t: 'masked.asking' });
+    assert.equal(page.ui.open()[0].tag, 'masked');
+
+    await page.answer(true);
+    assert.deepEqual(page.said().slice(-1), [{ t: 'masked.granted' }]);
+    assert.deepEqual(page.grants.at(-1), ['control_masked', true]);
+
+    await page.send({ t: 'input', id: 7, value: 'Main Street 1' });
+    assert.equal(field.value, 'Main Street 1');
+});
+
+test('a no, a no a moment ago and a question left unanswered each reach the stage as their own reason, never as "masked"', async () => {
+    const { page } = await withControl({ agentCan: ['masked'] });
+
+    await page.send({ t: 'focus', id: 7 });
+    await page.answer(false);
+    assert.deepEqual(page.said().at(-1), { t: 'masked.declined', reason: 'declined' });
+
+    await page.send({ t: 'focus', id: 7 });
+    assert.equal(page.ui.open().length, 0);
+    assert.deepEqual(page.said().at(-1), { t: 'masked.declined', reason: 'cooldown' });
+
+    page.advance(10_000);
+    await page.send({ t: 'focus', id: 7 });
+    assert.deepEqual(page.said().at(-1), { t: 'masked.asking' });
+    page.advance(30_000);
+    await page.answer(false);
+    assert.deepEqual(page.said().at(-1), { t: 'masked.declined', reason: 'timeout' });
+
+    assert.equal(page.said().some((message) => message.t === 'control.refused' && message.reason === 'masked'), false);
+});
+
+test('a stage that does not name masked hears the refusal as before', async () => {
+    const { page } = await withControl();
+
+    await page.send({ t: 'focus', id: 7 });
+    assert.equal(page.said().some((message) => message.t.startsWith('masked.')), false);
+    await page.answer(false);
+    assert.deepEqual(page.said().at(-1), { t: 'control.refused', reason: 'masked' });
+});
+
+test('a press in the Assist panel (Allow) does not pause the agent', async () => {
+    const { page, field } = await withControl({ agentCan: ['masked'] });
+
+    await page.send({ t: 'focus', id: 7 });
+
+    // The visitor presses Allow: the pointerdown reaches the document with the panel's host as its target.
+    const press = new Trusted('pointerdown');
+
+    Object.defineProperty(press, 'target', { value: page.ui.host });
+    globalThis.document.dispatchEvent(press);
+    await page.answer(true);
+
+    // The agent types at once, and it lands.
+    await page.send({ t: 'input', id: 7, value: 'At once' });
+    assert.equal(field.value, 'At once');
+});
+
+test('typing that comes while the visitor\'s own activity pauses the agent is applied once the pause is over, the latest value', async () => {
+    const { page, field } = await withControl({ agentCan: ['masked'] });
+
+    await page.send({ t: 'focus', id: 7 });
+    await page.answer(true);
+
+    // The visitor moves their own mouse on the page: the agent pauses for a second.
+    globalThis.document.dispatchEvent(new Trusted('pointermove'));
+    await page.send({ t: 'input', id: 7, value: 'Main' });
+    await page.send({ t: 'input', id: 7, value: 'Main Street' });
+    assert.equal(field.value, '');
+
+    page.advance(1100);
+    await page.timers.run();
+    await settle();
+    assert.equal(field.value, 'Main Street');
 });

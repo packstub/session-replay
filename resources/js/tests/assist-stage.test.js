@@ -391,6 +391,35 @@ test('control across pages: a new page that does not take it over ends it on its
     assert.equal(state.control, 'off');
 });
 
+test('the masked-typing question as the stage sees it: asking, granted, and each kind of no with its own note', () => {
+    const state = new AgentState();
+
+    state.open();
+    state.askControl();
+    state.receive({ t: 'control.granted' });
+
+    assert.deepEqual(state.receive({ t: 'masked.asking' }), [{ masked: 'asking' }, { note: 'masked_asked' }]);
+    assert.equal(state.masked, 'asking');
+    assert.deepEqual(state.receive({ t: 'masked.granted' }), [{ masked: 'granted' }, { note: 'masked_granted' }]);
+    assert.equal(state.masked, 'on');
+
+    assert.deepEqual(state.receive({ t: 'masked.declined', reason: 'declined' }), [{ masked: 'declined', reason: 'declined' }, { note: 'masked_refused' }]);
+    assert.deepEqual(state.receive({ t: 'masked.declined', reason: 'timeout' }), [{ masked: 'declined', reason: 'timeout' }, { note: 'masked_timeout' }]);
+    assert.deepEqual(state.receive({ t: 'masked.declined', reason: 'cooldown' }), [{ masked: 'declined', reason: 'cooldown' }, { note: 'cooldown' }]);
+    assert.equal(state.masked, 'off');
+
+    // The consent ends with control.
+    state.receive({ t: 'masked.granted' });
+    state.receive({ t: 'control.released', reason: 'visitor' });
+    assert.equal(state.masked, 'off');
+});
+
+test('the masked messages are optional: valid from the visitor, named in the stage\'s hello', () => {
+    assert.deepEqual(validate({ t: 'masked.asking' }, FROM_VISITOR).message, { t: 'masked.asking' });
+    assert.deepEqual(validate({ t: 'masked.declined', reason: 'timeout', extra: 1 }, FROM_VISITOR).message, { t: 'masked.declined', reason: 'timeout' });
+    assert.equal(validate({ t: 'masked.asking' }, FROM_AGENT).ok, false);
+});
+
 test('the protocol keeps continued and paused, and only as true', () => {
     assert.deepEqual(validate({ t: 'control.granted', continued: true }, FROM_VISITOR).message, { t: 'control.granted', continued: true });
     assert.deepEqual(validate({ t: 'control.granted', continued: 'yes' }, FROM_VISITOR).message, { t: 'control.granted' });

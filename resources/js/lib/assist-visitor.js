@@ -1,6 +1,6 @@
 import { workerTimers } from './worker-timers.js';
 import { AssistSignaling } from './assist-signaling.js';
-import { CHANNEL_LABEL, Endpoint, FEATURE_POINT, FROM_AGENT, LiveStyles, encodeEvent } from './assist-protocol.js';
+import { CHANNEL_LABEL, Endpoint, FEATURE_MASKED, FEATURE_POINT, FROM_AGENT, LiveStyles, encodeEvent } from './assist-protocol.js';
 import { RemoteControl, maskedField } from './assist-control.js';
 import { isPointerSample } from './process.js';
 import { createUi, label } from '../assist-ui.js';
@@ -145,6 +145,10 @@ export function installAssist(recorder, env) {
     let stillTimer = null;
     // Control ended while no channel was up (a reconnect, a page that did not take it over): said on the next one.
     let untold = null;
+    // The agent's typing that came while the visitor's own activity paused them: the latest value per field,
+    // applied once the pause is over (an input or a select carries the whole value, so nothing is lost).
+    const deferred = new Map();
+    let deferTimer = null;
     let lastPoll = null;
     let busy = false;
     // The microphone: muted by the visitor's own button (only that button unmutes; a reload keeps it), or by the
@@ -745,6 +749,7 @@ export function installAssist(recorder, env) {
             blockSelector: config.privacy?.blockSelector || null,
             maskedAllowed: () => maskedGranted,
             onCursor: (x, y) => ui.cursor.move(x, y),
+            now,
         });
         ui.outline(true);
         ui.cursor.show(agentName());
@@ -784,6 +789,7 @@ export function installAssist(recorder, env) {
 
         controlling = false;
         suspended = false;
+        dropDeferred();
         control?.release();
         control = null;
         ui.outline(false);
@@ -873,6 +879,7 @@ export function installAssist(recorder, env) {
 
         suspended = true;
         identityBefore = recorder.config().identity ?? null;
+        dropDeferred();
         control?.release();
         ui.cancelPrompts('masked');
         endpoint?.send({ t: 'control.released', reason: 'navigation', paused: true });
@@ -927,20 +934,61 @@ export function installAssist(recorder, env) {
 
         const result = run();
 
+        // Typing that came while the visitor's own mouse or keys paused the agent: applied once the pause is over.
+        if (result.ignored === 'visitor' && (message.t === 'input' || message.t === 'select')) return defer(message);
+
         if (result.refused === 'masked' && settings().controlMasked && !maskedGranted) {
+            // A stage that takes it hears where the question stands: asking, then granted or declined (and why).
+            const tell = !!endpoint?.peerCan(FEATURE_MASKED);
+
+            // Asked already: the stage waits for the answer, and this action goes with the question.
+            if (asking.has('masked')) return;
+            if (tell && !(saidNoAt.has('masked') && now() - saidNoAt.get('masked') < ASK_COOLDOWN_MS)) endpoint.send({ t: 'masked.asking' });
+
+            const started = now();
             const { yes, refused } = await ask('masked', label(labels, 'askMasked', agentName()));
 
             if (refused === 'pending') return;
-            if (refused) return reply(result);
+            if (refused) return tell ? endpoint?.send({ t: 'masked.declined', reason: refused }) : reply(result);
             if (!controlling) return;
 
             grant('control_masked', yes);
             maskedGranted = yes;
 
-            if (yes) return reply(run());
+            if (yes) {
+                if (tell) endpoint?.send({ t: 'masked.granted' });
+
+                return reply(run());
+            }
+
+            // A question left unanswered counts as no; the stage says which it was.
+            if (tell) return endpoint?.send({ t: 'masked.declined', reason: now() - started >= GRANT_TIMEOUT_MS ? 'timeout' : 'declined' });
         }
 
         reply(result);
+    }
+
+    /** Keep the latest typing for a field until the visitor's pause is over, then act on it. */
+    function defer(message) {
+        deferred.set(message.id, message);
+        timers.clear(deferTimer);
+        deferTimer = timers.set(
+            () => {
+                deferTimer = null;
+
+                const due = [...deferred.values()];
+
+                deferred.clear();
+                for (const next of due) act(next);
+            },
+            Math.max(0, (control?.pausedUntil ?? 0) - now()) + 50,
+        );
+    }
+
+    function dropDeferred() {
+        deferred.clear();
+        timers.clear(deferTimer);
+        deferTimer = null;
     }
 
     function reply(result) {
@@ -1140,6 +1188,9 @@ export function installAssist(recorder, env) {
         const visitor = (event) => {
             if (!event.isTrusted || !(controlling || resuming)) return;
             if (event.type === 'keydown' && event.key === 'Escape') return endControl('visitor');
+            // A press in the Assist panel (an Allow, End remote control) is no activity on the page: it never pauses
+            // the agent. The panel is a closed shadow root, so the event's target here is its host.
+            if (ui.contains(event.target)) return;
 
             control?.visitorActivity();
         };
