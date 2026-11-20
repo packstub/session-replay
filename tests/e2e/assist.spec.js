@@ -294,9 +294,11 @@ test('an agent claims a request and helps on the live stage: mirror, control, an
     // The visitor's page posts each grant on its own: the end of control may land a moment after the stage saw it.
     let grants = [];
 
-    await expect
-        .poll(async () => (grants = await readGrants()).filter((entry) => entry.by === 'visitor' && entry.kind === 'control').length, { timeout: 15_000 })
-        .toBeGreaterThanOrEqual(2);
+    const settled = (list) =>
+        ['control', 'audio'].every((kind) => list.some((entry) => entry.by === 'visitor' && entry.granted && entry.kind === kind)) &&
+        list.filter((entry) => entry.by === 'visitor' && entry.kind === 'control').length >= 2;
+
+    await expect.poll(async () => settled((grants = await readGrants())), { timeout: 15_000 }).toBe(true);
 
     expect(grants.filter((entry) => entry.by === 'agent').map((entry) => entry.kind)).toEqual(expect.arrayContaining(['control', 'audio']));
     expect(grants.filter((entry) => entry.by === 'visitor' && entry.granted).map((entry) => entry.kind)).toEqual(expect.arrayContaining(['control', 'audio']));
