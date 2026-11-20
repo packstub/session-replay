@@ -79,7 +79,10 @@ class BatchIngester
         try {
             $first = $this->connection()->transaction(function () use ($session, $sessionId, $seq, $meta, $bytes, $from, $to, $events, $markers, $ownedStylesheets, $tenantKey): bool {
                 // The row exists by now, so locking it is safe on every database. It also orders two batches of one
-                // recording stored at once: exactly one of them finds no chunk yet.
+                // recording stored at once: exactly one of them finds no chunk yet. RowLock first: on SQLite a
+                // transaction that read first could not wait for another upload's write lock.
+                RowLock::take(ReplaySession::query()->whereKey($sessionId));
+
                 $stored = (int) ReplaySession::query()->whereKey($sessionId)->lockForUpdate()->value('chunk_count');
 
                 ReplayChunk::query()->create([
