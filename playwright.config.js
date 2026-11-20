@@ -76,9 +76,10 @@ export default defineConfig({
     projects: [{ name: 'chromium', use: { ...devices['Desktop Chrome'] } }],
 
     webServer: {
-        // Several PHP workers: the visitor's page and the agent's stage poll at the same time. Holler drops a side
+        // --no-reload: without it `serve` drops every variable it does not know before starting the workers, so the
+        // own database, cache and Holler's timeout would never reach them. Several PHP workers: the visitor's page and the agent's stage poll at the same time. Holler drops a side
         // after 6 s instead of 15, so the test of an agent leaving the live view and coming back is quick.
-        command: `${STATE} php vendor/bin/testbench migrate:fresh --force && ${STATE} HOLLER_RECONNECT_TIMEOUT=6 PHP_CLI_SERVER_WORKERS=8 php vendor/bin/testbench serve --port=${PORT}`,
+        command: `${STATE} php vendor/bin/testbench migrate:fresh --force && ${STATE} HOLLER_RECONNECT_TIMEOUT=6 PHP_CLI_SERVER_WORKERS=8 php vendor/bin/testbench serve --no-reload --port=${PORT}`,
         url: `${BASE_URL}/login`,
         reuseExistingServer: !process.env.CI,
         timeout: 180_000,
