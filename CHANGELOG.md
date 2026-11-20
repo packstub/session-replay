@@ -12,7 +12,7 @@ Assist: support helps someone while they are still on the page. Off until `SESSI
 - Support offers help from a live recording: a **Live now** tab says when each page was last heard from, and the visitor answers Accept or Not now; after a Not now, no new offer to that person for `assist.decline_cooldown_seconds` (5 minutes)
 - The live stage shows the visitor's page as it happens, masked like the recording; it loads assets only from the app and `assist.mirror_sources`, so a visitor's page cannot make the agent's browser call another host
 - The agent's pointer shows on the visitor's page while they watch (**Show my pointer**, on by default); nothing is asked, since nothing on the page changes
-- Remote control, typing into masked fields (`assist.control_masked`), audio, video and screen share are each asked of the visitor separately; Escape takes control back and a password field is never filled
+- Remote control, typing into masked fields (`assist.control_masked`), audio, video and screen share are each asked of the visitor separately; Escape takes control back, a password field is never filled, and control once allowed goes on across the site's pages in the same tab (`assist.control_across_pages`, on by default)
 - Annotations: the agent draws over the page, and the strokes fade
 - **Put on hold** and **Resume** on the stage (Holler's hold); an agent is live in one assist at a time, and a second one waits until the first is on hold or over
 - An agent who leaves the live view keeps the request: the same call goes on when they are back in time, a new one starts after that, and past `assist.claim_timeout_seconds` the request returns to the list
