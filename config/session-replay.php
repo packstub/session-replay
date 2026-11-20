@@ -249,6 +249,10 @@ return [
         'middleware' => [],
         // Requests per minute per person (for guests: per rendered page); null turns the limiter off.
         'requests_per_minute' => 240,
+        // Upload requests per minute for the whole app, everyone together; past it the upload is answered 503 with
+        // Retry-After and the browser waits that long (up to ten minutes) before it sends again. A cap for the minutes
+        // after an outage, when every open tab sends what it kept at once. null or 0 turns it off.
+        'global_requests_per_minute' => null,
         // Megabytes one person may upload per day, as sent (compressed); null turns it off. A day of steady
         // work in a panel is well under 100 MB.
         'daily_mb' => 250,

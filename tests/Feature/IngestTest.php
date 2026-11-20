@@ -325,6 +325,70 @@ it('stops a person, and all guests together, at the daily upload limit', functio
     $this->ingest(['token' => $this->token(null), 'events' => $noise, 'gzip' => false])->assertStatus(429);
 });
 
+it('says when to come back on a 429, per minute and per day', function () {
+    config()->set('session-replay.ingest.requests_per_minute', 1);
+
+    $ada = $this->token($this->user());
+
+    $this->ingest(['token' => $ada])->assertCreated();
+
+    $retry = (int) $this->ingest(['token' => $ada])->assertStatus(429)->headers->get('Retry-After');
+
+    expect($retry)->toBeGreaterThan(0)->toBeLessThanOrEqual(60);
+
+    config()->set('session-replay.ingest.requests_per_minute', null);
+    config()->set('session-replay.ingest.daily_mb', 1);
+    $this->travelTo(now()->setTime(23, 0));
+
+    $grace = $this->token($this->user());
+    $noise = json_encode([str_repeat('x', 1100 * 1024)]);
+    $response = $this->ingest(['token' => $grace, 'events' => $noise, 'gzip' => false])->assertStatus(429)->assertJson(['stop' => true]);
+
+    expect((int) $response->headers->get('Retry-After'))->toBe(3600);
+});
+
+it('caps uploads for the whole app per minute with a 503 and Retry-After, after the per-person limit', function () {
+    config()->set('session-replay.ingest.requests_per_minute', 1);
+    config()->set('session-replay.ingest.global_requests_per_minute', 2);
+    $this->travelTo(now()->setTime(10, 0, 15));
+
+    $ada = $this->token($this->user());
+
+    $this->ingest(['token' => $ada])->assertCreated();
+    // Over Ada's own limit: refused there, so it does not use up everybody's.
+    $this->ingest(['token' => $ada])->assertStatus(429);
+    $this->ingest(['token' => $this->token($this->user())])->assertCreated();
+
+    $response = $this->ingest(['token' => $this->token($this->user())])->assertStatus(503)->assertJson(['ok' => false, 'stop' => false]);
+    $retry = (int) $response->headers->get('Retry-After');
+
+    // The rest of the minute, and up to two more at random so the tabs refused together come back apart.
+    expect($retry)->toBeGreaterThanOrEqual(45)->toBeLessThanOrEqual(165);
+
+    // Stylesheets and snapshots count too: they are writes to the same disk and database.
+    $this->post(route('session-replay.ingest.asset'), ['token' => $this->token($this->user()), 'hash' => hash('sha256', 'a'), 'content' => 'a'])->assertStatus(503);
+    $this->post(route('session-replay.ingest.snapshot'), ['token' => $this->token($this->user()), 'hash' => hash('sha256', 'a'), 'content' => 'a'])->assertStatus(503);
+
+    // The next minute has a budget of its own.
+    $this->travelTo(now()->setTime(10, 1, 0));
+
+    $this->ingest(['token' => $this->token($this->user())])->assertCreated();
+});
+
+it('has no cap for the whole app unless one is set', function () {
+    expect(config('session-replay.ingest.global_requests_per_minute'))->toBeNull();
+
+    config()->set('session-replay.ingest.requests_per_minute', null);
+
+    foreach (range(1, 5) as $ignored) {
+        $this->ingest(['token' => $this->token($this->user())])->assertCreated();
+    }
+
+    config()->set('session-replay.ingest.global_requests_per_minute', 0);
+
+    $this->ingest(['token' => $this->token($this->user())])->assertCreated();
+});
+
 it('never lets an impersonated recording and the person\'s own write into each other', function () {
     $ada = $this->user();
     $session = $this->recording($ada);

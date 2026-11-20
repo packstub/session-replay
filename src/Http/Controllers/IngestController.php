@@ -77,7 +77,7 @@ class IngestController
         $session = ReplaySession::query()->find($sessionId);
 
         if ($this->overDailyLimit($context, strlen($body) + strlen($metaJson))) {
-            return $this->refuse(429, 'The daily upload limit was reached.', stop: true);
+            return $this->dailyLimitReached();
         }
 
         // The person chose to send this recording without their name (on_error.ask): the same rule as
@@ -172,7 +172,7 @@ class IngestController
         }
 
         if ($this->overDailyLimit($context, strlen($body))) {
-            return $this->refuse(429, 'The daily upload limit was reached.', stop: true);
+            return $this->dailyLimitReached();
         }
 
         $raw = str_starts_with($body, "\x1f\x8b") ? $this->storage->inflate($body, $maxKb * 1024 * self::ASSET_INFLATE_FACTOR) : $body;
@@ -264,7 +264,7 @@ class IngestController
         }
 
         if ($this->overDailyLimit($context, strlen($body))) {
-            return $this->refuse(429, 'The daily upload limit was reached.', stop: true);
+            return $this->dailyLimitReached();
         }
 
         $gzipped = str_starts_with($body, "\x1f\x8b");
@@ -301,6 +301,13 @@ class IngestController
         ReplayAssetOwner::own(ReplayAssetOwner::tenantKey($context->tenantType, $context->tenantId), [$hash]);
 
         return response()->json(['ok' => true]);
+    }
+
+    /** The daily allowance is spent: the recorder stops, and Retry-After says when the next day's starts. */
+    protected function dailyLimitReached(): JsonResponse
+    {
+        return $this->refuse(429, 'The daily upload limit was reached.', stop: true)
+            ->header('Retry-After', (string) max(1, (int) now()->diffInSeconds(now()->addDay()->startOfDay())));
     }
 
     /** Counts the upload against the person's daily allowance (all guests share one) and says whether it is spent. */
