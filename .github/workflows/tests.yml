@@ -74,6 +74,9 @@ jobs:
         with:
           php-version: "8.4"
           extensions: pdo_sqlite, intl, zlib
+          # EGPCS: the e2e server's database and cache come from the environment (playwright.config.js), and the
+          # app reads it through $_ENV; the runner's default GPCS leaves $_ENV empty and the workers on :memory:.
+          ini-values: variables_order=EGPCS
           coverage: none
 
       - name: Setup Node
