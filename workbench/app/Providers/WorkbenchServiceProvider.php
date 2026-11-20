@@ -34,6 +34,11 @@ class WorkbenchServiceProvider extends ServiceProvider
         // transaction, which SQLite answers "database is locked" at once, busy timeout or not: files instead.
         config()->set('cache.default', 'file');
 
+        // The e2e server's own cache directory (playwright.config.js), apart from `composer serve`'s.
+        if (env('WORKBENCH_CACHE_PATH')) {
+            config()->set('cache.stores.file.path', env('WORKBENCH_CACHE_PATH'));
+        }
+
         if (class_exists(HollerServiceProvider::class)) {
             $this->app->register(HollerServiceProvider::class);
         }

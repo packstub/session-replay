@@ -198,6 +198,28 @@ test('an agent claims a request and helps on the live stage: mirror, control, an
     await expect(visitor.locator('#list li')).toHaveCount(2);
     await expect(mirror.locator('#list li')).toHaveCount(2);
 
+    // ---- control goes on to the next page (assist.control_across_pages) ---------------------------
+
+    const nav = await mirror.locator('#nav').boundingBox();
+
+    await agent.mouse.click(nav.x + nav.width / 2, nav.y + nav.height / 2);
+    await expect(visitor).toHaveURL(/\/second$/);
+
+    // No new question: Ada is reminded, Ana keeps control and the stage says it went on.
+    await expect(visitor.getByText(/still controls this page/)).toBeVisible();
+    await expect(mirror.locator('h1')).toHaveText('Second page', { timeout: 30_000 });
+    await expect(agent.getByText('Control went on to the visitor’s next page.')).toBeVisible({ timeout: 30_000 });
+    await expect(agent.getByRole('button', { name: 'Release control' })).toBeVisible();
+    await expect(visitor.getByText(/would like to control this page/)).toBeHidden();
+    await expect.poll(async () => (await cursorOnVisitor(visitor))?.frame).toBe(true);
+
+    // And acts there.
+    const addHere = await mirror.locator('#add').boundingBox();
+
+    await agent.mouse.click(addHere.x + addHere.width / 2, addHere.y + addHere.height / 2);
+    await expect(visitor.locator('#list li')).toHaveCount(1);
+    await expect(mirror.locator('#list li')).toHaveCount(1);
+
     // ---- an annotation drawn over Ada's page -------------------------------------------------------
 
     await agent.getByRole('button', { name: 'Draw' }).click();
@@ -254,6 +276,8 @@ test('an agent claims a request and helps on the live stage: mirror, control, an
 
     expect(grants.filter((entry) => entry.by === 'agent').map((entry) => entry.kind)).toEqual(expect.arrayContaining(['control', 'audio']));
     expect(grants.filter((entry) => entry.by === 'visitor' && entry.granted).map((entry) => entry.kind)).toEqual(expect.arrayContaining(['control', 'audio']));
+    // One control period across both pages: allowed once, ended once.
+    expect(grants.filter((entry) => entry.by === 'visitor' && entry.kind === 'control').map((entry) => entry.granted)).toEqual([true, false]);
 
     // ---- the end -------------------------------------------------------------------------------------
 
