@@ -79,6 +79,7 @@ function mountStage(root) {
         editor: ref('editor'),
         editorText: ref('editor-text'),
         editorSelect: ref('editor-select'),
+        editorHint: ref('editor-hint'),
         notes: ref('notes'),
         url: ref('url'),
         audiobar: ref('audiobar'),
@@ -563,7 +564,7 @@ function mountStage(root) {
                 gesture.cancel();
                 closeEditor();
             }
-            if (effect.note === 'action_refused') closeEditor();
+            if (effect.note === 'action_refused') refuseEditor(effect.reason ?? null);
             if (effect.state && feed.started) fit();
         }
 
@@ -888,6 +889,9 @@ function mountStage(root) {
 
     // ---- typing: an editor over the mirrored field ---------------------------------
 
+    // The hint under the typing box, put back when a refused box gives way to the next field.
+    const editorHint = els.editorHint?.textContent ?? '';
+
     function openEditor(point) {
         closeEditor();
 
@@ -929,6 +933,9 @@ function mountStage(root) {
         }
 
         editing = { id, kind, timer: null };
+        els.editorText.readOnly = false;
+        els.editor.classList.remove('is-refused');
+        if (els.editorHint) els.editorHint.textContent = editorHint;
         els.editor.hidden = false;
         send({ t: 'focus', id });
         (kind === 'select' ? els.editorSelect : els.editorText).focus();
@@ -942,8 +949,27 @@ function mountStage(root) {
         els.editor.hidden = true;
     }
 
-    els.editorText?.addEventListener('input', () => {
+    /**
+     * The visitor's page refused the field (masked, a password, read-only): the box stays where the agent looks,
+     * says why and takes no more typing; Escape, a click elsewhere or the next field closes it.
+     */
+    function refuseEditor(reason) {
         if (!editing) return;
+
+        clearTimeout(editing.timer);
+        editing.refused = true;
+        // Read-only rather than disabled: the box keeps the focus, so Escape still closes it.
+        els.editorText.value = '';
+        els.editorText.readOnly = true;
+        els.editorText.hidden = false;
+        els.editorSelect.hidden = true;
+        els.editorText.focus();
+        els.editor.classList.add('is-refused');
+        if (els.editorHint) els.editorHint.textContent = t('notes.action_refused', { reason: reason === null ? '' : t(`reasons.${reasonKey(reason)}`) });
+    }
+
+    els.editorText?.addEventListener('input', () => {
+        if (!editing || editing.refused) return;
 
         clearTimeout(editing.timer);
 
@@ -957,7 +983,7 @@ function mountStage(root) {
 
         event.preventDefault();
 
-        if (editing && event.key === 'Enter') {
+        if (editing && !editing.refused && event.key === 'Enter') {
             clearTimeout(editing.timer);
             send({ t: 'input', id: editing.id, value: els.editorText.value.slice(0, 4096) });
         }
@@ -967,7 +993,7 @@ function mountStage(root) {
     });
 
     els.editorSelect?.addEventListener('change', () => {
-        if (editing) send({ t: 'select', id: editing.id, value: els.editorSelect.value });
+        if (editing && !editing.refused) send({ t: 'select', id: editing.id, value: els.editorSelect.value });
     });
 
     els.editorSelect?.addEventListener('keydown', (event) => {

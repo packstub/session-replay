@@ -298,6 +298,12 @@ export class RemoteControl {
 
         if (!element) return result;
 
+        // The agent's typing box opens with the focus: a field it may not type into is refused now, before a key is
+        // pressed (and a masked one asks the visitor now, when control_masked is on), not on the first input.
+        const refused = this.typable(element, String(element.tagName || '').toLowerCase());
+
+        if (refused) return refused;
+
         this.settle(element);
         element.focus?.({ preventScroll: true });
 

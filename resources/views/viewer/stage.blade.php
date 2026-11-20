@@ -36,7 +36,7 @@
                 <div class="sr-stage__editor" data-ref="editor" hidden>
                     <input type="text" data-ref="editor-text" autocomplete="off" aria-label="{{ __($s.'editor') }}">
                     <select data-ref="editor-select" aria-label="{{ __($s.'editor') }}" hidden></select>
-                    <small>{{ __($s.'editor_hint') }}</small>
+                    <small data-ref="editor-hint" role="status">{{ __($s.'editor_hint') }}</small>
                 </div>
             </div>
         </section>
