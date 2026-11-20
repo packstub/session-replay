@@ -70,6 +70,8 @@ class FakeClient extends EventTarget {
     }
 
     async startMedia(kind) {
+        if (FakeClient.mediaError) throw FakeClient.mediaError;
+
         this.cameraStream ||= { kind };
     }
 
@@ -205,7 +207,7 @@ function fakeTimers() {
 const routes = Object.fromEntries(['poll', 'accept', 'decline', 'cancel', 'hangup', 'leave', 'signal', 'grants'].map((name) => [name, `/sr/assist/requests/__ID__/${name}`]));
 
 /** A visitor whose request is live with Ana (agent 5), the channel open and both hellos said. */
-async function live({ stored = {}, video = false } = {}) {
+async function live({ stored = {}, video = false, devices = { media: true, screen: true } } = {}) {
     let clock = 1_000_000;
     const store = new Map([['sr:assist', JSON.stringify({ id: 'r1', secret: 's3cret', status: 'active', openedBy: 'visitor', agent: { id: '5', name: 'Ana' }, grants: {}, ...stored })]]);
     const grants = [];
@@ -248,7 +250,7 @@ async function live({ stored = {}, video = false } = {}) {
         tab: 'tab-1',
     };
 
-    installAssist(recorder, { ui, timers, Client: FakeClient, drain: async () => {}, fetch, now: () => clock });
+    installAssist(recorder, { ui, timers, Client: FakeClient, drain: async () => {}, fetch, now: () => clock, devices: () => devices });
 
     // The reload's first poll finds the call; the client joins it.
     await timers.run();
@@ -595,4 +597,30 @@ test('while the agent has the assist on hold the page says they will be right ba
     page.client.dispatchEvent(new Event('statechange'));
 
     assert.equal(page.ui.shown.text, 'sees');
+});
+
+test('on a page that cannot share media (plain http), the visitor is not asked and the agent is told why', async () => {
+    const page = await live({ devices: { media: false, screen: false } });
+    const prompts = page.ui.prompts.length;
+
+    await page.send({ t: 'media.request', kind: 'audio' });
+    assert.deepEqual(page.said().at(-1), { t: 'media.refused', kind: 'audio', reason: 'unavailable' });
+
+    await page.send({ t: 'screen.request' });
+    assert.deepEqual(page.said().at(-1), { t: 'screen.refused', reason: 'unavailable' });
+    assert.equal(page.ui.prompts.length, prompts);
+});
+
+test('a microphone the browser refuses after the visitor\'s Allow is reported as blocked, not as their no', async () => {
+    const page = await live();
+
+    FakeClient.mediaError = Object.assign(new Error('denied'), { name: 'NotAllowedError' });
+
+    try {
+        await page.send({ t: 'media.request', kind: 'audio' });
+        await page.answer(true);
+        assert.deepEqual(page.said().at(-1), { t: 'media.refused', kind: 'audio', reason: 'blocked' });
+    } finally {
+        FakeClient.mediaError = null;
+    }
 });

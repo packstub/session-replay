@@ -51,6 +51,19 @@ export const ASK_COOLDOWN_MS = 10_000;
  * @param {string} recorder.tab  the tab's own id (sessionStorage), sent with a new request
  * @param {object} env  the engine (`Client`, a CallClient class, and `drain`), plus the tests' fakes: `ui`, `timers`, `fetch`, `now`
  */
+/** What the browser can share: getUserMedia and getDisplayMedia exist only in a secure context (https, localhost). */
+export function mediaDevices() {
+    const secure = globalThis.isSecureContext !== false;
+    const devices = secure ? globalThis.navigator?.mediaDevices : undefined;
+
+    return { media: typeof devices?.getUserMedia === 'function', screen: typeof devices?.getDisplayMedia === 'function' };
+}
+
+/** Why the microphone or camera did not start, for the agent: `blocked` (a permission said no) or `failed`. */
+export function mediaError(error) {
+    return ['NotAllowedError', 'SecurityError', 'PermissionDeniedError'].includes(error?.name) ? 'blocked' : 'failed';
+}
+
 export function installAssist(recorder, env) {
     if (typeof env?.Client !== 'function' || typeof env?.drain !== 'function') throw new TypeError('installAssist needs the calls engine: env.Client and env.drain.');
 
@@ -60,6 +73,9 @@ export function installAssist(recorder, env) {
     const Client = env.Client;
     const drain = env.drain;
     const now = env.now || (() => Date.now());
+    // What this browser can share at all: nothing on a page served over plain http (not a secure context), where
+    // navigator.mediaDevices does not exist, so no permission prompt could ever open.
+    const devices = env.devices || mediaDevices;
     // This page's window on the call (in Holler a window claims its side); a reload is a new one.
     const tab = randomId();
     const ui = env.ui || createUi({ labels });
@@ -734,6 +750,8 @@ export function installAssist(recorder, env) {
         if (!client || !state) return;
 
         if (kind === 'video' && !settings().video) return endpoint?.send({ t: 'media.refused', kind });
+        // Not asked: an Allow could not open the microphone or the camera here.
+        if (!devices().media) return endpoint?.send({ t: 'media.refused', kind, reason: 'unavailable' });
 
         // Allowed earlier in this request (a reload keeps it): not asked again, unless the agent ended the audio
         // since; then only a fresh Allow brings the microphone back.
@@ -764,8 +782,9 @@ export function installAssist(recorder, env) {
     async function startMedia(kind, announce) {
         try {
             await client?.startMedia(kind);
-        } catch {
-            endpoint?.send({ t: 'media.refused', kind });
+        } catch (error) {
+            // The browser's own prompt said no (or the site is blocked in its settings), or no device could be opened.
+            endpoint?.send({ t: 'media.refused', kind, reason: mediaError(error) });
 
             if (announce) grant(kind, false);
 
@@ -805,6 +824,7 @@ export function installAssist(recorder, env) {
 
     async function askScreen() {
         if (!client || client.sharing) return;
+        if (!devices().screen) return endpoint?.send({ t: 'screen.refused', reason: 'unavailable' });
 
         const { yes, refused } = await ask('screen', label(labels, 'askScreen', agentName()));
 

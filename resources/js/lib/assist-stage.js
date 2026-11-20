@@ -314,6 +314,14 @@ export function editable(element) {
  * stage puts in place of connecting while the assist is on hold, and no_pointer,
  * see pointerWhy()).
  */
+/** Why the visitor's microphone or camera did not start, when it was not their no (media.refused `reason`). */
+const VISITOR_MEDIA_NOTES = {
+    cooldown: 'cooldown',
+    unavailable: 'visitor_media_unavailable',
+    blocked: 'visitor_media_blocked',
+    failed: 'visitor_media_failed',
+};
+
 export class AgentState {
     constructor({ calls = true, routes = true, video = false } = {}) {
         this.calls = calls;
@@ -498,7 +506,7 @@ export class AgentState {
             case 'media.refused':
                 this[message.kind] = 'off';
 
-                return [{ note: message.reason === 'cooldown' ? 'cooldown' : message.kind === 'video' ? 'video_refused' : 'audio_refused' }];
+                return [{ note: Object.hasOwn(VISITOR_MEDIA_NOTES, message.reason ?? '') ? VISITOR_MEDIA_NOTES[message.reason] : (message.kind === 'video' ? 'video_refused' : 'audio_refused') }];
             case 'media.stopped':
                 this[message.kind] = 'off';
 
@@ -513,7 +521,7 @@ export class AgentState {
                 this.screen = 'off';
                 this.mode = 'mirror';
 
-                return [{ mode: 'mirror' }, { note: message.t === 'screen.stopped' ? 'screen_stopped' : message.reason === 'cooldown' ? 'cooldown' : 'screen_refused' }];
+                return [{ mode: 'mirror' }, { note: message.t === 'screen.stopped' ? 'screen_stopped' : message.reason === 'cooldown' ? 'cooldown' : message.reason === 'unavailable' ? 'visitor_screen_unavailable' : 'screen_refused' }];
             case 'bye':
                 return [{ note: 'visitor_left' }];
             default:

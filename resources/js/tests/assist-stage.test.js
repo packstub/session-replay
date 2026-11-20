@@ -708,3 +708,15 @@ test('Show my pointer says so when the visitor\'s page cannot show it, instead o
         assert.equal(pointerWhy({ why: null, connected: agent.ready, peerCan: agent.peerCan('point') }), expected);
     }
 });
+
+test('the agent hears why the visitor\'s microphone did not start: unavailable on the page, blocked, failed, or their no', () => {
+    const note = (reason, kind = 'audio') => new AgentState().receive({ t: 'media.refused', kind, reason }).find((effect) => effect.note)?.note;
+
+    assert.equal(note('unavailable'), 'visitor_media_unavailable');
+    assert.equal(note('blocked'), 'visitor_media_blocked');
+    assert.equal(note('failed', 'video'), 'visitor_media_failed');
+    assert.equal(note('declined'), 'audio_refused');
+    assert.equal(note(null, 'video'), 'video_refused');
+    assert.equal(note('constructor'), 'audio_refused');
+    assert.equal(new AgentState().receive({ t: 'screen.refused', reason: 'unavailable' }).find((effect) => effect.note)?.note, 'visitor_screen_unavailable');
+});
