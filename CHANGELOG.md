@@ -22,7 +22,7 @@ Assist: support helps someone while they are still on the page. Off until `SESSI
 - The stage can sit in a page of your own ([Hosting the stage](docs/assist.md#hosting-the-stage-in-a-page-of-your-own)); Filament Session Replay puts it in a panel
 - `data-replay-skip` leaves an element out of the recording with everything inside it
 - `composer.json`'s homepage and docs link point at packstub.dev
-- **Fixed:** on SQLite, a grant the visitor's page reported at the same moment as another write is no longer lost to "database is locked"
+- **Fixed:** on SQLite, an upload or an Assist grant that arrives while another request is writing waits its turn instead of failing with "database is locked"
 
 ## 1.1.0 — 2026-11-04
 

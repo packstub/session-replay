@@ -653,3 +653,21 @@ it('keeps a grant whose write first found the database locked', function () {
         $connection->beginTransaction();
     }
 });
+
+it('writes the grants log under the request\'s write lock, taken before it reads the log', function () {
+    [$browser, $asked] = $this->claimed();
+
+    $sql = [];
+    DB::listen(function ($query) use (&$sql): void {
+        $sql[] = $query->sql;
+    });
+
+    $this->visitorPost('grants', $asked['id'], $asked['secret'], $browser['token'], ['kind' => 'audio', 'granted' => true])->assertOk();
+
+    $lock = collect($sql)->search(fn (string $q): bool => str_starts_with($q, 'update "replay_assist_requests" set "id" = "id"'));
+    $write = collect($sql)->search(fn (string $q): bool => str_starts_with($q, 'update "replay_assist_requests" set "grants"'));
+
+    // Right after the lock: the read of the log the write appends to.
+    expect($lock)->toBeInt()->and($write)->toBeInt()->and($lock)->toBeLessThan($write)
+        ->and($sql[$lock + 1])->toStartWith('select * from "replay_assist_requests"');
+});

@@ -442,10 +442,11 @@ class Assist
      */
     protected function log(AssistRequest $request, array $entry): void
     {
-        // Read, then write: on SQLite in WAL mode the write fails at once with "database is locked" when another
-        // request wrote in between (the busy timeout does not cover it, and lockForUpdate() is a no-op there).
-        // Laravel retries that error; the visitor's page posts each grant once, so a lost one stays lost.
+        // The visitor's page posts each grant once, so a lost one stays lost: the write lock first (RowLock), and
+        // Laravel's retries for a deadlock or a lock that outlasted the busy timeout.
         $this->connection()->transaction(function () use ($request, $entry): void {
+            RowLock::take(AssistRequest::query()->whereKey($request->getKey()));
+
             $fresh = AssistRequest::query()->whereKey($request->getKey())->lockForUpdate()->firstOrFail();
             $grants = array_slice((array) $fresh->grants, -(AssistRequest::MAX_GRANTS - 1));
             $grants[] = $entry;

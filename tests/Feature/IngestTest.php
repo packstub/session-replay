@@ -1,6 +1,7 @@
 <?php
 
 use Illuminate\Http\UploadedFile;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Event;
 use Illuminate\Support\Facades\Gate;
 use Illuminate\Support\Facades\Storage;
@@ -901,4 +902,21 @@ it('lets no browser claim an error came from the server', function () {
 
     expect(ReplayMarker::query()->where('label', 'Server error: RuntimeException')->sole()->payload)->toBe(['exception' => 'RuntimeException'])
         ->and(ReplayMarker::query()->where('label', 'TypeError')->sole()->payload)->toBe(['source' => 'https://app.test/js/app.js', 'line' => 3]);
+});
+
+it('stores a batch under the recording\'s write lock, taken before its first read', function () {
+    $this->ingest(['seq' => 0])->assertCreated();
+
+    // SQLite cannot wait for the lock once a transaction has read: the first statement on the row is the write.
+    $sql = [];
+    DB::listen(function ($query) use (&$sql): void {
+        $sql[] = $query->sql;
+    });
+
+    $this->ingest(['seq' => 1])->assertCreated();
+
+    $lock = collect($sql)->search(fn (string $q): bool => str_starts_with($q, 'update "replay_sessions" set "id" = "id"'));
+    $read = collect($sql)->search(fn (string $q): bool => str_starts_with($q, 'select "chunk_count" from "replay_sessions"'));
+
+    expect($lock)->toBeInt()->and($read)->toBeInt()->and($lock)->toBeLessThan($read);
 });
