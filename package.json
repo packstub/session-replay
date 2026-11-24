@@ -1,11 +1,46 @@
 {
     "name": "@packstub/session-replay",
-    "private": true,
+    "version": "0.0.0",
+    "description": "Session Replay for Laravel: the rrweb recorder for a frontend on its own origin (Vue, React), uploading to your Laravel app.",
+    "license": "MIT",
+    "homepage": "https://packstub.dev/docs/session-replay",
+    "repository": {
+        "type": "git",
+        "url": "git+https://github.com/packstub/session-replay.git"
+    },
+    "bugs": {
+        "url": "https://github.com/packstub/session-replay/issues"
+    },
+    "keywords": [
+        "session-replay",
+        "rrweb",
+        "laravel",
+        "vue",
+        "react"
+    ],
     "type": "module",
+    "main": "./npm/dist/index.js",
+    "module": "./npm/dist/index.js",
+    "types": "./npm/index.d.ts",
+    "exports": {
+        ".": {
+            "types": "./npm/index.d.ts",
+            "import": "./npm/dist/index.js",
+            "default": "./npm/dist/index.js"
+        }
+    },
+    "files": [
+        "npm/dist",
+        "npm/index.d.ts"
+    ],
+    "sideEffects": [
+        "./resources/js/**"
+    ],
     "scripts": {
         "build": "node build.mjs",
         "dev": "node build.mjs --watch",
         "test": "node --test resources/js/tests/*.test.js",
+        "test:types": "tsc -p npm",
         "test:e2e": "playwright test"
     },
     "devDependencies": {
@@ -16,6 +51,7 @@
         "@rrweb/rrweb-plugin-console-record": "^2.2.0",
         "esbuild": "^0.28.2",
         "rrweb-player": "^2.2.0",
+        "typescript": "^7.0.2",
         "web-vitals": "^6.2.2"
     }
 }

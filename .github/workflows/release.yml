@@ -72,3 +72,47 @@ jobs:
             --title "$TAG" \
             --notes-file release-notes.md \
             --verify-tag $prerelease
+
+  # The recorder for a frontend on another origin (docs/standalone.md), from the same sources as resources/dist:
+  # @packstub/session-replay at the tag's version. Needs the NPM_TOKEN secret (an npm automation token with publish
+  # rights on @packstub). Only on a tag push; a manual run for an old tag leaves npm alone.
+  npm:
+    name: Publish @packstub/session-replay to npm
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 22
+          cache: npm
+          registry-url: https://registry.npmjs.org
+
+      - name: Build at the tag's version
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          npm ci --ignore-scripts
+          npm version "${TAG#v}" --no-git-tag-version --allow-same-version
+          npm run build
+          npm test
+          npm run test:types
+
+      # npm takes the README beside package.json, which is the Composer package's: the npm package has its own.
+      - name: Use the npm package's README
+        run: cp npm/README.md README.md
+
+      - name: Publish with provenance
+        env:
+          TAG: ${{ github.ref_name }}
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          # A tag with a suffix (v1.3.0-beta.1) goes out under "next", never as "latest".
+          dist_tag="latest"
+          if [[ "$TAG" == *-* ]]; then dist_tag="next"; fi
+          npm publish --provenance --access public --tag "$dist_tag" --ignore-scripts

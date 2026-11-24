@@ -98,6 +98,13 @@ jobs:
           npm run build
           git diff --exit-code --stat -- resources/dist
 
+      # The npm package (@packstub/session-replay): its declarations against what a TypeScript frontend writes, and
+      # the built module imported where there is no window (server-side rendering).
+      - name: The npm package's types and build
+        run: |
+          npm run test:types
+          node -e "import('./npm/dist/index.js').then((m) => { if (m.isRecording() !== false || JSON.stringify(m.header()) !== '{}') process.exit(1); })"
+
       - name: Run Assist between two browsers
         run: npm run test:e2e
         env:

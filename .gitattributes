@@ -16,6 +16,7 @@
 /package.json       export-ignore
 /package-lock.json  export-ignore
 /build.mjs          export-ignore
+/npm                export-ignore
 /resources/js       export-ignore
 /workbench          export-ignore
 /testbench.yaml     export-ignore

@@ -1,0 +1,15 @@
+{
+    "compilerOptions": {
+        "strict": true,
+        "noEmit": true,
+        "target": "ES2022",
+        "module": "ESNext",
+        "moduleResolution": "bundler",
+        "lib": ["ES2022", "DOM"],
+        "types": [],
+        "paths": {
+            "@packstub/session-replay": ["./index.d.ts"]
+        }
+    },
+    "files": ["index.d.ts", "types.test.ts"]
+}

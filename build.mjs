@@ -8,6 +8,10 @@ import { build, context } from 'esbuild';
  * watched) and stage.js + stage.css (the agent's live stage: rrweb's Replayer
  * in live mode and the calls engine). The dist files are committed; the
  * package serves them through a route, so an app never runs this.
+ *
+ * npm/dist/index.js is the npm package @packstub/session-replay (standalone.js:
+ * the same recorder for a frontend on another origin), an ES module with
+ * rrweb bundled in. Built for the npm release, not committed.
  */
 const shared = {
     bundle: true,
@@ -23,6 +27,7 @@ const targets = [
     { ...shared, entryPoints: { player: 'resources/js/player.js' }, outdir: 'resources/dist' },
     { ...shared, entryPoints: { stage: 'resources/js/stage.js' }, outdir: 'resources/dist' },
     { ...shared, format: 'esm', entryPoints: { assist: 'resources/js/assist.js' }, outdir: 'resources/dist' },
+    { ...shared, format: 'esm', platform: 'browser', entryPoints: { index: 'resources/js/standalone.js' }, outdir: 'npm/dist' },
 ];
 
 if (process.argv.includes('--watch')) {
