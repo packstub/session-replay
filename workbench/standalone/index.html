@@ -1,0 +1,60 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Standalone lab</title>
+    <style>
+        body { font: 16px/1.5 system-ui; max-width: 40rem; margin: 3rem auto; padding: 0 1rem; }
+        button { font: inherit; padding: .4rem .8rem; margin: .25rem .25rem .25rem 0; }
+        input { font: inherit; padding: .4rem; width: 100%; box-sizing: border-box; }
+        code, pre { background: #f3f3f3; padding: .1rem .3rem; border-radius: .25rem; }
+        pre { padding: .75rem; white-space: pre-wrap; word-break: break-all; }
+    </style>
+</head>
+<body>
+    <h1>Standalone lab</h1>
+    <p>This page is served apart from the workbench and records with <code>@packstub/session-replay</code>. Sign in on the workbench first: <a href="http://127.0.0.1:8000/">http://127.0.0.1:8000</a>.</p>
+
+    <p><label>A field (masked in the replay) <input name="note" placeholder="Type something"></label></p>
+
+    <p>
+        <button data-action="mark">Mark a moment</button>
+        <button data-action="send">Report a problem</button>
+        <button data-action="fail">Fail a request</button>
+        <button data-action="route">Go to another route</button>
+        <button data-action="restart">start() again</button>
+        <button data-action="stop">stop()</button>
+    </p>
+
+    <h2>State</h2>
+    <pre id="state">Starting…</pre>
+
+    <script type="module">
+        import { start, stop, mark, send, sessionId, isRecording, header } from './dist/index.js';
+
+        const app = new URLSearchParams(location.search).get('app') || 'http://127.0.0.1:8000';
+        const endpoint = `${app}/session-replay/token`;
+        const state = document.getElementById('state');
+
+        const show = (started) => {
+            state.textContent = JSON.stringify({ endpoint, started, sessionId: sessionId(), isRecording: isRecording(), header: header(), path: location.pathname }, null, 2);
+        };
+
+        show(await start({ endpoint }));
+
+        document.addEventListener('click', async (event) => {
+            const action = event.target.closest('[data-action]')?.dataset.action;
+
+            if (action === 'mark') mark('Lab button', { at: Date.now() });
+            if (action === 'send') await send('Reported from the standalone lab');
+            if (action === 'fail') await fetch(`${app}/boom`).catch(() => {});
+            if (action === 'route') history.pushState({}, '', `/page-${Math.floor(Math.random() * 100)}`);
+            if (action === 'restart') show(await start());
+            if (action === 'stop') stop();
+
+            show(isRecording());
+        });
+    </script>
+</body>
+</html>

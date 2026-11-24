@@ -43,7 +43,7 @@ Put the directive before `</body>` in every layout you want recorded:
 
 It renders nothing when the request is not recorded: recording turned off, a guest while `guests` is `false`, an excluded path, or a `recordWhen()` callback that said no. See [Recording](recording.md).
 
-**Inertia, Vue or React:** put it in the root template that every page renders through (`resources/views/app.blade.php` with Inertia), before `</body>`. The recorder stays loaded while the router changes pages.
+**Inertia, Vue or React:** put it in the root template that every page renders through (`resources/views/app.blade.php` with Inertia), before `</body>`. The recorder stays loaded while the router changes pages. A frontend that Laravel does not render, on its own origin, uses the npm package instead: see [Standalone frontend](standalone.md).
 
 ## Decide who may watch
 
@@ -124,6 +124,7 @@ Everything lives under one prefix (`path`, default `session-replay`; `domain` op
 | `session-replay.ingest` | `POST {path}/ingest` | `ingest.middleware`, `throttle:session-replay` |
 | `session-replay.ingest.asset` | `POST {path}/ingest/asset` | same |
 | `session-replay.ingest.snapshot` | `POST {path}/ingest/snapshot` | same |
+| `session-replay.token` | `GET {path}/token`, only with `ingest.token_endpoint` | `ingest.token_middleware`, a limit per person and for all guests |
 | `session-replay.index` | `GET {path}` | `viewer.middleware`, the gate |
 | `session-replay.show` | `GET {path}/{session}` | same |
 | `session-replay.manifest` | `GET {path}/{session}/manifest` | same |
@@ -134,6 +135,8 @@ Everything lives under one prefix (`path`, default `session-replay`; `domain` op
 The script URLs carry a version, so browsers cache them for a year and pick up a new release on the next page load.
 
 `viewer.enabled = false` removes `index` and `show` and keeps the data routes, which the player component needs.
+
+With `ingest.origins` set, the upload routes and the token route answer CORS requests from those origins, and an `OPTIONS` route next to each answers the browser's preflight. See [Standalone frontend](standalone.md).
 
 ## PHP upload limit
 

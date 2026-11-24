@@ -408,3 +408,17 @@ it('signs the impersonator\'s model type next to its key, and keeps the identity
 
     expect($keyConfig['identity'])->toBe($before);
 });
+
+it('renders the same config recorderConfig() builds, and nothing when it is null', function () {
+    $this->actingAs($this->user());
+    $this->get('page');
+
+    $withoutToken = fn (array $config): array => array_diff_key($config, ['token' => true]);
+
+    // As the browser reads them: through JSON.
+    expect($withoutToken(recorderConfig((string) SessionReplay::recorder())))->toBe($withoutToken(json_decode((string) json_encode(SessionReplay::recorderConfig()), true)));
+
+    config()->set('session-replay.enabled', false);
+
+    expect(SessionReplay::recorderConfig())->toBeNull()->and((string) SessionReplay::recorder())->toBe('');
+});

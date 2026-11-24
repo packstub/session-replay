@@ -15,6 +15,7 @@ use Illuminate\Support\Str;
 use Packstub\SessionReplay\Models\AssistRequest;
 use Packstub\SessionReplay\Models\ReplayMarker;
 use Packstub\SessionReplay\Models\ReplaySession;
+use Packstub\SessionReplay\Support\AllowedOrigins;
 use Packstub\SessionReplay\Support\Assist;
 use Packstub\SessionReplay\Support\ContextToken;
 
@@ -237,8 +238,12 @@ class SessionReplayManager
         return $this->shouldRecordFor($this->user($request), $request);
     }
 
-    /** @internal shouldRecord() for a user the caller already knows; recorder() uses it with the directive's "user". */
-    public function shouldRecordFor(?Model $user, Request $request): bool
+    /**
+     * @internal shouldRecord() for a user the caller already knows; recorder() uses it with the directive's "user".
+     * $page false: the request is no page to record (the token route of a frontend on another origin), so the
+     * package's own paths and except, except_routes are not asked; the master switch, guests and recordWhen() are.
+     */
+    public function shouldRecordFor(?Model $user, Request $request, bool $page = true): bool
     {
         if (! $this->enabled()) {
             return false;
@@ -246,7 +251,7 @@ class SessionReplayManager
 
         $own = trim((string) config('session-replay.path', 'session-replay'), '/');
 
-        if ($request->is($own, $own.'/*') || $this->isExcluded($request)) {
+        if ($page && ($request->is($own, $own.'/*') || $this->isExcluded($request))) {
             return false;
         }
 
@@ -299,12 +304,41 @@ class SessionReplayManager
      */
     public function recorder(array $options = []): HtmlString
     {
-        $request = request();
+        $config = $this->recorderConfig($options);
+
+        if ($config === null) {
+            return new HtmlString('');
+        }
+
+        $nonce = $options['nonce'] ?? Vite::cspNonce();
+        $nonceAttribute = $nonce ? ' nonce="'.e($nonce).'"' : '';
+
+        // The config runs again on every page Livewire's wire:navigate swaps in (the recorder reads it there); the
+        // bundle only once per document, Livewire would otherwise run it again on every page for nothing.
+        return new HtmlString(
+            '<script'.$nonceAttribute.'>window.__sessionReplay='.json_encode($config, JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_APOS | JSON_HEX_QUOT | JSON_UNESCAPED_SLASHES).';</script>'
+            .'<script src="'.e($this->scriptUrl('recorder.js')).'" defer data-navigate-once'.$nonceAttribute.'></script>'
+        );
+    }
+
+    /**
+     * What the recorder is handed (the directive's window.__sessionReplay), or null when this request is not
+     * recorded. The options are recorder()'s. $page false builds it for a frontend that fetches it from the token
+     * route instead of a rendered page: that request is no page (see shouldRecordFor()), its snapshots are never
+     * shared (no page load after the first), Assist stays on pages the app renders, and a page of another origin
+     * gets no cookie name, since its cookie would never reach the app.
+     *
+     * @param  array<string, mixed>  $options
+     * @return array<string, mixed>|null
+     */
+    public function recorderConfig(array $options = [], ?Request $request = null, bool $page = true): ?array
+    {
+        $request ??= request();
         $user = array_key_exists('user', $options) ? $options['user'] : $this->user($request);
         $user = $user instanceof Model ? $user : null;
 
-        if (! $this->shouldRecordFor($user, $request)) {
-            return new HtmlString('');
+        if (! $this->shouldRecordFor($user, $request, $page)) {
+            return null;
         }
 
         $tenant = array_key_exists('tenant', $options) ? $options['tenant'] : ($this->tenantUsing ? ($this->tenantUsing)($request) : null);
@@ -364,27 +398,19 @@ class SessionReplayManager
                 'sampling' => (array) config('session-replay.size.sampling', []),
             ],
             'snapshots' => [
-                'share' => $this->sharesSnapshots($request),
+                'share' => $page && $this->sharesSnapshots($request),
                 'volatileIds' => array_values(array_filter((array) config('session-replay.snapshots.volatile_ids', []), 'is_string')),
                 'url' => $this->route('ingest.snapshot'),
             ],
-            'cookie' => config('session-replay.context.enabled', true) ? config('session-replay.context.cookie', 'session_replay_id') : null,
+            'cookie' => config('session-replay.context.enabled', true) && ($page || ! app(AllowedOrigins::class)->crossOrigin($request)) ? config('session-replay.context.cookie', 'session_replay_id') : null,
             'mode' => $this->mode(),
             'onError' => $this->onErrorConfig($token),
             // The debug error page is titled with the app's name; the question leaves that title out.
             'appName' => (string) config('app.name', ''),
-            'assist' => $this->assistConfig(),
+            'assist' => $page ? $this->assistConfig() : null,
         ];
 
-        $nonce = $options['nonce'] ?? Vite::cspNonce();
-        $nonceAttribute = $nonce ? ' nonce="'.e($nonce).'"' : '';
-
-        // The config runs again on every page Livewire's wire:navigate swaps in (the recorder reads it there); the
-        // bundle only once per document, Livewire would otherwise run it again on every page for nothing.
-        return new HtmlString(
-            '<script'.$nonceAttribute.'>window.__sessionReplay='.json_encode($config, JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_APOS | JSON_HEX_QUOT | JSON_UNESCAPED_SLASHES).';</script>'
-            .'<script src="'.e($this->scriptUrl('recorder.js')).'" defer data-navigate-once'.$nonceAttribute.'></script>'
-        );
+        return $config;
     }
 
     /**

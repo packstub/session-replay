@@ -1,5 +1,6 @@
 // End-to-end: Assist for real between two browsers on the workbench (`composer serve`'s app): a visitor whose
-// page records and asks for help, and an agent who claims the request and works on the live stage. Headless
+// page records and asks for help, and an agent who claims the request and works on the live stage. And the npm
+// build recording a page of another origin (tests/e2e/standalone.spec.js). Headless
 // Chromium with a fake microphone and camera; WebRTC over loopback. `npm run test:e2e` (the server is started
 // here; packstub/holler comes from require-dev).
 
@@ -10,6 +11,8 @@ import { join } from 'node:path';
 
 const PORT = Number(process.env.ASSIST_E2E_PORT || 8791);
 const BASE_URL = `http://127.0.0.1:${PORT}`;
+// The standalone lab (workbench/standalone): a page on another origin that records with the npm build.
+const LAB_PORT = Number(process.env.STANDALONE_E2E_PORT || 8792);
 
 /** Without a file for the fake microphone, Chrome on macOS asks for the real one and getUserMedia hangs: one second of silence. */
 function silentWav() {
@@ -75,15 +78,23 @@ export default defineConfig({
 
     projects: [{ name: 'chromium', use: { ...devices['Desktop Chrome'] } }],
 
-    webServer: {
+    webServer: [{
         // --no-reload: without it `serve` drops every variable it does not know before starting the workers, so the
         // own database, cache and Holler's timeout would never reach them. Several PHP workers: the visitor's page and the agent's stage poll at the same time. Holler drops a side
         // after 6 s instead of 15, so the test of an agent leaving the live view and coming back is quick.
-        command: `${STATE} php vendor/bin/testbench migrate:fresh --force && ${STATE} HOLLER_RECONNECT_TIMEOUT=6 PHP_CLI_SERVER_WORKERS=8 php vendor/bin/testbench serve --no-reload --port=${PORT}`,
+        command: `${STATE} php vendor/bin/testbench migrate:fresh --force && ${STATE} SESSION_REPLAY_ORIGINS=http://127.0.0.1:${LAB_PORT} HOLLER_RECONNECT_TIMEOUT=6 PHP_CLI_SERVER_WORKERS=8 php vendor/bin/testbench serve --no-reload --port=${PORT}`,
         url: `${BASE_URL}/login`,
         reuseExistingServer: !process.env.CI,
         timeout: 180_000,
         stdout: 'ignore',
         stderr: 'pipe',
-    },
+    }, {
+        // Serves npm/dist/index.js: `npm run build` first.
+        command: `PORT=${LAB_PORT} node workbench/standalone/server.mjs`,
+        url: `http://127.0.0.1:${LAB_PORT}/`,
+        reuseExistingServer: !process.env.CI,
+        timeout: 30_000,
+        stdout: 'ignore',
+        stderr: 'pipe',
+    }],
 });

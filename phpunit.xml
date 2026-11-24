@@ -8,6 +8,8 @@
             <directory>tests/Feature</directory>
             <directory>tests/ViewerDisabled</directory>
             <directory>tests/Assist</directory>
+            <directory>tests/Standalone</directory>
+            <directory>tests/StandaloneBearer</directory>
         </testsuite>
     </testsuites>
     <php>

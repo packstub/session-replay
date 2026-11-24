@@ -5,12 +5,12 @@
  * marker. Pure functions, tested with node --test.
  *
  * Only the app's own origin counts (a blocked analytics call is not an error
- * of the app), only an answer at or above the threshold or none at all, and
+ * of the app; a frontend on another origin names its API's in `origins`), only an answer at or above the threshold or none at all, and
  * never the recorder's own uploads. Never headers or bodies.
  */
 
 /** The marker for a finished request, or null when it is not one: { label, payload }. */
-export function requestMarker({ url, method = 'GET', status = 0, duration = 0, threshold = 500, page, skip = [], type = null }) {
+export function requestMarker({ url, method = 'GET', status = 0, duration = 0, threshold = 500, page, skip = [], type = null, origins = [] }) {
     // A fetch with redirect: 'manual' or mode: 'no-cors' resolves with a status of 0 that is no failure.
     if (type === 'opaque' || type === 'opaqueredirect') return null;
 
@@ -24,7 +24,8 @@ export function requestMarker({ url, method = 'GET', status = 0, duration = 0, t
         return null;
     }
 
-    if (parsed.origin !== origin) return null;
+    // `origins`: others that count as the app's own (a frontend whose API is the Laravel app on another origin).
+    if (parsed.origin !== origin && !origins.includes(parsed.origin)) return null;
     if (skip.some((prefix) => prefix && parsed.href.startsWith(prefix))) return null;
     if (status !== 0 && status < threshold) return null;
 

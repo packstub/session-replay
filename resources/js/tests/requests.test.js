@@ -69,3 +69,13 @@ test('a failure the app never catches still reaches unhandledrejection', () => {
 
     assert.equal(execFileSync(process.execPath, ['--input-type=module', '-e', script], { encoding: 'utf8' }).trim(), 'unhandled:uncaught');
 });
+
+test('a frontend on another origin counts its API\'s origin as the app\'s, and still skips the uploads there', () => {
+    const spa = 'https://app.example.com/orders';
+    const api = { page: spa, skip: ['https://api.example.com/session-replay/ingest'], origins: ['https://api.example.com'] };
+
+    assert.equal(requestMarker({ url: 'https://api.example.com/orders', status: 500, ...api }).label, 'GET /orders failed (500)');
+    assert.equal(requestMarker({ url: 'https://api.example.com/session-replay/ingest', status: 503, ...api }), null);
+    assert.equal(requestMarker({ url: 'https://analytics.test/collect', status: 0, ...api }), null);
+    assert.equal(requestMarker({ url: 'https://api.example.com/orders', status: 500, page: spa }), null);
+});

@@ -5,7 +5,7 @@ While a recording runs, every log line and error report of that person's request
 ## How it works
 
 1. The recorder writes the recording's id into a plain cookie (`context.cookie`, default `session_replay_id`; `SameSite=Lax`, `Secure` on HTTPS, expires with `idle_minutes`). It holds the UUID and, after a dot, the recording's write key: a random value the browser made with the id and sends with every upload, which is what proves to the server that a request or an upload comes from the browser that makes the recording (the id itself is in every viewer URL and log line). Nothing about the person.
-2. The browser sends the cookie with every request to your app: page loads, Livewire updates, `fetch` calls.
+2. The browser sends the cookie with every request to your app: page loads, Livewire updates, `fetch` calls. A frontend on another origin, whose cookie never reaches the app, sends the same value in the `X-Session-Replay` header instead (`context.header`; see [Standalone frontend](standalone.md#link-your-apis-logs-to-the-replay)). The header is read only when there is no cookie, and only in the same shape: a UUID and, after a dot, a key of letters and digits.
 3. `AddReplayContext`, a global middleware the package registers, reads it, checks that it starts with a UUID and adds these keys to Laravel's `Context`:
 
 | Key | Value |

@@ -22,11 +22,14 @@ use Packstub\SessionReplay\Http\Controllers\AssistController;
 use Packstub\SessionReplay\Http\Controllers\IngestController;
 use Packstub\SessionReplay\Http\Controllers\ReplayDataController;
 use Packstub\SessionReplay\Http\Controllers\ScriptController;
+use Packstub\SessionReplay\Http\Controllers\TokenController;
 use Packstub\SessionReplay\Http\Controllers\ViewerController;
 use Packstub\SessionReplay\Http\Middleware\AddReplayContext;
 use Packstub\SessionReplay\Http\Middleware\AuthorizeViewer;
 use Packstub\SessionReplay\Http\Middleware\CapIngest;
+use Packstub\SessionReplay\Http\Middleware\HandleReplayCors;
 use Packstub\SessionReplay\Http\Middleware\ThrottleIngest;
+use Packstub\SessionReplay\Support\AllowedOrigins;
 use Packstub\SessionReplay\Support\Assist;
 use Packstub\SessionReplay\Support\ContextToken;
 use Packstub\SessionReplay\Support\ReplayStorage;
@@ -172,6 +175,8 @@ class SessionReplayServiceProvider extends PackageServiceProvider
             return Limit::perMinute((int) $perMinute)->by('session-replay|'.$key);
         });
 
+        RateLimiter::for('session-replay-token', fn (Request $request): Limit => self::tokenLimit($request));
+
         // Exceptions Laravel reports during a recorded request go on its timeline. Returning nothing keeps the app's
         // own reporting going.
         $this->callAfterResolving(ExceptionHandler::class, function (mixed $handler): void {
@@ -225,12 +230,15 @@ class SessionReplayServiceProvider extends PackageServiceProvider
         ]), function () use ($uuid): void {
             Route::get('scripts/{file}', ScriptController::class)->where('file', '[a-z.]+')->name('script');
 
-            // The per-person limit first, then the cap for the whole app (ingest.global_requests_per_minute).
-            Route::middleware([...(array) config('session-replay.ingest.middleware', []), ThrottleIngest::class.':session-replay', CapIngest::class])->group(function (): void {
+            // CORS outermost (a 429 or 503 keeps its headers), then the per-person limit, then the cap for the whole
+            // app (ingest.global_requests_per_minute).
+            Route::middleware([HandleReplayCors::class.':ingest', ...(array) config('session-replay.ingest.middleware', []), ThrottleIngest::class.':session-replay', CapIngest::class])->group(function (): void {
                 Route::post('ingest', [IngestController::class, 'store'])->name('ingest');
                 Route::post('ingest/asset', [IngestController::class, 'asset'])->name('ingest.asset');
                 Route::post('ingest/snapshot', [IngestController::class, 'snapshot'])->name('ingest.snapshot');
             });
+
+            $this->registerStandaloneRoutes();
 
             if (config('session-replay.assist.enabled', false)) {
                 $this->registerAssistRoutes($uuid);
@@ -254,6 +262,60 @@ class SessionReplayServiceProvider extends PackageServiceProvider
                 }
             });
         });
+    }
+
+    /**
+     * A frontend on another origin (docs/standalone.md): the token route (ingest.token_endpoint) behind the app's own
+     * sign-in, and the answers to the browser's preflight for the listed origins (ingest.origins). The preflights sit
+     * outside every limiter: an OPTIONS request carries no token, and would count against the shared bucket of
+     * uploads without one.
+     */
+    protected function registerStandaloneRoutes(): void
+    {
+        $tokenEndpoint = (bool) config('session-replay.ingest.token_endpoint', false);
+
+        if ($tokenEndpoint) {
+            Route::middleware([HandleReplayCors::class.':token', ...(array) config('session-replay.ingest.token_middleware', ['web']), ThrottleIngest::class.':session-replay-token'])
+                ->get('token', TokenController::class)
+                ->name('token');
+        }
+
+        $origins = $this->app->make(AllowedOrigins::class);
+
+        if (! $origins->any()) {
+            return;
+        }
+
+        $origins->warnAboutLaravelCors(trim((string) config('session-replay.path', 'session-replay'), '/'));
+
+        // HandleReplayCors answers a preflight itself; an OPTIONS request without one gets an empty answer.
+        foreach (['ingest', 'ingest/asset', 'ingest/snapshot'] as $uri) {
+            Route::options($uri, fn () => response()->noContent())->middleware(HandleReplayCors::class.':ingest');
+        }
+
+        if ($tokenEndpoint) {
+            Route::options('token', fn () => response()->noContent())->middleware(HandleReplayCors::class.':token');
+        }
+    }
+
+    /**
+     * The token route's limit: per signed-in person (ingest.requests_per_minute), and one bucket for every guest
+     * together (ingest.guest_tokens_per_minute), since guests cannot be told apart. Never by IP, which an edge proxy hides.
+     */
+    protected static function tokenLimit(Request $request): Limit
+    {
+        $user = app(SessionReplayManager::class)->user($request);
+
+        if ($user === null) {
+            $perMinute = config('session-replay.ingest.guest_tokens_per_minute');
+
+            return $perMinute ? Limit::perMinute((int) $perMinute)->by('session-replay-token|guests') : Limit::none();
+        }
+
+        $perMinute = config('session-replay.ingest.requests_per_minute');
+
+        // A hash, so the cache key names nobody (privacy.anonymous included).
+        return $perMinute ? Limit::perMinute((int) $perMinute)->by('session-replay-token|'.hash('sha256', $user->getMorphClass().'|'.$user->getKey())) : Limit::none();
     }
 
     /**

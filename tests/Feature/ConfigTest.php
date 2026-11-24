@@ -160,3 +160,29 @@ it('asks viewer.guard in the viewer\'s login when one is set', function () {
 
     expect($middleware())->toContain('auth:staff')->not->toContain('auth:admin');
 });
+
+it('keeps a frontend on another origin off for a published config from before it', function () {
+    publishedConfig(['ingest' => ['requests_per_minute' => 120], 'context' => ['cookie' => 'replay']]);
+
+    expect(config('session-replay.ingest.origins'))->toBe([])
+        ->and(config('session-replay.ingest.token_endpoint'))->toBeFalse()
+        ->and(config('session-replay.ingest.token_middleware'))->toBe(['web'])
+        ->and(config('session-replay.ingest.guest_tokens_per_minute'))->toBe(600)
+        ->and(config('session-replay.ingest.requests_per_minute'))->toBe(120)
+        ->and(config('session-replay.context.header'))->toBe('X-Session-Replay')
+        ->and(config('session-replay.context.cookie'))->toBe('replay');
+});
+
+it('replaces the listed origins as a whole', function () {
+    publishedConfig(['ingest' => ['origins' => ['https://app.example.com']]]);
+
+    expect(config('session-replay.ingest.origins'))->toBe(['https://app.example.com']);
+});
+
+it('registers no token route and no preflight unless asked to', function () {
+    expect(Route::has('session-replay.token'))->toBeFalse();
+
+    $this->getJson('session-replay/token')->assertNotFound();
+    $this->call('OPTIONS', route('session-replay.ingest'), server: ['HTTP_ORIGIN' => 'https://app.example.com', 'HTTP_ACCESS_CONTROL_REQUEST_METHOD' => 'POST'])
+        ->assertHeaderMissing('Access-Control-Allow-Origin');
+});
