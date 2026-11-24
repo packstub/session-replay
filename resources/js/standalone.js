@@ -27,6 +27,11 @@ let controller = null;
 let settings = {};
 // Whom the token in use names (config.identity): a renewal is taken only for the same person.
 let identity = null;
+// Bumped by begin() and stop(): a renewal that was under way then knows the identity it compared with is not current.
+let generation = 0;
+// The app no longer names the person the token is for (signed out, someone else, not recorded): nothing records
+// again until start() fetches a token, not even consent(true).
+let revoked = false;
 let watching = false;
 let queue = Promise.resolve(false);
 
@@ -81,10 +86,18 @@ async function fetchToken() {
  * more (signed out, someone else signed in, not recorded), null when it could not be had.
  */
 async function renew() {
+    const started = generation;
     const result = await fetchToken();
 
     if (result === null) return null;
-    if (!result.record || (result.config.identity ?? null) !== identity) return false;
+
+    if (!result.record || (result.config.identity ?? null) !== identity) {
+        // Signed out, or someone else signed in on this browser: the recording ends now, as start() would end it,
+        // rather than going on under the old token's name until it expires. Unless start() or stop() came first.
+        if (started === generation) revoke();
+
+        return false;
+    }
 
     controller?.update(result.config, { renewal: true });
 
@@ -104,6 +117,13 @@ async function refreshToken(batchIdentity) {
     controller?.update(renewed.config);
 
     return renewed.config.token;
+}
+
+/** The recording ends and what it kept in the browser goes with it (core's stop() sends nothing more). */
+function revoke() {
+    revoked = true;
+    refresher.stop();
+    controller?.api.stop();
 }
 
 function active() {
@@ -150,14 +170,16 @@ async function begin(options) {
 
     if (result === null) return false;
 
+    generation++;
+
     // Signed out, or no longer recorded (recordWhen()): the recording of the person before ends here.
     if (!result.record) {
-        refresher.stop();
-        controller?.api.stop();
+        revoke();
 
         return false;
     }
 
+    revoked = false;
     identity = result.config.identity ?? null;
     refresher.set(result.lifetime, asked);
     watchPage();
@@ -195,6 +217,7 @@ export function start(options = {}) {
 
 /** Stops recording until start() or consent(true). */
 export function stop() {
+    generation++;
     refresher.stop();
     controller?.api.stop();
 }
@@ -214,7 +237,8 @@ export function send(label = 'Problem reported', payload = {}) {
  * answer is only remembered, for start() to find.
  */
 export function consent(given) {
-    if (controller) {
+    // The token in hand names someone the app no longer does: the answer waits for start() and a token of its own.
+    if (controller && !(given && revoked)) {
         const started = controller.api.consent(given);
 
         // Recording again with the token it had: renewed when that is due.

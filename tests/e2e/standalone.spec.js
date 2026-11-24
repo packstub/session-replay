@@ -208,3 +208,51 @@ test('stop() ends the renewals', async ({ page, baseURL }) => {
     await page.waitForTimeout(4000);
     expect(asked).toBe(1);
 });
+
+for (const [name, answer] of [
+    ['signed out', (route) => route.fulfill({
+        status: 401,
+        contentType: 'application/json',
+        headers: { 'Access-Control-Allow-Origin': LAB, 'Access-Control-Allow-Credentials': 'true', Vary: 'Origin' },
+        body: JSON.stringify({ message: 'Unauthenticated.' }),
+    })],
+    ['someone else signed in', async (route) => {
+        const response = await route.fetch();
+        const body = await response.json();
+
+        await route.fulfill({ response, json: { ...body, expires_in: 4, config: { ...body.config, identity: 'someone-else' } } });
+    }],
+]) {
+    test(`a renewal that finds the person ${name} ends the recording, and consent(true) does not bring it back`, async ({ page, baseURL }) => {
+        let asked = 0;
+
+        await page.goto(`${baseURL}/`);
+        await page.route(`${baseURL}/session-replay/token`, async (route) => {
+            if (route.request().method() !== 'GET') return route.continue();
+
+            if (++asked > 1) return answer(route);
+
+            const response = await route.fetch();
+
+            await route.fulfill({ response, json: { ...(await response.json()), expires_in: 4 } });
+        });
+
+        await page.goto(`${LAB}/?app=${encodeURIComponent(baseURL)}`);
+        await expect(page.locator('#state')).toContainText('"isRecording": true');
+
+        // Renewed after two seconds by the clock alone, no upload refused: the recording stops there, not days later.
+        await expect.poll(async () => {
+            await page.getByRole('button', { name: 'Mark a moment' }).click();
+
+            return JSON.parse(await page.locator('#state').textContent()).isRecording;
+        }, { timeout: 10_000 }).toBe(false);
+        expect(asked).toBe(2);
+
+        await page.getByRole('button', { name: 'consent(true)' }).click();
+        expect(JSON.parse(await page.locator('#state').textContent()).isRecording).toBe(false);
+
+        // No renewals after it either.
+        await page.waitForTimeout(3000);
+        expect(asked).toBe(2);
+    });
+}
