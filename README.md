@@ -33,6 +33,7 @@ Record what a person did in the browser, keep the recording on your own disk and
 - **[Small recordings](docs/storage.md#sizes)**: stylesheets stored once, unused attributes dropped, batches gzipped in the browser.
 - **[A gate decides who watches](docs/watching.md#the-gate)**: `viewSessionReplay` guards the list, the player and every file behind them.
 - **[A link in every log line](docs/error-tracking.md)**: the recording's id and URL in Laravel's `Context`, so error reports point at the replay.
+- **[A frontend on its own origin](docs/standalone.md)**: `@packstub/session-replay` on npm records a Vue or React app served apart from Laravel, with a token from your own sign-in.
 - **[Multi-tenant aware](docs/storage.md#multi-tenant-apps)**: a recording stays in one workspace, and the tables can live on your central connection.
 - **[Friendly to cached pages](docs/recording.md#cached-pages)**: the recorder's token can outlive a full-page cache.
 - **[Help requests](docs/assist.md)**: a visitor asks from the page they are on (your button or a built-in "Get help"), support takes it from a list or offers help on a live recording.

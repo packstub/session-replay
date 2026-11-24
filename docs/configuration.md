@@ -112,6 +112,10 @@ Share pages that look the same for everyone who opens them: a pricing page, the 
 | `ingest.max_asset_kb` | `1536` | Largest stylesheet accepted, as sent (compressed). |
 | `ingest.token_days` | `7` | Days the token a page was rendered with is accepted. Keep it longer than your full-page cache (see [Cached pages](recording.md#cached-pages)). Tokens signed with a key in `app.previous_keys` are accepted too, so rotating `APP_KEY` keeps open tabs recording. |
 | `ingest.guest_tokens_expire` | `true` | `false`: a token that names nobody (no person, no workspace, no impersonator) never expires. |
+| `ingest.origins` | `[]` | `SESSION_REPLAY_ORIGINS` (comma-separated). Origins of a frontend served apart from the app that may upload and fetch a token, each as an exact origin (`https://app.example.com`, `http://localhost:5173`). Wildcards, paths and `null` are ignored and logged. See [Standalone frontend](standalone.md). |
+| `ingest.token_endpoint` | `false` | `SESSION_REPLAY_TOKEN_ENDPOINT`. Registers `GET {path}/token`, which gives such a frontend what the directive embeds in a page. |
+| `ingest.token_middleware` | `['web']` | The token route's middleware: whatever signs the frontend in (`['web']` for the session cookie, `['auth:sanctum']` for a bearer token). |
+| `ingest.guest_tokens_per_minute` | `600` | Tokens per minute for all guests together; a signed-in person counts against `ingest.requests_per_minute`. `null` turns it off. |
 
 ## Storage
 
@@ -166,6 +170,7 @@ Help requests, off by default; see [Assist](assist.md#configuration) for what ea
 | --- | --- | --- |
 | `context.enabled` | `true` | Write the cookie and add `session_replay`, `session_replay_url`, `session_replay_moment` and `session_replay_report` to Laravel's `Context` (see [Error tracking](error-tracking.md#how-it-works)). Server-error markers need it. |
 | `context.cookie` | `session_replay_id` | The cookie's name. Its value is the recording's id and, after a dot, its write key (see [Error tracking](error-tracking.md#how-it-works)). |
+| `context.header` | `X-Session-Replay` | The request header that carries the same value from a frontend on another origin, whose cookie never reaches the app (see [Standalone frontend](standalone.md#link-your-apis-logs-to-the-replay)). The cookie wins when both are sent. `null` turns it off. |
 
 ## What is registered in code
 
