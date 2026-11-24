@@ -14,7 +14,8 @@ use Workbench\App\Http\Middleware\Csp;
 /**
  * A page to record and a viewer anyone may open: `composer serve`, click around, then visit /session-replay.
  * Assist is on, with the "Get help" button; with packstub/holler installed (require-dev) the live stage works
- * too: ask for help on /, then open /agent in another browser (Ana Support) and claim the request.
+ * too: ask for help on /, then open /agent in another browser (Ana Support) and claim the request. The standalone
+ * lab records a page on http://127.0.0.1:8001 with the npm build (see workbench/standalone/server.mjs).
  */
 class WorkbenchServiceProvider extends ServiceProvider
 {
@@ -26,6 +27,11 @@ class WorkbenchServiceProvider extends ServiceProvider
         // Every field is masked (mask_all_inputs): the agent types into one only after the visitor allows it, a
         // prompt of its own. On here, so the "Delivery details" box can be filled from the stage.
         config()->set('session-replay.assist.control_masked', (bool) env('SESSION_REPLAY_ASSIST_CONTROL_MASKED', true));
+
+        // The standalone lab (workbench/standalone, `node workbench/standalone/server.mjs`): a page on another port that
+        // records with the npm build, fetching its token from here with the workbench's session cookie.
+        config()->set('session-replay.ingest.token_endpoint', true);
+        config()->set('session-replay.ingest.origins', array_values(array_filter(explode(',', (string) env('SESSION_REPLAY_ORIGINS', 'http://127.0.0.1:8001')))));
 
         // The visitor's page and the agent's stage poll at once (PHP_CLI_SERVER_WORKERS): wait for a lock, never fail.
         config()->set('database.connections.sqlite.busy_timeout', 10000);
