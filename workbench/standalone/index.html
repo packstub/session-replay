@@ -25,13 +25,14 @@
         <button data-action="route">Go to another route</button>
         <button data-action="restart">start() again</button>
         <button data-action="stop">stop()</button>
+        <button data-action="consent">consent(true)</button>
     </p>
 
     <h2>State</h2>
     <pre id="state">Starting…</pre>
 
     <script type="module">
-        import { start, stop, mark, send, sessionId, isRecording, header } from './dist/index.js';
+        import { start, stop, consent, mark, send, sessionId, isRecording, header } from './dist/index.js';
 
         const app = new URLSearchParams(location.search).get('app') || 'http://127.0.0.1:8000';
         const endpoint = `${app}/session-replay/token`;
@@ -52,6 +53,7 @@
             if (action === 'route') history.pushState({}, '', `/page-${Math.floor(Math.random() * 100)}`);
             if (action === 'restart') show(await start());
             if (action === 'stop') stop();
+            if (action === 'consent') consent(true);
 
             show(isRecording());
         });

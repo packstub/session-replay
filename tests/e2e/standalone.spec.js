@@ -125,3 +125,134 @@ test('an upload refused with 401 stops the recording when no fresh token is to b
     expect(seen).toEqual({ tokens: 2, refused: 1 });
     expect(JSON.parse(await page.locator('#state').textContent()).header).toEqual({});
 });
+
+test('the token is renewed before it expires, and the upload of the closing page goes up with the fresh one', async ({ page, baseURL }) => {
+    const tokens = [];
+    const uploads = [];
+    const refused = [];
+
+    await page.goto(`${baseURL}/`);
+
+    // The workbench's token lives for days: here the app says four seconds, so the package renews after two.
+    await page.route(`${baseURL}/session-replay/token`, async (route) => {
+        if (route.request().method() !== 'GET') return route.continue();
+
+        const response = await route.fetch();
+        const body = await response.json();
+
+        tokens.push(body.config.token);
+
+        await route.fulfill({ response, json: { ...body, expires_in: 4, expires_at: new Date(Date.now() + 4000).toISOString() } });
+    });
+
+    page.on('request', (request) => {
+        if (request.method() === 'POST' && request.url() === `${baseURL}/session-replay/ingest`) uploads.push(request);
+    });
+    page.on('response', (response) => {
+        if (response.url() === `${baseURL}/session-replay/ingest` && response.status() >= 400) refused.push(response.status());
+    });
+
+    await page.goto(`${LAB}/?app=${encodeURIComponent(baseURL)}`);
+    await expect(page.locator('#state')).toContainText('"isRecording": true');
+
+    const id = JSON.parse(await page.locator('#state').textContent()).sessionId;
+
+    // No upload was refused: the second token was asked for by the clock alone.
+    await expect.poll(() => tokens.length, { timeout: 10_000 }).toBeGreaterThanOrEqual(2);
+    expect(new Set(tokens).size).toBe(tokens.length);
+
+    // The same recording goes on.
+    await page.getByRole('button', { name: 'Mark a moment' }).click();
+    expect(JSON.parse(await page.locator('#state').textContent()).sessionId).toBe(id);
+
+    const before = uploads.length;
+    const renewed = tokens.length;
+
+    // The page goes away (the event alone: a request of a page that is really gone is not shown to the test): what
+    // is left goes up once, with a token from a renewal, not the one start() got.
+    await page.evaluate(() => window.dispatchEvent(new Event('pagehide')));
+    await expect.poll(() => uploads.length).toBeGreaterThan(before);
+
+    const last = uploads.at(-1).postDataBuffer().toString('latin1');
+
+    expect(last).toContain('Lab button');
+    expect(last).not.toContain(tokens[0]);
+    expect(tokens.slice(1, renewed + 1).some((token) => last.includes(token))).toBe(true);
+
+    expect(refused).toEqual([]);
+
+    // And it is in the recording.
+    await expect.poll(async () => JSON.stringify(await (await page.request.get(`${baseURL}/session-replay/${id}/manifest`)).json())).toContain('Lab button');
+});
+
+test('stop() ends the renewals', async ({ page, baseURL }) => {
+    let asked = 0;
+
+    await page.goto(`${baseURL}/`);
+    await page.route(`${baseURL}/session-replay/token`, async (route) => {
+        if (route.request().method() !== 'GET') return route.continue();
+
+        asked++;
+
+        const response = await route.fetch();
+
+        await route.fulfill({ response, json: { ...(await response.json()), expires_in: 4 } });
+    });
+
+    await page.goto(`${LAB}/?app=${encodeURIComponent(baseURL)}`);
+    await expect(page.locator('#state')).toContainText('"isRecording": true');
+
+    await page.getByRole('button', { name: 'stop()' }).click();
+    await expect(page.locator('#state')).toContainText('"isRecording": false');
+
+    await page.waitForTimeout(4000);
+    expect(asked).toBe(1);
+});
+
+for (const [name, answer] of [
+    ['signed out', (route) => route.fulfill({
+        status: 401,
+        contentType: 'application/json',
+        headers: { 'Access-Control-Allow-Origin': LAB, 'Access-Control-Allow-Credentials': 'true', Vary: 'Origin' },
+        body: JSON.stringify({ message: 'Unauthenticated.' }),
+    })],
+    ['someone else signed in', async (route) => {
+        const response = await route.fetch();
+        const body = await response.json();
+
+        await route.fulfill({ response, json: { ...body, expires_in: 4, config: { ...body.config, identity: 'someone-else' } } });
+    }],
+]) {
+    test(`a renewal that finds the person ${name} ends the recording, and consent(true) does not bring it back`, async ({ page, baseURL }) => {
+        let asked = 0;
+
+        await page.goto(`${baseURL}/`);
+        await page.route(`${baseURL}/session-replay/token`, async (route) => {
+            if (route.request().method() !== 'GET') return route.continue();
+
+            if (++asked > 1) return answer(route);
+
+            const response = await route.fetch();
+
+            await route.fulfill({ response, json: { ...(await response.json()), expires_in: 4 } });
+        });
+
+        await page.goto(`${LAB}/?app=${encodeURIComponent(baseURL)}`);
+        await expect(page.locator('#state')).toContainText('"isRecording": true');
+
+        // Renewed after two seconds by the clock alone, no upload refused: the recording stops there, not days later.
+        await expect.poll(async () => {
+            await page.getByRole('button', { name: 'Mark a moment' }).click();
+
+            return JSON.parse(await page.locator('#state').textContent()).isRecording;
+        }, { timeout: 10_000 }).toBe(false);
+        expect(asked).toBe(2);
+
+        await page.getByRole('button', { name: 'consent(true)' }).click();
+        expect(JSON.parse(await page.locator('#state').textContent()).isRecording).toBe(false);
+
+        // No renewals after it either.
+        await page.waitForTimeout(3000);
+        expect(asked).toBe(2);
+    });
+}

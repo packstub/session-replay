@@ -1,5 +1,5 @@
 import { boot } from './core.js';
-import { readTokenResponse, replayHeader, tokenHeaders, tokenUrl } from './lib/standalone.js';
+import { createTokenRefresher, readTokenResponse, replayHeader, tokenHeaders, tokenUrl } from './lib/standalone.js';
 
 /**
  * @packstub/session-replay: the recorder for a frontend served apart from the
@@ -9,6 +9,10 @@ import { readTokenResponse, replayHeader, tokenHeaders, tokenUrl } from './lib/s
  * with it; uploads go to the app's ingest routes, which allow the frontend's
  * origin (ingest.origins). Call start() again after the person signs in or
  * out: a token for someone else starts a new recording.
+ *
+ * The token is renewed at half its life (createTokenRefresher()), so that an
+ * upload is not refused first: the one a closing page sends cannot go again.
+ * An upload answered 401 all the same still fetches one token, once.
  *
  * Nothing goes on window unless start({ global: true }) asks for
  * window.SessionReplay.
@@ -21,6 +25,14 @@ const CONSENT_KEY = 'sr:consent';
 
 let controller = null;
 let settings = {};
+// Whom the token in use names (config.identity): a renewal is taken only for the same person.
+let identity = null;
+// Bumped by begin() and stop(): a renewal that was under way then knows the identity it compared with is not current.
+let generation = 0;
+// The app no longer names the person the token is for (signed out, someone else, not recorded): nothing records
+// again until start() fetches a token, not even consent(true).
+let revoked = false;
+let watching = false;
 let queue = Promise.resolve(false);
 
 function warn(message) {
@@ -68,25 +80,69 @@ async function fetchToken() {
     return result;
 }
 
-/** A fresh token for the same person, asked by the recorder once per batch the server refused with 401. */
-async function refreshToken(identity) {
-    let result = null;
+/**
+ * A fresh token for the person being recorded, put in place of the one in use without touching the recording.
+ * What the refresher's load() answers: the config and its lifetime, false when the app has none for this person any
+ * more (signed out, someone else signed in, not recorded), null when it could not be had.
+ */
+async function renew() {
+    const started = generation;
+    const result = await fetchToken();
 
-    try {
-        result = await fetchToken();
-    } catch {
-        return null;
+    if (result === null) return null;
+
+    if (!result.record || (result.config.identity ?? null) !== identity) {
+        // Signed out, or someone else signed in on this browser: the recording ends now, as start() would end it,
+        // rather than going on under the old token's name until it expires. Unless start() or stop() came first.
+        if (started === generation) revoke();
+
+        return false;
     }
 
-    if (!result?.record || (result.config.identity ?? null) !== (identity ?? null)) return null;
+    controller?.update(result.config, { renewal: true });
 
-    controller?.update(result.config);
+    return { config: result.config, lifetime: result.lifetime };
+}
 
-    return result.config.token;
+/**
+ * A fresh token for the same person, asked by the recorder once per batch the server refused with 401. It shares
+ * the request with a renewal that is under way.
+ */
+async function refreshToken(batchIdentity) {
+    const renewed = await refresher.refresh();
+
+    if (!renewed || (renewed.config.identity ?? null) !== (batchIdentity ?? null)) return null;
+
+    // As before the token was renewed ahead of time: a tab that sat idle past idle_minutes starts a new recording.
+    controller?.update(renewed.config);
+
+    return renewed.config.token;
+}
+
+/** The recording ends and what it kept in the browser goes with it (core's stop() sends nothing more). */
+function revoke() {
+    revoked = true;
+    refresher.stop();
+    controller?.api.stop();
 }
 
 function active() {
     return !!controller && (controller.api.isRecording() || controller.api.isBuffering());
+}
+
+const refresher = createTokenRefresher({ load: renew, ready: active });
+
+/**
+ * Timers run late in a background tab and stand still while the computer sleeps: the clock is read again whenever
+ * the page is shown, and when it is hidden, which is often the last thing a page hears before it is closed.
+ */
+function watchPage() {
+    if (watching) return;
+
+    watching = true;
+    document.addEventListener('visibilitychange', () => refresher.check());
+    window.addEventListener('pageshow', () => refresher.check());
+    window.addEventListener('online', () => refresher.check());
 }
 
 async function begin(options) {
@@ -102,6 +158,7 @@ async function begin(options) {
     }
 
     let result;
+    const asked = Date.now();
 
     try {
         result = await fetchToken();
@@ -113,12 +170,19 @@ async function begin(options) {
 
     if (result === null) return false;
 
+    generation++;
+
     // Signed out, or no longer recorded (recordWhen()): the recording of the person before ends here.
     if (!result.record) {
-        controller?.api.stop();
+        revoke();
 
         return false;
     }
+
+    revoked = false;
+    identity = result.config.identity ?? null;
+    refresher.set(result.lifetime, asked);
+    watchPage();
 
     if (!controller) {
         controller = boot(result.config, {
@@ -153,6 +217,8 @@ export function start(options = {}) {
 
 /** Stops recording until start() or consent(true). */
 export function stop() {
+    generation++;
+    refresher.stop();
     controller?.api.stop();
 }
 
@@ -171,7 +237,16 @@ export function send(label = 'Problem reported', payload = {}) {
  * answer is only remembered, for start() to find.
  */
 export function consent(given) {
-    if (controller) return controller.api.consent(given);
+    // The token in hand names someone the app no longer does: the answer waits for start() and a token of its own.
+    if (controller && !(given && revoked)) {
+        const started = controller.api.consent(given);
+
+        // Recording again with the token it had: renewed when that is due.
+        if (given) refresher.resume();
+        else refresher.stop();
+
+        return started;
+    }
 
     try {
         window.localStorage.setItem(CONSENT_KEY, given ? '1' : '0');

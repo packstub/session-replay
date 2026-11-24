@@ -16,8 +16,10 @@ SESSION_REPLAY_ORIGINS=https://app.example.com
 That adds `GET {path}/token` (`session-replay.token`). It runs behind `ingest.token_middleware`, and the person it signs in is recorded under the same rules as on a rendered page: `guests`, `recordWhen()`, `userUsing()`, `tenantUsing()`, `impersonatorUsing()`, `propertiesUsing()` and `privacy.anonymous`. The answer is the config the directive would embed, with a fresh signed token:
 
 ```json
-{ "record": true, "config": { "token": "…", "ingestUrl": "https://api.example.com/session-replay/ingest", "…": "…" }, "expires_at": "2026-12-01T10:00:00+00:00" }
+{ "record": true, "config": { "token": "…", "ingestUrl": "https://api.example.com/session-replay/ingest", "…": "…" }, "expires_at": "2026-12-01T10:00:00+00:00", "expires_in": 604800 }
 ```
+
+`expires_in` is the token's lifetime in seconds (`ingest.token_days`, seven days by default). Both are `null` for a guest's token when `ingest.guest_tokens_expire` is off.
 
 If the person is not recorded, the route answers `{ "record": false }`. A request from an origin that is neither listed nor the app's own gets a 403 before your middleware runs, and so does one that a tag or a link on another page made (the browser says so in `Sec-Fetch-Site`). Answers are sent with `Cache-Control: no-store, private`.
 
@@ -66,7 +68,21 @@ start({ endpoint: 'https://api.example.com/session-replay/token' });
 
 The package also exports `stop()`, `mark(label, payload)`, `send(label, payload)`, `consent(given)`, `sessionId()`, `isRecording()` and `header()`. They work like the [browser API](recording.md) of the directive's recorder. Before `start()` has run, `consent()` only stores the answer, and `start()` picks it up.
 
-The recorder will only upload to the token route's own origin. If `ingestUrl`, `assetUrl` or the snapshot URL in the answer point anywhere else, the answer is refused and nothing is recorded. If an upload gets a 401 (for example, the token expired while the tab stayed open), the recorder fetches a fresh token once and sends the batch again.
+The recorder will only upload to the token route's own origin. If `ingestUrl`, `assetUrl` or the snapshot URL in the answer point anywhere else, the answer is refused and nothing is recorded.
+### The token is renewed for you
+
+A tab can stay open longer than its token lives. The package fetches a fresh token from the token route once half of the token's lifetime has passed (after three and a half days with the default of seven), and the recording carries on with it. That way no upload has to fail first, which matters for the last one: the upload a page sends while it closes can't be sent a second time.
+
+- The schedule goes by `expires_in`, a number of seconds, so a browser whose clock is wrong renews on time. An app on 1.3.0 sends only `expires_at`; the package then compares it with the browser's clock.
+- Browsers slow timers down in a background tab and stop them while the computer sleeps, so the package checks again whenever the page is shown or hidden, and when the browser comes back online.
+- A renewal that fails (offline, a server error) is tried again after 30 seconds, then at growing intervals up to 15 minutes, until the old token has expired.
+- If the token route answers that the person is signed out, is someone else or is no longer recorded, the recording ends there and then, and what the tab still held is dropped rather than uploaded under the old name. `consent(true)` does not bring it back; the next `start()` does, with a token of its own. Calling `start()` after a sign-in or sign-out, as before, ends it sooner.
+- `stop()` ends the renewals; `start()` and `consent(true)` bring them back.
+- The renewal request uses the options `start()` got. If your bearer token changes while the tab is open, pass a `fetch` option that adds the current `Authorization` header, or call `start()` again with the new one: a renewal sent with an expired bearer token is answered 401 and ends the recording, as a sign-out would.
+
+If an upload gets a 401 all the same, the recorder fetches a fresh token once and sends that batch again; if there is none to be had, the recording stops.
+
+What can still be lost: a tab that slept through the rest of its token's life (a laptop closed for days) and is closed before the renewal comes back. Its closing upload, a few seconds of the recording at most, is refused, and nobody is left to send it again.
 
 ### Vue
 

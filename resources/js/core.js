@@ -1737,9 +1737,18 @@ function stop(remember = false) {
  * A new config for the page shown now, outside wire:navigate (a frontend that fetched a fresh token, standalone.js):
  * signed for another person or workspace, or after the tab sat idle, it starts a new recording, as a page load
  * would; otherwise the next batches go up with it.
+ *
+ * `renewal`: the token was only renewed ahead of its expiry, nobody loaded or did anything. A config for the same
+ * person replaces the old one and the recording stays as it is, idle or not; one for anyone else is left alone.
  */
-function update(fresh) {
+function update(fresh, { renewal = false } = {}) {
     if (!fresh) return;
+
+    if (renewal) {
+        if ((fresh.identity ?? null) === (config.identity ?? null)) config = fresh;
+
+        return;
+    }
 
     if (stopRecording && !stopped && session && ((fresh.identity ?? null) !== (session.identity ?? null) || Date.now() - session.lastActivity > fresh.idleTimeout)) {
         restart(fresh);
@@ -1752,7 +1761,7 @@ function update(fresh) {
 
 /**
  * Starts the recorder with `initial`, once per document; returns { api, update, recording }: api is what the page
- * gets as window.SessionReplay, update() takes a new config (see update()), recording() the running recording's id
+ * gets as window.SessionReplay, update() takes a new config or a renewed one (see update()), recording() the running recording's id
  * and write key for the log-context header. Options: global (window.SessionReplay = api before the recording starts),
  * pageConfig (wire:navigate pages bring their own config in window.__sessionReplay), refreshToken (async (identity) =>
  * a fresh token for that identity, or null, asked once per batch on a 401) and requestOrigins (origins whose failed
