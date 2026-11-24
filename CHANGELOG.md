@@ -2,7 +2,7 @@
 
 All notable changes to `packstub/session-replay` are documented here.
 
-## Unreleased
+## 1.3.0 — 2026-11-24
 
 **Record a frontend on its own origin.** A Vue or React app served apart from Laravel can now be recorded with the new npm package `@packstub/session-replay`, and watched like any other recording. See [Standalone frontend](docs/standalone.md).
 
