@@ -14,7 +14,7 @@
 
 Record what a person did in the browser, keep the recording on your own disk and database, and watch it inside your own app, behind a gate you define. Built on [rrweb](https://github.com/rrweb-io/rrweb). Free and open source (MIT).
 
-"The form did nothing when I clicked save" becomes a 40-second replay with the console error and the failed Livewire request marked on the timeline.
+"The form did nothing when I clicked save" becomes a 40-second replay with the console error and the failed Livewire request marked on the timeline. And when someone needs help right now, [Assist](#live-help-with-assist) puts support on their page while it happens: co-browsing, a pointer and drawings, remote control, audio, video and screen share, each with their yes.
 
 ![A replay in the built-in viewer: the pointer clicks "Pay" again and again, the payment fails, and the server error's details open with its report id and "Open in logs"](https://raw.githubusercontent.com/packstub/art/main/session-replay/demo.gif)
 
@@ -35,6 +35,8 @@ Record what a person did in the browser, keep the recording on your own disk and
 - **[A link in every log line](docs/error-tracking.md)**: the recording's id and URL in Laravel's `Context`, so error reports point at the replay.
 - **[Multi-tenant aware](docs/storage.md#multi-tenant-apps)**: a recording stays in one workspace, and the tables can live on your central connection.
 - **[Friendly to cached pages](docs/recording.md#cached-pages)**: the recorder's token can outlive a full-page cache.
+- **[Help requests](docs/assist.md)**: a visitor asks from the page they are on (your button or a built-in "Get help"), support takes it from a list or offers help on a live recording.
+- **[Live co-browsing, calls and remote control](#live-help-with-assist)**: with [Holler for Laravel](https://github.com/packstub/holler), the visitor's page mirrored live, remote control, audio, video and screen share.
 - **Five languages**: the viewer and the player in English, German, Spanish, Romanian and Russian.
 
 ## Quick start
@@ -93,6 +95,28 @@ Sign in, click around, then open `/session-replay`.
 
 See [Privacy](docs/privacy.md) for masking, consent and wording for your privacy policy.
 
+## Live help with Assist
+
+A replay tells you what happened; Assist lets you help while it is happening. Turn it on and every recorded page can ask for help:
+
+```env
+SESSION_REPLAY_ASSIST=true
+```
+
+```js
+await SessionReplay.assist.request({ message: 'The checkout button does nothing' })
+```
+
+Or switch on the floating **Get help** button. The request lands on the viewer's **Requests** page; support claims it, or sees someone on the **Live** tab and offers help ("Ana would like to help you with this page", Accept or Not now). On its own, that is a help queue your team answers its own way. Add [Holler for Laravel](https://github.com/packstub/holler) (`composer require packstub/holler`, `php artisan migrate`, `Holler::routes()`) and the two meet on a **live stage**:
+
+- **Co-browsing**: the visitor's page mirrored as it happens, peer to peer over WebRTC, masked exactly like the recording.
+- **A pointer and drawings**: the visitor sees the agent's named cursor where they point, and strokes that fade after a few seconds.
+- **Remote control**: clicks, drags, scrolling and typing, across the pages of a flow; passwords are never filled, and Escape takes control back.
+- **Audio and video calls**, and **screen share** both ways.
+- **On hold**: step out to ask a colleague and come back to the same session.
+
+Each step is the visitor's choice, asked in its own question and written to a grants log, your record of consent. Audio, video and screens are never stored, and the visitor's panel never shows up in a recording. The visitor's part is a separate script, loaded only when it is needed (a request, an offer, or the Get help button), so a page where nobody asks never downloads it. [Read more](docs/assist.md)
+
 ## Documentation
 
 | Guide | What it covers |
@@ -106,13 +130,11 @@ See [Privacy](docs/privacy.md) for masking, consent and wording for your privacy
 | [Assist](docs/assist.md) | Help requests: a visitor asks (`SessionReplay.assist.request()` or a "Get help" button), support claims it or offers help from the Live tab; with Holler for Laravel, a live stage in the viewer: the visitor's page mirrored as it happens, remote control, annotations, audio and screen share, each with the visitor's consent |
 | [Configuration](docs/configuration.md) | Every key in `config/session-replay.php` |
 
-Assist's help-request queue works with this package alone. Its live view runs on [Holler for Laravel](https://github.com/packstub/holler): `composer require packstub/holler`, `php artisan migrate` and `Holler::routes()` in `routes/web.php` ([With Holler](docs/assist.md#with-holler)). In a Filament panel, [Filament Holler](https://github.com/packstub/filament-holler) brings it.
-
 Guide: [Session replay in Laravel and Filament, on your own server](https://packstub.dev/guides/laravel-session-replay-self-hosted), a walkthrough from the first recording to watching it behind your own gate, with measured storage sizes.
 
 ## In a Filament panel
 
-[packstub/filament-session-replay](https://github.com/packstub/filament-session-replay/tree/main/docs) puts the sessions inside a Filament v5 panel: a filterable resource, the player with timeline tabs, a relation manager for your users, masking declared on the form field. It requires this package and records through it.
+[packstub/filament-session-replay](https://github.com/packstub/filament-session-replay/tree/main/docs) puts the sessions inside a Filament v5 panel: a filterable resource, the player with timeline tabs, a relation manager for your users, masking declared on the form field, and Assist's help requests and live view in the panel, beside [Filament Holler](https://github.com/packstub/filament-holler). It requires this package and records through it.
 
 ## Alongside other tools
 
