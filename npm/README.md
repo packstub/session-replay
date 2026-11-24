@@ -31,6 +31,8 @@ start({ endpoint: 'https://api.example.com/session-replay/token' });
 
 `start()` fetches the recorder's config and a signed token from your app, behind your app's own sign-in, and resolves to `true` once the tab records. Call it again whenever the person signs in or out (the options of the first call carry over): a token for someone else ends the current recording and starts a new one.
 
+The token is renewed for you before it expires, so a tab that stays open for days keeps recording to its last moment.
+
 With a bearer token instead of the session cookie:
 
 ```js
