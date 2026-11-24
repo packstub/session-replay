@@ -6,8 +6,11 @@ on:
     branches: [main]
   pull_request:
 
+# A newer commit on a pull request replaces the run in progress. A push to main gets a group of its own, so it is never
+# cancelled or left waiting: each run compares only its own push, and a docs push right after a code push would
+# otherwise cancel the only run that tests the code.
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
+  group: ${{ github.workflow }}-${{ github.event_name == 'pull_request' && github.ref || github.run_id }}
   cancel-in-progress: true
 
 jobs:
@@ -21,23 +24,38 @@ jobs:
       code: ${{ steps.diff.outputs.code }}
 
     steps:
+      # Two commits are enough: a pull request is checked out as its merge commit, whose first parent is the base.
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          fetch-depth: 0
+          fetch-depth: 2
 
       - name: Compare with the base
         id: diff
         env:
-          BASE: ${{ github.event.pull_request.base.sha || github.event.before }}
+          EVENT: ${{ github.event_name }}
+          BEFORE: ${{ github.event.before }}
         run: |
-          # No base to compare with (a new branch, a force push): run everything.
-          if [ -z "$BASE" ] || ! git cat-file -e "$BASE^{commit}" 2>/dev/null; then
+          if [ "$EVENT" = "pull_request" ]; then
+            # The merge commit against main as it is now: exactly what merging would change, wherever the branch started
+            # (the event's base.sha can be older than the main the merge commit was made with).
+            base=""
+            if git rev-parse -q --verify "HEAD^2" >/dev/null; then base="HEAD^1"; fi
+          else
+            # A push to main: everything since the commit main pointed at before, fetched on its own (no history needed).
+            base="$BEFORE"
+            if [ -n "$base" ]; then git fetch --quiet --no-tags --depth=1 origin "$base" 2>/dev/null || true; fi
+          fi
+          # No base to compare with (a new branch, a force push that dropped it): run everything.
+          if [ -z "$base" ] || ! git cat-file -e "$base^{commit}" 2>/dev/null; then
+            echo "No base to compare with: the tests run."
             echo "code=true" >> "$GITHUB_OUTPUT"; exit 0
           fi
-          git diff --name-only "$BASE" HEAD > changed.txt
-          echo "Changed:"; cat changed.txt
-          if grep -qvE '^(docs/|art/|LICENSE\.md$|(.*/)?[^/]+\.md$|\.github/(release\.yml$|ISSUE_TEMPLATE/|workflows/(release|docs-sync|add-to-project|dependabot-auto-merge)\.yml$))' changed.txt; then
+          # --no-renames: a file moved onto the list (src/Foo.php to docs/foo.md) still shows its old path.
+          git diff --name-only --no-renames "$base" HEAD > "$RUNNER_TEMP/changed.txt"
+          echo "Changed since $(git rev-parse --short "$base"):"; cat "$RUNNER_TEMP/changed.txt"
+          skip='^(docs/|art/|.*\.md$|\.github/((release|dependabot|FUNDING)\.yml$|ISSUE_TEMPLATE/|workflows/(release|docs-sync|add-to-project|dependabot-auto-merge|fix-php-code-style-issues)\.yml$))'
+          if grep -qvE "$skip" "$RUNNER_TEMP/changed.txt"; then
             echo "code=true" >> "$GITHUB_OUTPUT"
           else
             echo "Only docs, Markdown or release plumbing changed: the tests skip."
