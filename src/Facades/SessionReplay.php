@@ -25,6 +25,7 @@ use Packstub\SessionReplay\SessionReplayManager;
  * @method static string mode()
  * @method static string consent()
  * @method static \Illuminate\Support\HtmlString recorder(array $options = [])
+ * @method static array|null recorderConfig(array $options = [], \Illuminate\Http\Request|null $request = null, bool $page = true)
  * @method static \Illuminate\Support\HtmlString playerAssets()
  * @method static bool check(\Packstub\SessionReplay\Models\ReplaySession|null $session = null, mixed $user = null)
  * @method static mixed viewer()

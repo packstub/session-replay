@@ -31,6 +31,11 @@ class AddReplayContext
             $cookie = $request->cookies->get((string) config('session-replay.context.cookie', 'session_replay_id'));
             [$id, $key] = is_string($cookie) ? array_pad(explode('.', $cookie, 2), 2, null) : [null, null];
 
+            // A frontend on another origin cannot send the cookie; it sends the same value as a header. The cookie wins.
+            if (! (is_string($id) && Str::isUuid($id))) {
+                [$id, $key] = self::fromHeader($request) ?? [null, null];
+            }
+
             if (is_string($id) && Str::isUuid($id)) {
                 Context::add('session_replay', $id);
 
@@ -53,6 +58,29 @@ class AddReplayContext
         }
 
         return $next($request);
+    }
+
+    /**
+     * The recording id and write key from the context.header header ("<uuid>" or "<uuid>.<key>", the key 1 to 128
+     * letters and digits), the id in lower case; null for a header that is off, missing or anything else. Strict: a
+     * page script chooses this value, and it ends up in every log line of the request.
+     *
+     * @return array{0: string, 1: ?string}|null
+     */
+    protected static function fromHeader(Request $request): ?array
+    {
+        $name = config('session-replay.context.header', 'X-Session-Replay');
+        $value = is_string($name) && $name !== '' ? $request->headers->get($name) : null;
+
+        if (! is_string($value) || strlen($value) > 165) {
+            return null;
+        }
+
+        if (! preg_match('/\A([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})(?:\.([A-Za-z0-9]{1,128}))?\z/i', $value, $match)) {
+            return null;
+        }
+
+        return [strtolower($match[1]), ($match[2] ?? '') !== '' ? $match[2] : null];
     }
 
     /**
