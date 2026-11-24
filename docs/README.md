@@ -1,6 +1,6 @@
 # Session Replay for Laravel
 
-Record what a person did in the browser with rrweb, keep the recording on your own disk and database, and watch it inside your own app behind a gate you define. One Blade directive records; nothing has to be built or published. Free and open source (MIT).
+Record what a person did in the browser with rrweb, keep the recording on your own disk and database, and watch it inside your own app behind a gate you define. One Blade directive records; nothing has to be built or published. Assist adds live help on the visitor's page: help requests, co-browsing, remote control and calls. Free and open source (MIT).
 
 - Repository: [github.com/packstub/session-replay](https://github.com/packstub/session-replay)
 - Packagist: [packstub/session-replay](https://packagist.org/packages/packstub/session-replay)
@@ -20,7 +20,8 @@ In a Filament panel, [Filament Session Replay](https://github.com/packstub/filam
 - **[A gate decides who watches](watching.md#the-gate)**: `viewSessionReplay` guards the list, the player and every file behind them.
 - **[Identity without a session](recording.md#who-is-recorded)**: who is signed in travels in a signed token, so any guard and any tenancy setup works.
 - **[A link in every log line](error-tracking.md)**: the recording's id and URL in Laravel's `Context`.
-- **[Help requests](assist.md)**: a visitor asks for help, support takes it from a list or offers it from a live recording; with Holler for Laravel, the two are put on a call.
+- **[Help requests](assist.md)**: a visitor asks for help from the page they are on, support takes it from a list or offers it from a live recording.
+- **[Live co-browsing, calls and remote control](assist.md#the-live-stage)**: with Holler for Laravel, the visitor's page mirrored as it happens, the agent's pointer and drawings on it, remote control, audio, video and screen share, each with the visitor's yes.
 
 ## Guides
 
