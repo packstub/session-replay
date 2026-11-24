@@ -101,7 +101,8 @@ function element(tag, attributes = {}, text = null) {
 // The recorder's <script> tag carries the page's CSP nonce when the app uses one (Vite::cspNonce()); read while
 // that tag runs, so the <style> of the dialog, the toast and the notice carries it too: a style-src that names a
 // nonce blocks every inline style without it, inside a shadow root as well.
-const NONCE = document.currentScript?.nonce || '';
+// Guarded: the npm build may be imported where there is no document (server-side rendering).
+const NONCE = (typeof document !== 'undefined' && document.currentScript?.nonce) || '';
 
 function styles() {
     const node = element('style', {}, STYLE);

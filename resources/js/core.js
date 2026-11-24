@@ -1,0 +1,1875 @@
+import { record } from '@rrweb/record';
+import { getRecordConsolePlugin } from '@rrweb/rrweb-plugin-console-record';
+import { onCLS, onINP, onLCP } from 'web-vitals';
+import { dropHiddenValues, inputMaskOptions, isUnmasked, maskTextAttributes, redactPluginUrls, redactUrl, redactUrlAttributes, redactUrls, simplifyMaskSelector, textMasker } from './lib/privacy.js';
+import { EVENT_FULL_SNAPSHOT, assetPlaceholder, attributeMatcher, referencedAssets, renameVolatileIds, shareSnapshot, sharedSnapshots, skipNodes, stripAttributes, styleSlots } from './lib/process.js';
+import { ACTIVE_SOURCES, activeTime, charsSinceSnapshot, checkoutInterval, estimateChars, estimateEventChars, isTrigger, trimWindow, windowStart } from './lib/buffer.js';
+import { lastingPlugin, navigationPause } from './lib/navigation.js';
+import { hasHeader, observe, requestMarker } from './lib/requests.js';
+import { MAX_PAUSES, MAX_RETRIES, RETRY_AFTER_MAX_MS, SPREAD_MAX_MS, isOutage, pendingFate, retryAfterDelay, retryDelay, spreadDelay, timeLeft } from './lib/pending.js';
+import { ask, dismiss, notice } from './ask.js';
+import { deletePending, listPending, pendingStoreExists, savePending } from './pending.js';
+import { createAssistHook } from './lib/assist-hook.js';
+
+/**
+ * The recorder, without its entry: boot(config) starts it with the config
+ * @sessionReplay writes into a page (recorder.js) or the token route hands a
+ * frontend on another origin (standalone.js, the npm package). It decides
+ * whether this browser session is recorded, and uploads rrweb events
+ * in gzip batches with a small index next to each one (markers, counts, the
+ * stylesheets the batch references), so the server never has to open a batch.
+ *
+ * In mode "on_error" a tab starts in the "buffering" phase: the last
+ * onError.bufferMs stay in memory, nothing is uploaded, and the first marker
+ * of a trigger type uploads that window (after asking, with onError.ask) and
+ * moves the tab to "recording" for the rest of its session. "declined" means
+ * the person said no; the tab is left alone until its session ends.
+ *
+ * An upload that fails is retried for a few minutes while the page stays
+ * open. The window a trigger uploaded is also kept in IndexedDB until it gets
+ * through (onError.keepPending): the server that is down is usually the one
+ * whose failed request fired the trigger, and a reload must not lose the
+ * replay of it. The next page load of the tab sends it first.
+ *
+ * With wire:navigate the document stays, so the config is read again on every
+ * page Livewire swaps in (see navigationPause): a page the app does not record
+ * is not recorded, and the token follows the page. A page signed for another
+ * person or workspace starts a new recording, as a page load would.
+ */
+
+// The config of the page shown now (boot(), then wire:navigate or update()), and what the entry asked for.
+let config = null;
+let options = {};
+const EVENT_META = 4;
+const EVENT_INCREMENTAL = 3;
+const EVENT_CUSTOM = 5;
+const EVENT_PLUGIN = 6;
+const STORAGE_KEY = 'sr:session';
+const FIRST_FLUSH_MS = 800;
+const CONSENT_KEY = 'sr:consent';
+const CONSOLE_PLUGIN = 'rrweb/console@1';
+const KEEPALIVE_LIMIT = 60 * 1024;
+// Batches waiting to go up while the server is away; beyond this they are dropped (see queue()).
+const MAX_QUEUED = 40;
+// Until when the server asked (503 or 429 with Retry-After) for no uploads from this tab, across its page loads.
+const PAUSE_KEY = 'sr:pause';
+const MAX_BUFFERED_EVENTS = 400;
+const MAX_BUFFERED_CHARS = 1_500_000;
+
+let session = null;
+// Set while this tab records: stops everything. stopRrweb is rrweb's own, null while wire:navigate swaps the page.
+let stopRecording = null;
+let stopRrweb = null;
+// The console plugin of this recording, kept across the pause (see lastingPlugin).
+let consoleCapture = null;
+// Snapshots taken once Livewire swapped the page: never uploaded as shared ones.
+const unshared = new WeakSet();
+let stopped = false;
+let buffer = [];
+let bufferedChars = 0;
+// Full snapshots in the buffer, and the estimated size of what followed the newest: over the memory ceiling a fresh
+// snapshot is worth taking when it lets the window drop an older one or a good share of events (see holdWindow).
+let snapshots = 0;
+let sinceSnapshotChars = 0;
+let markers = [];
+let assets = new Set();
+let pendingAssetText = new Map();
+// Stylesheets whose upload failed: tried again after the next batch, or the replay shows the page unstyled.
+let assetRetry = new Set();
+let pendingAsync = 0;
+let sending = Promise.resolve(false);
+let queued = 0;
+let flushTimer = null;
+let flushInterval = 5000;
+let activeMs = 0;
+let lastActiveAt = 0;
+let lastError = { at: 0, label: '' };
+let lastSnapshotAt = 0;
+let checkoutPending = false;
+let overWindow = false;
+let asking = false;
+/** What a failed request tells the question ({ status, message }), set around the mark() that may put it up. */
+let askError = null;
+// The kept window batches (IndexedDB) of this recording, dropped when the tab stops.
+let kept = new Set();
+// Until when uploads wait for the server's Retry-After: every upload of the tab, not only the batch that was told.
+let pausedUntil = 0;
+// Ends the spread a window is waiting out (see share()) at once: the person asked for the replay to be sent.
+let cutSpread = null;
+// Bumped when a recording ends for a new one on the same page: stylesheet hashing still running belongs to the old one.
+let generation = 0;
+// Bumped by stop(): a batch queued before a stop is never sent after it, even once a recording started again
+// (restart() keeps the era: the batches of the recording it ends still go up).
+let era = 0;
+// start() was called on a page the app does not record (consent given there): it runs on the next page that is.
+let startOnNextPage = false;
+// rrweb ids of the elements carrying data-replay-skip on this page (see skipNodes).
+const skipped = new Set();
+// Assist (assist.enabled): a small hook here (the heartbeat, the knock in the upload answer, the emit tap,
+// SessionReplay.assist); the rest is assist.js, loaded with import() the first time it is needed.
+let assist = null;
+
+// Read from the config boot() is given, once per document: a later page's config does not change them.
+let onError = false;
+let windowMs = 0;
+let checkoutMs = 0;
+let keepPending = false;
+// What the rolling window may hold (on_error.max_buffer_mb), by the same estimate as the batches above; past it the
+// window shrinks to its newest snapshot.
+let maxWindowChars = 0;
+
+let matches = null;
+let canHash = false;
+
+function storage(kind) {
+    try {
+        return window[kind];
+    } catch {
+        return null;
+    }
+}
+
+function read(kind, key) {
+    try {
+        return storage(kind)?.getItem(key) ?? null;
+    } catch {
+        return null;
+    }
+}
+
+function write(kind, key, value) {
+    try {
+        storage(kind)?.setItem(key, value);
+    } catch {
+        // Private mode or blocked storage: the recording still works for this page.
+    }
+}
+
+function uuid() {
+    if (window.crypto?.randomUUID) return window.crypto.randomUUID();
+
+    const bytes = new Uint8Array(16);
+
+    (window.crypto || { getRandomValues: (array) => array.forEach((_, i) => (array[i] = Math.floor(Math.random() * 256))) }).getRandomValues(bytes);
+    bytes[6] = (bytes[6] & 0x0f) | 0x40;
+    bytes[8] = (bytes[8] & 0x3f) | 0x80;
+
+    const hex = [...bytes].map((byte) => byte.toString(16).padStart(2, '0')).join('');
+
+    return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
+}
+
+/**
+ * The recording's write key: made with its id, kept beside it, sent with
+ * every upload and in the log-context cookie. The id is in every viewer URL
+ * and log line; the key only this tab holds, and the server takes no upload
+ * (and no server error) for the recording without it.
+ */
+function secret() {
+    const bytes = new Uint8Array(16);
+
+    (window.crypto || { getRandomValues: (array) => array.forEach((_, i) => (array[i] = Math.floor(Math.random() * 256))) }).getRandomValues(bytes);
+
+    return [...bytes].map((byte) => byte.toString(16).padStart(2, '0')).join('');
+}
+
+/** One recording per tab, continued across page loads until the tab sits idle for idleTimeout. */
+function loadSession() {
+    const now = Date.now();
+    let state = null;
+
+    try {
+        state = JSON.parse(read('sessionStorage', STORAGE_KEY) || 'null');
+    } catch {
+        state = null;
+    }
+
+    // A tab that signed in, signed out or switched person since the last page starts a new recording:
+    // the server keeps one person per recording and would refuse the rest of this one.
+    if (!state || typeof state.id !== 'string' || now - state.lastActivity > config.idleTimeout || (state.identity ?? null) !== (config.identity ?? null)) {
+        // The sampling decision is made once and kept with the session.
+        state = { id: uuid(), key: secret(), seq: 0, lastActivity: now, sampled: Math.random() < config.sampleRate, identity: config.identity ?? null };
+    }
+
+    // A recording from before write keys goes on without one (its row has none to compare); nothing to make up.
+    if (typeof state.key !== 'string') state.key = null;
+
+    // A tab from before mode "on_error" was turned on keeps recording; one that was buffering when it was turned off records.
+    // "stopped": the server said so (the size or daily limit, a recording that is someone else's); quiet until the session idles out.
+    if (!['buffering', 'recording', 'declined', 'stopped'].includes(state.phase)) state.phase = onError && state.seq === 0 ? 'buffering' : 'recording';
+    if (!onError && state.phase === 'buffering') state.phase = 'recording';
+
+    return state;
+}
+
+function saveSession() {
+    if (!session) return;
+
+    session.lastActivity = Date.now();
+    write('sessionStorage', STORAGE_KEY, JSON.stringify(session));
+
+    // While buffering the cookie is set too: the log line of the server error that triggers the upload names the recording.
+    // A tab that is not recorded (not sampled, declined) sets none: log lines would name a recording that never exists.
+    if (config.cookie && !['declined', 'stopped'].includes(session.phase) && session.sampled) {
+        const secure = location.protocol === 'https:' ? '; Secure' : '';
+
+        const value = session.key ? `${session.id}.${session.key}` : session.id;
+
+        document.cookie = `${config.cookie}=${value}; path=/; max-age=${Math.round(config.idleTimeout / 1000)}; SameSite=Lax${secure}`;
+    }
+}
+
+function clearCookie() {
+    if (config.cookie) document.cookie = `${config.cookie}=; path=/; max-age=0; SameSite=Lax`;
+}
+
+function hasConsent() {
+    if (config.respectGpc && navigator.globalPrivacyControl) return false;
+
+    return config.consent !== 'opt-in' || read('localStorage', CONSENT_KEY) === '1';
+}
+
+/** Add a marker to the index and, as a custom event, to the recording itself; a trigger type uploads the window. */
+function mark(type, label, payload = {}, heldAt = null) {
+    if (!stopRecording || stopped) return false;
+
+    const at = heldAt ?? Date.now();
+
+    // During a wire:navigate swap: kept until the new page is known, dropped when the app does not record it.
+    if (navigation.defer(() => mark(type, label, payload, at))) return false;
+
+    note(type, label, payload, at, heldAt === null);
+
+    // A server that is away fails every open tab at once: the window that failure triggers goes up spread out.
+    return isTrigger(type, config.onError?.triggers) ? trigger(type === 'request' && isOutage(payload?.status)) : false;
+}
+
+/** The marker itself, at `at`; `live` while rrweb records (a held marker keeps its own time). */
+function note(type, label, payload, at, live) {
+    const text = String(label ?? '').slice(0, 480) || type;
+
+    markers.push({ type, label: text, payload, at });
+
+    try {
+        // While wire:navigate swaps the page rrweb is stopped, and a held marker keeps its time; either goes into
+        // the recording all the same.
+        if (stopRrweb && live) record.addCustomEvent(`sr:${type}`, { label: text, ...payload });
+        else emit({ type: EVENT_CUSTOM, data: { tag: `sr:${type}`, payload: { label: text, ...payload } }, timestamp: at });
+    } catch {
+        // Recording ended between the check and the call.
+    }
+}
+
+/**
+ * The person asks for the replay to be sent (a "report a problem" button):
+ * a "report" marker at this moment and, in mode "on_error", the kept window
+ * goes up without the question, as the first batch of the recording. A tab
+ * that declined or stopped sends nothing. Resolves once the upload went
+ * through or was given up on, to whether anything was sent.
+ */
+function report(label, payload = {}) {
+    if (!stopRecording || stopped || !session) return Promise.resolve(false);
+
+    const at = Date.now();
+
+    // During a wire:navigate swap the marker waits for the new page, as every marker does; the upload does not.
+    if (!navigation.defer(() => mark('report', label, payload, at))) note('report', label, payload, at, true);
+
+    if (session.phase === 'buffering') {
+        // The question that may be up is answered by the button; its own answer, if one still comes, is ignored.
+        if (asking) dismiss();
+
+        asking = false;
+        trimBuffer(at - windowMs);
+        share(false);
+    }
+
+    if (session.phase !== 'recording') return Promise.resolve(false);
+
+    // A window still waiting out an outage's spread goes now, with the report behind it.
+    cutSpread?.();
+
+    return flush();
+}
+
+// Hashed every time: a cache keyed by the text kept up to 30 stylesheets (a panel's is hundreds of kB each) alive
+// for the whole page, to save a few ms of hashing off the main thread per snapshot.
+async function sha256(text) {
+    const digest = await window.crypto.subtle.digest('SHA-256', new TextEncoder().encode(text));
+
+    return [...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, '0')).join('');
+}
+
+/** Swap stylesheet text for its hash; the text is uploaded once, only if the server does not have it. */
+async function dedupeStyles(event, slots) {
+    for (const slot of slots) {
+        const hash = await sha256(slot.text);
+
+        slot.holder[slot.key] = assetPlaceholder(hash);
+        assets.add(hash);
+
+        if (!pendingAssetText.has(hash)) pendingAssetText.set(hash, slot.text);
+    }
+
+    return event;
+}
+
+function push(event) {
+    // Estimated once: a large mutation is sized by walking what it adds.
+    const chars = estimateEventChars(event);
+
+    buffer.push(event);
+    bufferedChars += chars;
+
+    if (event.type === EVENT_FULL_SNAPSHOT) {
+        snapshots++;
+        sinceSnapshotChars = 0;
+    } else {
+        sinceSnapshotChars += chars;
+    }
+
+    if (session?.phase === 'buffering') {
+        holdWindow(event);
+
+        return;
+    }
+
+    if (buffer.length >= MAX_BUFFERED_EVENTS || bufferedChars >= MAX_BUFFERED_CHARS) flush();
+}
+
+/**
+ * Mode "on_error": a fresh snapshot every checkoutMs while something happens,
+ * so the window can always start at one, and the window cut at a snapshot
+ * when one arrives. While the person is being asked the window stops moving,
+ * or the error could slide out of it; only the memory ceiling still applies.
+ */
+function holdWindow(event) {
+    if (event.type === EVENT_FULL_SNAPSHOT) {
+        lastSnapshotAt = Math.max(lastSnapshotAt, event.timestamp);
+
+        if (!asking || overWindow) trimBuffer(overWindow ? Infinity : Date.now() - windowMs);
+
+        overWindow = false;
+
+        return;
+    }
+
+    if (bufferedChars >= maxWindowChars) overWindow = true;
+
+    // Over the ceiling a fresh snapshot lets the window drop what came before it: an older snapshot, or the events
+    // since the newest once they amount to half the ceiling. On a page whose snapshot alone is over the ceiling that
+    // keeps it to the snapshot and half a ceiling of events, never a snapshot per event.
+    const worth = snapshots > 1 || sinceSnapshotChars >= maxWindowChars / 2;
+
+    // Incremental events only: the meta event of a snapshot still being hashed must not ask for another one.
+    if (event.type === EVENT_INCREMENTAL && ((overWindow && worth) || (lastSnapshotAt && event.timestamp - lastSnapshotAt > checkoutMs && !asking))) checkout();
+}
+
+function checkout() {
+    if (checkoutPending) return;
+
+    checkoutPending = true;
+
+    // Not from inside rrweb's own emit call.
+    setTimeout(() => {
+        checkoutPending = false;
+
+        try {
+            if (stopRrweb && !stopped && session?.phase === 'buffering') {
+                record.takeFullSnapshot(true);
+                lastSnapshotAt = Date.now();
+            }
+        } catch {
+            // Recording ended in between.
+        }
+    }, 0);
+}
+
+function trimBuffer(cutoff) {
+    const kept = trimWindow(buffer, markers, windowStart(buffer, cutoff));
+
+    buffer = kept.events;
+    markers = kept.markers;
+    bufferedChars = estimateChars(buffer);
+    snapshots = buffer.filter((event) => event.type === EVENT_FULL_SNAPSHOT).length;
+    sinceSnapshotChars = charsSinceSnapshot(buffer);
+    activeMs = activeTime(buffer);
+
+    // Stylesheets of dropped snapshots: forget their text, unless a snapshot still being hashed may need it.
+    if (pendingAsync === 0) {
+        assets = new Set(referencedAssets(buffer));
+
+        for (const hash of pendingAssetText.keys()) if (!assets.has(hash)) pendingAssetText.delete(hash);
+    }
+
+    saveSession();
+}
+
+/**
+ * A trigger fired while buffering: upload the window and keep recording, after asking when onError.ask is on.
+ * `outage` when the trigger was the server being away (see share()). True when the question went up.
+ */
+function trigger(outage = false) {
+    if (!session || session.phase !== 'buffering' || asking || stopped) return false;
+
+    // A "no" with onError.askAgain: the next question waits a window, so a burst of errors asks once.
+    if (session.declinedAt && Date.now() - session.declinedAt < windowMs) return false;
+
+    trimBuffer(Date.now() - windowMs);
+
+    if (!config.onError.ask) {
+        share(false, outage);
+
+        return false;
+    }
+
+    asking = true;
+
+    // The answer is about this recording: a wire:navigate to another workspace meanwhile starts a new one.
+    const asked = session;
+
+    ask(config.onError.labels, { offerAnonymous: !!config.onError.offerAnonymous, error: askError, toast: config.onError.ask === 'toast', timeoutMs: config.onError.askTimeoutMs ?? 60_000 })
+        .then((answer) => {
+            asking = false;
+
+            if (stopped || session !== asked || session.phase !== 'buffering') return;
+
+            if (answer.share) {
+                share(answer.anonymous, outage);
+                notice(config.onError.labels.sent);
+
+                return;
+            }
+
+            // Declined with askAgain: this window is dropped, the tab keeps one and asks again on a later trigger.
+            if (config.onError.askAgain) {
+                session.declinedAt = Date.now();
+                trimBuffer(Infinity);
+                saveSession();
+
+                return;
+            }
+
+            // Declined: the window is dropped and this tab is not recorded again until its session ends.
+            stop();
+            session.phase = 'declined';
+            saveSession();
+        })
+        .catch(() => {
+            asking = false;
+        });
+
+    return true;
+}
+
+/**
+ * Start sending: the window first, then the batches that follow. A window an
+ * outage triggered (no answer, 502, 503, 504) waits 30 to 120 s at random
+ * before its first upload, so the tabs the outage triggered all at once do not
+ * all upload at once when the server comes back. Only a window kept in the
+ * browser waits: a tab closed meanwhile sends it on its next page load, after
+ * what is left of the wait.
+ */
+function share(anonymous, outage = false) {
+    session.phase = 'recording';
+    session.anonymous = !!anonymous;
+    saveSession();
+
+    if (buffer.length) {
+        const batch = takeBatch();
+
+        // The window itself: kept in the browser when its upload fails, unlike the batches that follow.
+        batch.window = keepPending;
+        if (outage && keepPending) batch.notBefore = Date.now() + spreadDelay();
+        queue(batch);
+    }
+
+    schedule();
+}
+
+function trackActivity(event) {
+    if (event.type !== 3 || !ACTIVE_SOURCES.has(event.data?.source)) return;
+
+    // Gaps under five seconds count as one stretch of activity.
+    if (lastActiveAt && event.timestamp - lastActiveAt < 5000) activeMs += event.timestamp - lastActiveAt;
+
+    lastActiveAt = event.timestamp;
+}
+
+function consoleMarker(event) {
+    if (event.type !== 6 || event.data?.plugin !== CONSOLE_PLUGIN || event.data.payload?.level !== 'error') return;
+
+    const label = redactUrls((event.data.payload.payload || []).join(' '), config.privacy.redactQuery).slice(0, 480);
+
+    // An uncaught error is also logged by the console plugin; keep the "error" marker only.
+    if (event.timestamp - lastError.at < 250 && label.includes(lastError.label.slice(0, 80))) return;
+
+    markers.push({ type: 'console', label: label || 'console.error', payload: {}, at: event.timestamp });
+
+    // After the event is in the buffer: emit() pushes it right after this returns.
+    if (isTrigger('console', config.onError?.triggers)) setTimeout(trigger, 0);
+}
+
+function textMaskingOn() {
+    return !!(config.privacy.maskAllText || config.privacy.maskTextSelector);
+}
+
+/** Whether the element rrweb serialized as `id` shows masked text (mask_all_text, or inside mask_text_selector). */
+function isTextMasked(id) {
+    try {
+        const node = record.mirror.getNode(id);
+        const element = node && node.nodeType === 1 ? node : node?.parentElement;
+
+        return isElementTextMasked(element);
+    } catch {
+        // An invalid selector: mask rather than guess.
+        return true;
+    }
+}
+
+/** What rrweb serialized as `id` is, for a changed attribute that names only the id: its tag and, for an input, its type. */
+function elementOf(id) {
+    try {
+        const node = record.mirror.getNode(id);
+
+        return node && node.nodeType === 1 ? { tagName: node.tagName.toLowerCase(), type: node.getAttribute('type') || '' } : null;
+    } catch {
+        return null;
+    }
+}
+
+/** mask_all_text outside unmask_text_selector, and mask_text_selector everywhere. */
+function isElementTextMasked(element) {
+    if (config.privacy.maskAllText) return !isUnmasked(element, config.privacy.unmaskTextSelector, config.privacy.maskTextSelector);
+
+    return !!element?.closest?.(config.privacy.maskTextSelector);
+}
+
+function emit(event) {
+    if (stopped) return;
+
+    // The Assist widget, the agent's cursor and strokes: never recorded, never mirrored back.
+    if (!skipNodes(event, skipped)) return;
+
+    trackActivity(event);
+    consoleMarker(event);
+    stripAttributes(event, matches);
+    dropHiddenValues(event);
+    redactUrlAttributes(event, config.privacy.redactQuery, location.href);
+    redactPluginUrls(event, config.privacy.redactQuery);
+    if (textMaskingOn()) maskTextAttributes(event, isTextMasked, elementOf);
+
+    if (event.type === EVENT_META && event.data && event.data.href) event.data.href = redacted(event.data.href);
+    // Once the tab used wire:navigate its snapshots are numbered after the first page's, so they never match a shared
+    // one, and the page is not the one the server rendered for share_routes.
+    if (event.type === EVENT_FULL_SNAPSHOT && navigation.swapped()) unshared.add(event);
+    // Whether a snapshot may be shared is the setting of the page it was taken on.
+    if (event.type === EVENT_FULL_SNAPSHOT && !config.snapshots?.share) unshared.add(event);
+
+    // The live view gets the event here, masked like the recording, before the asynchronous dedupe below swaps
+    // stylesheet text for placeholders in place (and before an upload renames parts of it).
+    assist?.tap(event);
+
+    const slots = config.size.dedupeStylesheets && canHash ? styleSlots(event, config.size.dedupeMinBytes) : [];
+
+    if (slots.length === 0) {
+        push(event);
+
+        return;
+    }
+
+    // Hashing is asynchronous; the player sorts by timestamp, so arriving a little late is fine.
+    const current = generation;
+
+    pendingAsync++;
+    dedupeStyles(event, slots)
+        .catch(() => event)
+        .then((processed) => {
+            pendingAsync--;
+
+            if (current === generation) push(processed);
+        });
+}
+
+async function gzip(text) {
+    if (typeof CompressionStream === 'undefined') return new Blob([text], { type: 'application/json' });
+
+    const stream = new Blob([text]).stream().pipeThrough(new CompressionStream('gzip'));
+
+    return new Blob([await new Response(stream).arrayBuffer()], { type: 'application/gzip' });
+}
+
+function takeBatch() {
+    const batch = {
+        seq: session.seq++,
+        events: buffer,
+        meta: {
+            // The page the batch starts on, which for a window uploaded on error may be an earlier one (wire:navigate).
+            url: buffer.find((event) => event.type === EVENT_META)?.data?.href || redacted(location.href),
+            viewport: { width: window.innerWidth, height: window.innerHeight },
+            from: buffer[0].timestamp,
+            to: buffer[buffer.length - 1].timestamp,
+            events: buffer.length,
+            activeMs: Math.round(activeMs),
+            markers,
+            assets: [...assets],
+        },
+        anonymous: !!session.anonymous,
+        // What the batch was recorded under: after a wire:navigate to another workspace it is still sent with these.
+        session,
+        token: config.token,
+        identity: config.identity ?? null,
+        tries: 0,
+        blob: null,
+        window: false,
+        kept: false,
+    };
+
+    buffer = [];
+    bufferedChars = 0;
+    snapshots = 0;
+    sinceSnapshotChars = 0;
+    markers = [];
+    assets = new Set();
+    activeMs = 0;
+    saveSession();
+
+    return batch;
+}
+
+function form(batch, blob) {
+    const data = new FormData();
+
+    data.append('token', batch.token);
+    data.append('session', batch.session.id);
+    if (batch.session.key) data.append('key', batch.session.key);
+    data.append('seq', String(batch.seq));
+
+    // The person chose to send this recording without their name: the server drops who they are from the token.
+    if (batch.anonymous) data.append('anonymous', '1');
+    data.append('meta', JSON.stringify(batch.meta));
+    data.append('events', blob, 'events');
+
+    return data;
+}
+
+/**
+ * Uploads the stylesheets the server asked for, named for the recording (it points at a stylesheet only once its
+ * own upload went through); returns the hashes whose upload failed and is worth trying again.
+ */
+async function uploadAssets(hashes, token, recording) {
+    const failed = [];
+
+    for (const hash of hashes) {
+        const text = pendingAssetText.get(hash);
+
+        if (text === undefined) continue;
+
+        // The server asked for a pause: the stylesheet goes with a later batch.
+        if (isPaused()) {
+            failed.push(hash);
+            continue;
+        }
+
+        const data = new FormData();
+
+        data.append('token', token);
+        data.append('hash', hash);
+        data.append('session', recording.id);
+        if (recording.key) data.append('key', recording.key);
+        data.append('content', await gzip(text), 'content');
+
+        try {
+            const response = await fetch(config.assetUrl, { method: 'POST', body: data });
+
+            if (response.status === 429 && (await answer(response)).stop) {
+                stop(true);
+
+                return failed;
+            }
+
+            if (response.status === 429 || response.status >= 500) {
+                honourRetryAfter(response);
+                failed.push(hash);
+            }
+        } catch {
+            failed.push(hash);
+        }
+    }
+
+    return failed;
+}
+
+const SHARED_KEY = 'sr:shared';
+const SHARED_TTL = 60 * 60 * 1000;
+
+/**
+ * Hashes this tab uploaded in the last hour as the person and workspace it is
+ * signed in as (the server keeps a snapshot for a day after it was last sent,
+ * for the workspace that sent it: a recording made in another one after a
+ * switch in this tab has to send the page again, or it could not point at it).
+ */
+function uploadedSnapshots() {
+    try {
+        const now = Date.now();
+        const shared = JSON.parse(read('sessionStorage', SHARED_KEY) || '{}');
+
+        if ((shared.identity ?? null) !== (config.identity ?? null)) return {};
+
+        return Object.fromEntries(Object.entries(shared.hashes || {}).filter(([, at]) => now - at < SHARED_TTL));
+    } catch {
+        return {};
+    }
+}
+
+/**
+ * On a page the app shares snapshots for: store the page's tree once per hash
+ * and keep only the hash in the batch. A tree is swapped only once the server
+ * has it; when the upload fails the batch carries it as before. The final
+ * request of a closing page never comes here, so it always carries its tree.
+ */
+async function shareSnapshots(batch) {
+    for (const event of batch.events) {
+        if (event.type !== EVENT_FULL_SNAPSHOT || !event.data || !event.data.node || unshared.has(event)) continue;
+
+        try {
+            renameVolatileIds(event.data.node, config.snapshots.volatileIds);
+
+            const text = JSON.stringify(event.data.node);
+            const digest = await window.crypto.subtle.digest('SHA-256', new TextEncoder().encode(text));
+            const hash = [...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, '0')).join('');
+            const uploaded = uploadedSnapshots();
+
+            if (!uploaded[hash]) {
+                // The server asked for a pause: the snapshot stays in the batch.
+                if (isPaused()) continue;
+
+                const data = new FormData();
+
+                data.append('token', batch.token);
+                data.append('hash', hash);
+                data.append('content', await gzip(text), 'content');
+
+                // The answer is the same whether the server had it or not; only a failure keeps the tree inline.
+                const response = await fetch(config.snapshots.url, { method: 'POST', body: data });
+
+                if (!response.ok) {
+                    honourRetryAfter(response);
+                    continue;
+                }
+
+                uploaded[hash] = Date.now();
+                write('sessionStorage', SHARED_KEY, JSON.stringify({ identity: config.identity ?? null, hashes: Object.fromEntries(Object.entries(uploaded).slice(-50)) }));
+            }
+
+            shareSnapshot(event, hash);
+        } catch {
+            // Offline or no crypto.subtle: the snapshot stays in the batch.
+        }
+    }
+
+    batch.meta.snapshots = sharedSnapshots(batch.events);
+}
+
+/**
+ * What a batch needs before it goes up, done when it is queued rather than
+ * when its turn comes: the snapshots shared, the events gzipped and, once the
+ * gzip is small enough for one request, the events let go of. A batch that
+ * waits behind a slow server then holds a gzip (a tenth of the JSON), not the
+ * event objects (several times the JSON). Too big for one upload, the events
+ * stay for send() to split. A retry or a batch kept from an earlier page keeps
+ * what it has.
+ */
+async function prepare(batch) {
+    if (!batch.blob) {
+        if (config.snapshots && canHash && batch.events.some((event) => event.type === EVENT_FULL_SNAPSHOT && !unshared.has(event))) await shareSnapshots(batch);
+
+        batch.blob = await gzip(JSON.stringify(batch.events));
+    }
+
+    if (batch.blob.size <= config.maxBatchBytes || batch.events.length <= 1) batch.events = [];
+}
+
+async function send(batch) {
+    // Stopped meanwhile (consent withdrawn, the server said stop): what was queued before stays here, also when a
+    // recording started again in the meantime (the batch is of the generation that stopped).
+    if (stopped || batch.era !== era) return false;
+
+    await prepare(batch);
+
+    const blob = batch.blob;
+
+    if (blob.size > config.maxBatchBytes && batch.events.length > 1) {
+        // Too big for one upload: split and send the halves in order.
+        const middle = Math.ceil(batch.events.length / 2);
+        const tail = { ...batch, seq: batch.session.seq++, events: batch.events.slice(middle), meta: { ...batch.meta, markers: [], assets: [], activeMs: 0 }, blob: null };
+
+        batch.blob = null;
+        batch.events = batch.events.slice(0, middle);
+        batch.meta.events = batch.events.length;
+        batch.meta.to = batch.events[batch.events.length - 1].timestamp;
+        tail.meta.events = tail.events.length;
+        tail.meta.from = tail.events[0].timestamp;
+        saveSession();
+
+        const first = await send(batch);
+
+        return (await send(tail)) && first;
+    }
+
+    // The window is kept before it goes up, not after the upload failed: a server that is down often answers only
+    // after half a minute, and a reload before that aborts the request without an answer.
+    if (batch.window && !batch.kept && !stopped) await keep(batch);
+
+    // The spread of a window an outage triggered (kept above with its end, so a page load does not start it over),
+    // then any pause the server asked for.
+    if (batch.notBefore) {
+        await new Promise((resolve) => {
+            cutSpread = resolve;
+            sleepUntil(batch.notBefore, SPREAD_MAX_MS).then(resolve);
+        });
+        cutSpread = null;
+        batch.notBefore = 0;
+    }
+
+    await pause();
+
+    if (stopped || batch.era !== era) return false;
+
+    let response;
+
+    try {
+        response = await fetch(config.ingestUrl, { method: 'POST', body: form(batch, blob) });
+    } catch {
+        return failed(batch);
+    }
+
+    // The token expired while the page stayed open (a frontend that fetched it, standalone.js): one fresh token for
+    // the same person, and the batch goes again. A page the app rendered has no way to get one and stops below.
+    if (response.status === 401 && options.refreshToken && !batch.refreshed) {
+        batch.refreshed = true;
+
+        let token = null;
+
+        try {
+            token = await options.refreshToken(batch.identity);
+        } catch {
+            token = null;
+        }
+
+        if (typeof token === 'string' && token && !stopped && batch.era === era) {
+            batch.token = token;
+
+            return send(batch);
+        }
+    }
+
+    const body = await answer(response);
+
+    // "Stop" comes with a 429 too (the daily limit): read before the retry decision, or the tab would retry all day.
+    if (body.stop) {
+        if (batch.kept) settle(batch);
+        stop(true);
+
+        return false;
+    }
+
+    if (response.status === 429 || response.status >= 500) {
+        if (response.status === 429) flushInterval = Math.min(flushInterval * 2, 60_000);
+
+        // The server said when to come back: every upload of the tab waits, and the wait is no failed try. A few of
+        // them at most, or a server that always says "later" would keep the batch forever.
+        if (honourRetryAfter(response) && (batch.pauses || 0) < MAX_PAUSES) {
+            batch.pauses = (batch.pauses || 0) + 1;
+
+            return failed(batch, true);
+        }
+
+        return failed(batch);
+    }
+
+    // The server answered: accepted or refused. Either way the kept copy has done its job.
+    if (batch.kept) settle(batch);
+
+    if (response.ok) {
+        // Back to the usual pace once the server takes batches again.
+        flushInterval = config.flushInterval;
+
+        // An agent's offer of help for this recording (Assist).
+        if (assist && body.assist) assist.knock(body.assist);
+
+        // A stylesheet whose upload failed earlier goes again with the next batch; its text is kept until then.
+        assetRetry = new Set(await uploadAssets([...new Set([...(body.missing_assets || []), ...assetRetry])], batch.token, batch.session));
+
+        for (const hash of batch.meta.assets) if (!assetRetry.has(hash)) pendingAssetText.delete(hash);
+    }
+
+    return response.ok;
+}
+
+/** The server's JSON answer, or nothing readable. */
+async function answer(response) {
+    try {
+        const body = await response.json();
+
+        return body && typeof body === 'object' ? body : {};
+    } catch {
+        return {};
+    }
+}
+
+/**
+ * The server could not take the batch: the window is in IndexedDB (see send()), the batch is retried; `paused`
+ * when the server said when (send() waits for the pause, the try is not counted).
+ */
+async function failed(batch, paused = false) {
+    if (batch.window && !batch.kept && !stopped) await keep(batch);
+
+    if (paused) return stopped ? false : send(batch);
+
+    return retry(batch);
+}
+
+/**
+ * A 503 or 429 with Retry-After pauses every upload of the tab for that long (capped, jittered; see
+ * retryAfterDelay()), kept in sessionStorage so a page load does not cut it short. True when the answer had one.
+ */
+function honourRetryAfter(response) {
+    if (response.status !== 503 && response.status !== 429) return false;
+
+    let ms = null;
+
+    try {
+        ms = retryAfterDelay(response.headers.get('Retry-After'));
+    } catch {
+        // No headers to read (an odd fetch polyfill).
+    }
+
+    if (ms === null) return false;
+
+    pausedUntil = Math.max(pausedUntil, Date.now() + ms);
+    write('sessionStorage', PAUSE_KEY, String(pausedUntil));
+
+    return true;
+}
+
+/** Whether uploads wait for the server's Retry-After right now. */
+function isPaused() {
+    const now = Date.now();
+
+    if (!pausedUntil) pausedUntil = Number(read('sessionStorage', PAUSE_KEY)) || 0;
+    // A clock that went back holds no upload for longer than the longest pause.
+    if (pausedUntil > now + RETRY_AFTER_MAX_MS) pausedUntil = now + RETRY_AFTER_MAX_MS;
+
+    return timeLeft(pausedUntil, now, RETRY_AFTER_MAX_MS) > 0;
+}
+
+/** Resolves once the server's Retry-After is over, also when it was extended meanwhile. */
+async function pause() {
+    while (isPaused() && !stopped) await sleepUntil(pausedUntil, RETRY_AFTER_MAX_MS);
+}
+
+/** Waits until `until`, at most `max`; unlike wait(), the browser going online does not cut it short. */
+function sleepUntil(until, max) {
+    const ms = timeLeft(until, Date.now(), max);
+
+    return ms > 0 ? new Promise((resolve) => setTimeout(resolve, ms)) : Promise.resolve();
+}
+
+/** The window a trigger uploads stays in IndexedDB until the server answers. */
+async function keep(batch) {
+    batch.kept = true;
+    kept.add(batch);
+
+    // The stylesheets the window references and the server may not have yet: the next page cannot hash them again.
+    const assetText = {};
+
+    for (const hash of batch.meta.assets) if (pendingAssetText.has(hash)) assetText[hash] = pendingAssetText.get(hash);
+
+    await savePending(batch.session.id, batch, batch.blob, assetText, batch.identity);
+}
+
+/** The kept copy of a batch is no longer needed. */
+function settle(batch) {
+    batch.kept = false;
+    kept.delete(batch);
+    deletePending(batch.session.id, batch.seq);
+}
+
+function retry(batch) {
+    if (++batch.tries > MAX_RETRIES || stopped) return false;
+
+    return wait(retryDelay(batch.tries)).then(() => (stopped ? false : send(batch)));
+}
+
+/** Waits `ms`, or less when the browser says it is back online. */
+function wait(ms) {
+    return new Promise((resolve) => {
+        const done = () => {
+            clearTimeout(timer);
+            window.removeEventListener('online', done);
+            resolve();
+        };
+        const timer = setTimeout(done, ms);
+
+        window.addEventListener('online', done);
+    });
+}
+
+/**
+ * Batches go up one after the other, in order. While the server is away the
+ * queue is capped: a batch past the cap is dropped (its events are lost, the
+ * recording is cut there), rather than hours of raw events held in memory.
+ */
+function queue(batch) {
+    if (queued >= MAX_QUEUED) return Promise.resolve(false);
+
+    queued++;
+    batch.era = era;
+
+    // Compressed now, while earlier batches are still going up.
+    const ready = prepare(batch).catch(() => {});
+
+    sending = sending
+        .then(() => ready)
+        .then(() => send(batch))
+        .catch(() => false)
+        .finally(() => queued--);
+
+    return sending;
+}
+
+/** Uploads what the buffer holds; resolves to whether the server took it. */
+function flush() {
+    if (stopped || !session || session.phase !== 'recording' || buffer.length === 0) return Promise.resolve(false);
+
+    return queue(takeBatch());
+}
+
+/**
+ * A page load in a tab whose window did not get through: send what is kept
+ * before anything this page records, so the recording stays in order. What
+ * is too old or belongs to someone else is dropped; another tab's is left
+ * for that tab.
+ */
+async function resumePending() {
+    const own = [];
+
+    for (const record of await listPending()) {
+        const fate = pendingFate(record, { sessionId: session.id, identity: config.identity, now: Date.now(), idleTimeout: config.idleTimeout });
+
+        if (fate === 'drop') deletePending(record.session, record.seq);
+        if (fate === 'send') own.push(record);
+    }
+
+    own.sort((a, b) => a.seq - b.seq);
+
+    for (const record of own) {
+        if (stopped) return;
+
+        for (const [hash, text] of Object.entries(record.assets || {})) if (!pendingAssetText.has(hash)) pendingAssetText.set(hash, text);
+
+        // Of this era: send() drops a batch of another one. notBefore: what is left of an outage's spread.
+        const batch = { seq: record.seq, events: [], meta: record.meta, anonymous: !!record.anonymous, session, token: config.token, identity: config.identity ?? null, tries: 0, blob: record.blob, window: true, kept: true, era, notBefore: Number(record.notBefore) || 0 };
+
+        kept.add(batch);
+        await send(batch);
+    }
+}
+
+/**
+ * The page is going away: no time for compression or retries, one keepalive
+ * request with what is left. A tab that is only hidden (`final` false) keeps
+ * the usual path for what keepalive cannot carry: gzip, split, retries.
+ */
+function flushOnUnload(final = true) {
+    if (stopped || !session || session.phase !== 'recording' || buffer.length === 0) return;
+
+    const batch = takeBatch();
+    const blob = new Blob([JSON.stringify(batch.events)], { type: 'application/json' });
+    // The browser counts the whole body against keepalive's 64 KB, the index and the token included.
+    const size = blob.size + JSON.stringify(batch.meta).length + String(batch.token).length + 1024;
+
+    if (!final && size >= KEEPALIVE_LIMIT) {
+        queue(batch);
+
+        return;
+    }
+
+    try {
+        const body = form(batch, blob);
+
+        // Firefox before 133 ignores keepalive and cancels the request with the page; sendBeacon carries the same size.
+        if (size < KEEPALIVE_LIMIT && !('keepalive' in Request.prototype) && navigator.sendBeacon?.(config.ingestUrl, body)) return;
+
+        // Caught: on a page that stays (a tab switch while offline) a rejection would count as the app's own error.
+        fetch(config.ingestUrl, { method: 'POST', body, keepalive: size < KEEPALIVE_LIMIT }).catch(() => {});
+    } catch {
+        // Nothing left to do on a closing page.
+    }
+}
+
+function schedule() {
+    clearTimeout(flushTimer);
+
+    flushTimer = setTimeout(() => {
+        flush();
+        schedule();
+    }, flushInterval);
+}
+
+/** The URL without the values of the query parameters privacy.redact_query lists. */
+function redacted(url) {
+    return redactUrl(url, config.privacy.redactQuery, location.href);
+}
+
+/** Whether anything inside the element matches one of the selectors; a selector the browser rejects counts as a match. */
+function hasInside(element, selectors) {
+    const selector = selectors.filter(Boolean).join(', ');
+
+    if (!selector) return false;
+
+    try {
+        return !!element.querySelector(selector);
+    } catch {
+        return true;
+    }
+}
+
+function describe(element) {
+    if (!(element instanceof Element)) return 'unknown';
+
+    // A click lands on the label or the icon inside a control; the control is what was clicked.
+    element = element.closest('button, a, [role="button"], summary, label, input, select, textarea') || element;
+
+    // Inside a blocked region the replay shows an empty box; its captions stay out of the marker list too.
+    if (config.privacy.blockSelector && element.closest(config.privacy.blockSelector)) return element.tagName.toLowerCase();
+
+    const masked = (config.privacy.maskAllText || config.privacy.maskTextSelector) && isElementTextMasked(element);
+    const tag = element.tagName.toLowerCase();
+
+    // What the author called it reads better in a list than utility classes: alt, aria-label, title, and a
+    // button's own caption. Never the text of anything else (a link or a cell may hold a name).
+    let name = (element.getAttribute('alt') || element.getAttribute('aria-label') || element.getAttribute('title') || '').trim();
+
+    // Not when part of the caption is masked or blocked: "Remove <span data-replay-mask>Jane Doe</span>".
+    if (!name && !hasInside(element, [config.privacy.maskTextSelector, config.privacy.blockSelector]) && (tag === 'button' || element.getAttribute('role') === 'button')) {
+        name = (element.textContent || '').replace(/\s+/g, ' ').trim();
+    }
+
+    if (name && !masked) return `${tag} "${name.slice(0, 60)}"`;
+
+    const id = element.id ? `#${element.id}` : '';
+    const classes = typeof element.className === 'string' && element.className ? '.' + element.className.trim().split(/\s+/).slice(0, 2).join('.') : '';
+
+    return `${tag}${id}${classes}`.slice(0, 120);
+}
+
+let lastPage = null;
+
+/** One "navigation" marker per page, however many signals announce it. */
+function markPage() {
+    // Without the hash: a jump to an anchor (popstate) is no page view.
+    if (lastPage === location.pathname + location.search) return;
+
+    lastPage = location.pathname + location.search;
+
+    const page = new URL(redacted(location.href));
+
+    // With mask_all_text the title is text on screen like any other (a person's name on their profile page).
+    mark('navigation', page.pathname + page.search, config.privacy.maskAllText ? { url: page.href } : { url: page.href, title: document.title.slice(0, 200) });
+}
+
+function watchErrors() {
+    window.addEventListener('error', (event) => {
+        // Resource load failures bubble here without a message; they are not script errors.
+        if (!event.message) return;
+
+        const label = redactUrls(event.message, config.privacy.redactQuery);
+
+        // Redacted, as the console marker's label is: consoleMarker() compares the two.
+        lastError = { at: Date.now(), label };
+        mark('error', label, {
+            source: redacted(event.filename),
+            line: event.lineno,
+            column: event.colno,
+            stack: redactUrls(String(event.error?.stack || ''), config.privacy.redactQuery).slice(0, 2000),
+        });
+    });
+
+    window.addEventListener('unhandledrejection', (event) => {
+        const label = redactUrls(String(event.reason?.message || event.reason || 'Unhandled promise rejection'), config.privacy.redactQuery);
+
+        lastError = { at: Date.now(), label };
+        mark('error', label, { stack: redactUrls(String(event.reason?.stack || ''), config.privacy.redactQuery).slice(0, 2000) });
+    });
+}
+
+/**
+ * The title of an error page: Laravel's production pages carry the short message there ("Server Error", "Not Found").
+ * The debug page's title is the app's name, which says nothing about the error.
+ */
+function errorTitle(html) {
+    if (typeof html !== 'string' || !html) return null;
+
+    try {
+        const title = new DOMParser().parseFromString(html.slice(0, 20000), 'text/html').title.trim().replace(/\s+/g, ' ');
+
+        if (!title || title === String(config.appName || '').trim()) return null;
+
+        return title.slice(0, 120);
+    } catch {
+        return null;
+    }
+}
+
+function watchLivewire() {
+    const hook = () => {
+        try {
+            window.Livewire.hook('request', ({ url, fail }) => {
+                fail(({ status, content, preventDefault }) => {
+                    askError = { status: Number(status) || null, message: errorTitle(content) };
+
+                    const asked = mark('request', `Livewire request failed (${status})`, { status, url: redacted(String(url || '')).slice(0, 500) });
+
+                    askError = null;
+
+                    // The question in place of Livewire's modal with the error page (on_error.livewire_error_modal).
+                    // An expired page (419) keeps Livewire's offer to reload: the question would have nothing to send to.
+                    if (asked && config.onError?.replaceLivewireModal && status !== 419) preventDefault?.();
+                });
+            });
+        } catch {
+            // A Livewire without the request hook: nothing to watch.
+        }
+    };
+
+    window.Livewire ? hook() : document.addEventListener('livewire:init', hook, { once: true });
+
+    // wire:navigate swaps the page without a load; the recording restarted with a snapshot of it (see
+    // watchNavigation, registered first), the index gets the page. Livewire also fires it on the first load,
+    // which start() already marked.
+    document.addEventListener('livewire:navigated', () => markPage());
+}
+
+/**
+ * Requests that do not go through Livewire (Inertia, Vue, React, fetch or
+ * axios): a same-origin one answered at or above capture.requests, or not at
+ * all, becomes a "request" marker, as a failed Livewire request does.
+ * Livewire's own requests are left to watchLivewire(); a request the page cut
+ * off by closing or navigating away is no failure of the app.
+ */
+function watchRequests() {
+    const threshold = config.capture.requests;
+    // ingest, ingest/asset and ingest/snapshot share the prefix.
+    const skip = [config.ingestUrl];
+    // Origins besides the page's whose failures count (a frontend's API on the app's origin, standalone.js).
+    const origins = Array.isArray(options.requestOrigins) ? options.requestOrigins : [];
+    let leaving = false;
+    let leavingTimer = null;
+
+    const leave = () => {
+        leaving = true;
+        clearTimeout(leavingTimer);
+        // A beforeunload another script cancelled: the page stays.
+        leavingTimer = setTimeout(() => (leaving = false), 3000);
+    };
+
+    window.addEventListener('beforeunload', leave);
+    window.addEventListener('pagehide', leave);
+
+    const report = (details) => {
+        if (leaving) return;
+
+        const marker = requestMarker({ ...details, threshold, page: location.href, skip, origins });
+
+        if (marker) mark('request', marker.label, { ...marker.payload, url: redacted(marker.payload.url) });
+    };
+
+    const nativeFetch = window.fetch;
+
+    if (typeof nativeFetch === 'function') {
+        window.fetch = function (input, init) {
+            const started = performance.now();
+            const promise = nativeFetch.apply(this, arguments);
+
+            try {
+                const url = typeof input === 'string' || input instanceof URL ? String(input) : input?.url;
+                const method = init?.method || input?.method || 'GET';
+
+                if (!hasHeader(init?.headers, 'X-Livewire') && !hasHeader(input?.headers, 'X-Livewire')) {
+                    // Settles like the app's own promise: a failure the app does not catch still reaches
+                    // unhandledrejection (the error marker, the app's error tracker).
+                    return observe(
+                        promise,
+                        (response) => report({ url: response.url || url, method, status: response.status, type: response.type, duration: performance.now() - started }),
+                        (error) => error?.name !== 'AbortError' && report({ url, method, status: 0, duration: performance.now() - started }),
+                    );
+                }
+            } catch {
+                // Never in the way of the app's own request.
+            }
+
+            return promise;
+        };
+    }
+
+    if (typeof XMLHttpRequest === 'undefined') return;
+
+    const requests = new WeakMap();
+    const listening = new WeakSet();
+    const proto = XMLHttpRequest.prototype;
+    const open = proto.open;
+    const setRequestHeader = proto.setRequestHeader;
+    const send = proto.send;
+
+    proto.open = function (method, url) {
+        requests.set(this, { method, url: String(url), livewire: false, aborted: false, started: 0 });
+
+        return open.apply(this, arguments);
+    };
+    proto.setRequestHeader = function (name) {
+        const request = requests.get(this);
+
+        if (request && String(name).toLowerCase() === 'x-livewire') request.livewire = true;
+
+        return setRequestHeader.apply(this, arguments);
+    };
+    proto.send = function () {
+        const request = requests.get(this);
+
+        if (request) request.started = performance.now();
+
+        // Listeners once per object: an XMLHttpRequest opened again (a retry helper) reads its current request.
+        if (request && !listening.has(this)) {
+            listening.add(this);
+
+            this.addEventListener('abort', () => {
+                const current = requests.get(this);
+
+                if (current) current.aborted = true;
+            });
+            this.addEventListener('loadend', () => {
+                const current = requests.get(this);
+
+                if (!current || current.livewire || current.aborted) return;
+
+                report({ url: this.responseURL || current.url, method: current.method, status: this.status, duration: performance.now() - current.started });
+            });
+        }
+
+        return send.apply(this, arguments);
+    };
+}
+
+/**
+ * Client-side page changes of a router (Inertia, Vue Router, React Router):
+ * pushState and the back button add the "navigation" marker a page load adds.
+ * replaceState does not: Livewire's #[Url] properties and table filters use it
+ * on every change. wire:navigate marks its page once the new one is in place.
+ */
+function watchHistory() {
+    const changed = () => {
+        if (navigation.isAwaiting()) return;
+
+        // After the router had a moment to set the new page's title.
+        setTimeout(() => navigation.isAwaiting() || markPage(), 0);
+    };
+    const pushState = history.pushState;
+
+    history.pushState = function () {
+        const result = pushState.apply(this, arguments);
+
+        changed();
+
+        return result;
+    };
+    window.addEventListener('popstate', changed);
+}
+
+function watchRageClicks() {
+    let clicks = [];
+    let quietUntil = 0;
+
+    document.addEventListener(
+        'click',
+        (event) => {
+            // Keyboard and scripted clicks carry no position; three presses of Enter are not rage.
+            if (event.detail === 0) return;
+
+            const now = Date.now();
+
+            clicks = clicks.filter((click) => now - click.at < 700);
+            clicks.push({ at: now, x: event.clientX, y: event.clientY });
+
+            const near = clicks.filter((click) => Math.hypot(click.x - event.clientX, click.y - event.clientY) < 30);
+
+            if (near.length >= 3 && now > quietUntil) {
+                quietUntil = now + 2000;
+                clicks = [];
+                mark('rage-click', describe(event.target), { x: event.clientX, y: event.clientY });
+            }
+        },
+        true,
+    );
+}
+
+function watchVitals() {
+    const report = (metric) => mark('vital', `${metric.name} ${metric.name === 'CLS' ? metric.value.toFixed(3) : Math.round(metric.value) + ' ms'}`, { name: metric.name, value: metric.value, rating: metric.rating });
+
+    onLCP(report);
+    onINP(report);
+    onCLS(report);
+}
+
+function recordOptions() {
+    return {
+        emit,
+        plugins: consoleCapture ? [consoleCapture.plugin] : [],
+        // By tag, not rrweb's list of input types (see inputMaskOptions).
+        maskAllInputs: false,
+        maskInputOptions: inputMaskOptions(config.privacy.maskAllInputs),
+        maskTextSelector: config.privacy.maskAllText ? '*' : simplifyMaskSelector(config.privacy.maskTextSelector) || undefined,
+        // mask_all_text with an unmask selector: rrweb hands every text it masks to this, with its element.
+        maskTextFn: config.privacy.maskAllText && config.privacy.unmaskTextSelector ? textMasker(config.privacy.unmaskTextSelector, config.privacy.maskTextSelector) : undefined,
+        blockSelector: config.privacy.blockSelector || undefined,
+        ignoreSelector: config.privacy.ignoreSelector || undefined,
+        slimDOMOptions: 'all',
+        inlineStylesheet: true,
+        recordCanvas: false,
+        collectFonts: false,
+        sampling: config.size.sampling,
+    };
+}
+
+/**
+ * wire:navigate replaces the whole <body>. Recorded as it happens, that is one
+ * mutation adding every node of the new page, larger than a snapshot of it and
+ * slower to make. So rrweb stops before the swap and starts again after it:
+ * the new page arrives as a full snapshot, like a page load, and the player
+ * can seek from it. The session, the buffer and the markers go on.
+ *
+ * The new page brings its own config, or none when the app does not record
+ * it: then rrweb stays stopped until a page that is recorded.
+ */
+const navigation = navigationPause({
+    current: () => window.__sessionReplay || null,
+    pause() {
+        try {
+            stopRrweb?.();
+        } catch {
+            // Already stopped.
+        }
+
+        stopRrweb = null;
+    },
+    resume(fresh, paused) {
+        // Signed for another person or workspace (a tenant switch with wire:navigate): a recording belongs to one.
+        // Idle for longer than idle_minutes: a page load would start a new one too.
+        if (stopRecording && !stopped && session && ((fresh.identity ?? null) !== (session.identity ?? null) || Date.now() - session.lastActivity > fresh.idleTimeout)) {
+            restart(fresh);
+
+            // A new recording: the pages left out before this one belong to no replay.
+            return false;
+        }
+
+        config = fresh;
+
+        if (startOnNextPage && !stopRecording) {
+            start();
+
+            return;
+        }
+
+        if (!paused || stopped || !stopRecording) return;
+
+        try {
+            stopRrweb = record(recordOptions()) || null;
+        } catch {
+            stopRrweb = null;
+        }
+
+        // Like the first snapshot of a page load: up early, or a tab closed within the flush interval loses it.
+        if (stopRrweb && session?.phase === 'recording') {
+            setTimeout(() => {
+                if (!stopped && buffer.length) flush();
+            }, FIRST_FLUSH_MS);
+        }
+    },
+    // Pages the app does not record sat between the last recorded page and this one: the replay has a gap there,
+    // and one marker at its start says so, without the pages' URLs or titles. The page count leaves it out.
+    skipped(since, until) {
+        mark('navigation', 'Page not recorded', { skipped: true, durationMs: Math.max(0, until - since) }, since);
+    },
+});
+
+function watchNavigation() {
+    document.addEventListener('livewire:navigating', () => {
+        // The new page writes its own when it renders the recorder; one that does not is a page the app leaves out.
+        window.__sessionReplay = undefined;
+        navigation.navigating(!!stopRrweb && !stopped);
+    });
+    document.addEventListener('livewire:navigated', () => navigation.navigated());
+}
+
+/**
+ * Kept windows this tab may no longer hold: too old, kept for someone else,
+ * all of them without the person's agreement or with keep_pending off, and
+ * the given recording's (stopped for good). On every start, recorded or not,
+ * so nothing waits at rest for a page load that would send it.
+ */
+async function sweepPending({ all = false, recording = null } = {}) {
+    const exists = await pendingStoreExists();
+
+    // Never create the database to look into it; where the browser cannot tell, only mode on_error ever made one.
+    if (exists === false || (exists === null && !onError)) return;
+
+    const now = Date.now();
+
+    for (const record of await listPending()) {
+        const drop = all || record.session === recording || pendingFate(record, { sessionId: session?.id ?? '', identity: config.identity, now, idleTimeout: config.idleTimeout }) === 'drop';
+
+        if (drop) deletePending(record.session, record.seq);
+    }
+}
+
+/** The id sessionId() returns, as last announced with the session-replay:session event. */
+let announced = null;
+
+/**
+ * Tell the page when the recording id changes (a new recording, consent given or withdrawn, stopped), so a script
+ * that tags its own events with it (an error tracker) follows without polling: event.detail.id, null for none.
+ */
+function announce() {
+    const id = stopRecording && session ? session.id : null;
+
+    if (id === announced) return;
+
+    announced = id;
+
+    try {
+        window.dispatchEvent(new CustomEvent('session-replay:session', { detail: { id } }));
+    } catch {
+        // A listener that throws is the page's own business.
+    }
+}
+
+function start() {
+    const started = begin();
+
+    announce();
+
+    return started;
+}
+
+function begin() {
+    if (stopRecording || !config) return false;
+
+    if (!hasConsent()) {
+        sweepPending({ all: true }).catch(() => {});
+
+        return false;
+    }
+
+    // A page reached with wire:navigate that the app does not record, or one not in place yet.
+    if (navigation.isExcluded() || navigation.isAwaiting()) {
+        startOnNextPage = true;
+
+        return false;
+    }
+
+    startOnNextPage = false;
+
+    session = loadSession();
+    saveSession();
+    sweepPending({ all: !keepPending }).catch(() => {});
+
+    // An unsampled tab sets no cookie (saveSession) but clears none either: the cookie is one per origin, and another
+    // tab may be recording.
+
+    if (!session.sampled || session.phase === 'declined' || session.phase === 'stopped') return false;
+
+    stopped = false;
+    lastSnapshotAt = 0;
+
+    // Console calls during a wire:navigate pause go into the recording all the same.
+    consoleCapture = null;
+
+    if (config.capture.console.length) {
+        const plugin = getRecordConsolePlugin({ level: config.capture.console, lengthThreshold: 1000, logger: window.console });
+
+        const idle = (payload, at = Date.now()) => {
+            if (!navigation.defer(() => idle(payload, at))) emit({ type: EVENT_PLUGIN, data: { plugin: plugin.name, payload }, timestamp: at });
+        };
+
+        consoleCapture = lastingPlugin(plugin, idle, window);
+    }
+
+    stopRrweb = record(recordOptions()) || null;
+
+    if (!stopRrweb) {
+        consoleCapture?.stop();
+        consoleCapture = null;
+
+        return false;
+    }
+
+    stopRecording = () => {
+        const stopNow = stopRrweb;
+
+        stopRrweb = null;
+        stopNow?.();
+        consoleCapture?.stop();
+        consoleCapture = null;
+    };
+
+    markPage();
+
+    if (session.phase === 'buffering') return true;
+
+    if (keepPending) sending = sending.then(resumePending).catch(() => {});
+
+    schedule();
+
+    // The page snapshot goes up early and compressed: left to the unload request it is too large for keepalive
+    // and a page left within the first interval would be missing from the replay.
+    setTimeout(() => {
+        if (!stopped && buffer.length) flush();
+    }, FIRST_FLUSH_MS);
+
+    return true;
+}
+
+/**
+ * The page Livewire swapped in was signed for another person or workspace,
+ * or the tab sat idle past idle_minutes. What this recording holds goes up
+ * under its own token, and the page starts a new recording, as a page load
+ * would.
+ */
+function restart(fresh) {
+    flush();
+    clearTimeout(flushTimer);
+    // The batches in flight keep their recording; the tab's next one is new, whatever the old one's last activity.
+    write('sessionStorage', STORAGE_KEY, 'null');
+    // A question still up asks about the recording that ends here.
+    if (asking) dismiss();
+    asking = false;
+
+    try {
+        stopRecording?.();
+    } catch {
+        // Already stopped.
+    }
+
+    stopRecording = null;
+    generation++;
+    buffer = [];
+    bufferedChars = 0;
+    snapshots = 0;
+    sinceSnapshotChars = 0;
+    markers = [];
+    assets = new Set();
+    activeMs = 0;
+    lastActiveAt = 0;
+    overWindow = false;
+    session = null;
+    config = fresh;
+
+    start();
+}
+
+/**
+ * Assist asks for a live view in mode on_error: the kept window goes up and the tab records from here, as
+ * SessionReplay.send() does.
+ */
+function goLive() {
+    if (!stopRecording || stopped || !session || session.phase !== 'buffering') return;
+
+    if (asking) dismiss();
+
+    asking = false;
+    trimBuffer(Date.now() - windowMs);
+    share(false);
+}
+
+/** `remember`: the server said stop (a limit, someone else's recording); the tab stays quiet until the session idles out. */
+function stop(remember = false) {
+    stopped = true;
+    startOnNextPage = false;
+    clearTimeout(flushTimer);
+    navigation.stop();
+    if (asking) dismiss();
+    asking = false;
+
+    if (remember && session) {
+        session.phase = 'stopped';
+        saveSession();
+    }
+
+    try {
+        stopRecording?.();
+    } catch {
+        // Already stopped.
+    }
+
+    stopRecording = null;
+    era++;
+    buffer = [];
+    bufferedChars = 0;
+    snapshots = 0;
+    sinceSnapshotChars = 0;
+    markers = [];
+    // The stylesheets waiting for the server to ask for them (hundreds of KB each) go with the recording.
+    pendingAssetText = new Map();
+    assetRetry = new Set();
+    clearCookie();
+
+    // Stopped for good (consent withdrawn, the server said so, the person declined): nothing stays in the browser,
+    // also not what earlier pages of this recording kept.
+    for (const batch of kept) deletePending(batch.session.id, batch.seq);
+    kept = new Set();
+    if (session) sweepPending({ recording: session.id }).catch(() => {});
+
+    announce();
+}
+
+/**
+ * A new config for the page shown now, outside wire:navigate (a frontend that fetched a fresh token, standalone.js):
+ * signed for another person or workspace, or after the tab sat idle, it starts a new recording, as a page load
+ * would; otherwise the next batches go up with it.
+ */
+function update(fresh) {
+    if (!fresh) return;
+
+    if (stopRecording && !stopped && session && ((fresh.identity ?? null) !== (session.identity ?? null) || Date.now() - session.lastActivity > fresh.idleTimeout)) {
+        restart(fresh);
+
+        return;
+    }
+
+    config = fresh;
+}
+
+/**
+ * Starts the recorder with `initial`, once per document; returns { api, update, recording }: api is what the page
+ * gets as window.SessionReplay, update() takes a new config (see update()), recording() the running recording's id
+ * and write key for the log-context header. Options: global (window.SessionReplay = api before the recording starts),
+ * pageConfig (wire:navigate pages bring their own config in window.__sessionReplay), refreshToken (async (identity) =>
+ * a fresh token for that identity, or null, asked once per batch on a 401) and requestOrigins (origins whose failed
+ * requests count besides the page's).
+ */
+export function boot(initial, bootOptions = {}) {
+    config = initial;
+    options = bootOptions || {};
+    flushInterval = config.flushInterval;
+    onError = config.mode === 'on_error';
+    windowMs = onError ? config.onError.bufferMs : 0;
+    checkoutMs = onError ? checkoutInterval(windowMs) : 0;
+    keepPending = onError && !!config.onError.keepPending;
+    maxWindowChars = onError ? config.onError.maxWindowChars || 5_000_000 : 0;
+    matches = attributeMatcher(config.size.stripAttributes, config.size.keepAttributes);
+    canHash = !!(window.crypto && window.crypto.subtle && window.TextEncoder);
+
+    // Before watchLivewire: the recording restarts on livewire:navigated before the page is marked.
+    if (options.pageConfig) watchNavigation();
+
+    // Vitals first: their page-hide callbacks must run before the final flush below.
+    if (config.capture.vitals) watchVitals();
+    if (config.capture.errors) watchErrors();
+    if (config.capture.livewire) watchLivewire();
+    if (config.capture.requests) watchRequests();
+    watchHistory();
+    if (config.capture.rageClicks) watchRageClicks();
+
+    document.addEventListener('visibilitychange', () => {
+        if (document.visibilityState === 'hidden') pendingAsync === 0 ? flushOnUnload(false) : flush();
+    });
+    window.addEventListener('pagehide', () => flushOnUnload());
+
+    const api = {
+        start,
+        stop: () => stop(),
+        flush,
+        /** Record a moment of your own: SessionReplay.mark('Checkout started', { cart: 3 }). */
+        mark: (label, payload = {}) => mark('custom', label, payload),
+        /**
+         * Send the replay now, from a "report a problem" button: SessionReplay.send('Wrong total on the invoice').
+         * In mode "on_error" the kept window goes up without the question; recording carries on either way.
+         */
+        send: (label = 'Problem reported', payload = {}) => report(label, payload),
+        /** consent(true) remembers the answer and starts; consent(false) forgets it and stops. */
+        consent(given) {
+            write('localStorage', CONSENT_KEY, given ? '1' : '0');
+
+            if (given) return start();
+
+            stop();
+            sweepPending({ all: true }).catch(() => {});
+
+            return false;
+        },
+        isRecording: () => !!stopRecording && !stopped && !navigation.isExcluded() && session?.phase === 'recording',
+        /** Mode "on_error": keeping the last moments in the browser, waiting for a trigger. */
+        isBuffering: () => !!stopRecording && !stopped && !navigation.isExcluded() && session?.phase === 'buffering',
+        sessionId: () => (stopRecording && session ? session.id : null),
+    };
+
+    if (options.global) window.SessionReplay = api;
+
+    if (config.assist) {
+        try {
+            const recording = () => (stopRecording && !stopped && session && session.phase === 'recording' ? { id: session.id, key: session.key } : null);
+
+            assist = createAssistHook({
+                settings: () => config.assist || {},
+                token: () => config.token,
+                recording,
+                read: (key) => read('sessionStorage', key),
+                write: (key, value) => write('sessionStorage', key, value),
+                lend: {
+                    config: () => config,
+                    recording,
+                    snapshot() {
+                        try {
+                            if (!stopRrweb) return false;
+
+                            record.takeFullSnapshot();
+
+                            return true;
+                        } catch {
+                            return false;
+                        }
+                    },
+                    // rrweb runs on the page shown now: after a wire:navigate, on a page the app records.
+                    mirrors: () => !!stopRrweb && !stopped && !navigation.isExcluded() && !navigation.isAwaiting(),
+                    node: (id) => {
+                        try {
+                            return stopRrweb ? record.mirror.getNode(id) : null;
+                        } catch {
+                            return null;
+                        }
+                    },
+                    goLive,
+                    touch: () => saveSession(),
+                    redacted,
+                    read: (key) => read('sessionStorage', key),
+                    write: (key, value) => write('sessionStorage', key, value),
+                },
+            });
+            api.assist = assist.api;
+            assist.start();
+        } catch {
+            // No Assist on this page; the recording goes on.
+            assist = null;
+        }
+    }
+
+    start();
+
+    return {
+        api,
+        update,
+        /** The running recording's id and write key ({ id, key }), or null: what the log-context header carries. */
+        recording: () => (stopRecording && !stopped && session && session.sampled && !['declined', 'stopped'].includes(session.phase) ? { id: session.id, key: session.key } : null),
+    };
+}
