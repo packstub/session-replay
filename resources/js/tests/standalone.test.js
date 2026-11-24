@@ -459,12 +459,17 @@ test('while nothing records, nothing is asked: the refresher looks again later',
     assert.equal(asked, 1);
 });
 
-test('the package can be imported where there is no window (server-side rendering) and starts nothing there', async () => {
+test('where there is no window (server-side rendering) the refresher is made without a timer or a request', async () => {
     assert.equal(typeof globalThis.window, 'undefined');
 
-    const module = await import('../standalone.js');
+    let asked = 0;
+    // The browser's own clock and timers, as standalone.js makes it when the package is imported.
+    const refresher = createTokenRefresher({ load: async () => ++asked && false });
 
-    assert.equal(await module.start({ endpoint }), false);
-    assert.doesNotThrow(() => module.stop());
-    assert.deepEqual(module.header(), {});
+    assert.equal(refresher.scheduled(), false);
+    refresher.check();
+    refresher.stop();
+    await settle();
+    assert.equal(asked, 0);
+    assert.equal(refresher.scheduled(), false);
 });
