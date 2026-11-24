@@ -76,9 +76,9 @@ A tab can stay open longer than its token lives. The package fetches a fresh tok
 - The schedule goes by `expires_in`, a number of seconds, so a browser whose clock is wrong renews on time. An app on 1.3.0 sends only `expires_at`; the package then compares it with the browser's clock.
 - Browsers slow timers down in a background tab and stop them while the computer sleeps, so the package checks again whenever the page is shown or hidden, and when the browser comes back online.
 - A renewal that fails (offline, a server error) is tried again after 30 seconds, then at growing intervals up to 15 minutes, until the old token has expired.
-- If the token route answers that the person is signed out, is someone else or is no longer recorded, the package asks for nothing more. Call `start()` after a sign-in or sign-out, as before.
+- If the token route answers that the person is signed out, is someone else or is no longer recorded, the recording ends there and then, and what the tab still held is dropped rather than uploaded under the old name. `consent(true)` does not bring it back; the next `start()` does, with a token of its own. Calling `start()` after a sign-in or sign-out, as before, ends it sooner.
 - `stop()` ends the renewals; `start()` and `consent(true)` bring them back.
-- The renewal request uses the options `start()` got. If your bearer token changes while the tab is open, pass a `fetch` option that adds the current `Authorization` header, or call `start()` again with the new one.
+- The renewal request uses the options `start()` got. If your bearer token changes while the tab is open, pass a `fetch` option that adds the current `Authorization` header, or call `start()` again with the new one: a renewal sent with an expired bearer token is answered 401 and ends the recording, as a sign-out would.
 
 If an upload gets a 401 all the same, the recorder fetches a fresh token once and sends that batch again; if there is none to be had, the recording stops.
 

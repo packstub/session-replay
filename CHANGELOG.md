@@ -5,6 +5,7 @@ All notable changes to `packstub/session-replay` are documented here.
 ## Unreleased
 
 - The npm recorder (`@packstub/session-replay`) now renews its token before it expires, so the last moments of a tab that stayed open for days are no longer lost
+- The npm recorder stops recording when a token renewal finds the person signed out or someone else signed in, instead of recording on under the old name until the token expired
 
 ## 1.3.0 — 2026-11-24
 
