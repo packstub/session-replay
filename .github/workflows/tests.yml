@@ -1,7 +1,9 @@
 name: Tests
 
 on:
+  # Pull requests run once (pull_request); a push runs only on main, after the merge.
   push:
+    branches: [main]
   pull_request:
 
 concurrency:
@@ -9,8 +11,43 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  # Whether anything but docs, Markdown and the release plumbing changed. When nothing did, the test jobs skip and
+  # "Tests passed" still reports (a required check must report, so no paths-ignore on the workflow). Anything not on
+  # the list counts as code, so a new kind of file runs the tests.
+  changes:
+    name: What changed
+    runs-on: ubuntu-latest
+    outputs:
+      code: ${{ steps.diff.outputs.code }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+
+      - name: Compare with the base
+        id: diff
+        env:
+          BASE: ${{ github.event.pull_request.base.sha || github.event.before }}
+        run: |
+          # No base to compare with (a new branch, a force push): run everything.
+          if [ -z "$BASE" ] || ! git cat-file -e "$BASE^{commit}" 2>/dev/null; then
+            echo "code=true" >> "$GITHUB_OUTPUT"; exit 0
+          fi
+          git diff --name-only "$BASE" HEAD > changed.txt
+          echo "Changed:"; cat changed.txt
+          if grep -qvE '^(docs/|art/|LICENSE\.md$|(.*/)?[^/]+\.md$|\.github/(release\.yml$|ISSUE_TEMPLATE/|workflows/(release|docs-sync|add-to-project|dependabot-auto-merge)\.yml$))' changed.txt; then
+            echo "code=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "Only docs, Markdown or release plumbing changed: the tests skip."
+            echo "code=false" >> "$GITHUB_OUTPUT"
+          fi
+
   tests:
     name: Tests (PHP ${{ matrix.php }})
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
     runs-on: ubuntu-latest
 
     strategy:
@@ -52,6 +89,8 @@ jobs:
 
   javascript:
     name: Recorder and player (Node)
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
     runs-on: ubuntu-latest
 
     steps:
@@ -63,6 +102,8 @@ jobs:
 
   e2e:
     name: Assist end to end (Playwright)
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
     runs-on: ubuntu-latest
 
     steps:
@@ -125,15 +166,21 @@ jobs:
   tests-passed:
     name: Tests passed
     if: always()
-    needs: [tests, javascript, e2e]
+    needs: [changes, tests, javascript, e2e]
     runs-on: ubuntu-latest
 
     steps:
-      - name: Fail unless every job succeeded
+      # Every job succeeded, or the test jobs skipped because only docs changed (never skipped for another reason).
+      - name: Fail unless every job succeeded or skipped for docs
         env:
           RESULTS: ${{ join(needs.*.result, ' ') }}
+          CHANGES: ${{ needs.changes.result }}
+          CODE: ${{ needs.changes.outputs.code }}
         run: |
-          echo "Job results: $RESULTS"
+          echo "Job results: $RESULTS (code changed: $CODE)"
+          [ "$CHANGES" = "success" ] || exit 1
           for result in $RESULTS; do
-            [ "$result" = "success" ] || exit 1
+            if [ "$result" = "success" ]; then continue; fi
+            if [ "$result" = "skipped" ] && [ "$CODE" = "false" ]; then continue; fi
+            exit 1
           done
