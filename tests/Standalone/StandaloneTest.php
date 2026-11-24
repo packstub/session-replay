@@ -39,10 +39,26 @@ it('hands a signed-in person the config and a token that names them, their works
         ->and($response->json('config.ingestUrl'))->toBe(route('session-replay.ingest'))
         ->and($response->json('config.identity'))->toBeString()
         ->and($response->json('expires_at'))->toBeString()
+        ->and($response->json('expires_in'))->toBe(7 * 24 * 60 * 60)
         ->and($token->userId)->toBe((string) $user->id)
         ->and($token->tenantId)->toBe((string) $team->id)
         ->and($token->impersonatorId)->toBe('42')
         ->and($token->properties)->toBe(['plan' => 'pro']);
+});
+
+it('says for how many seconds the token is taken, so the package can renew it without the server\'s clock', function () {
+    config()->set('session-replay.ingest.token_days', 2);
+    $this->travelTo('2026-11-24 10:00:00');
+
+    $response = $this->actingAs($this->user())->withHeaders(['Origin' => StandaloneTestCase::ORIGIN])->getJson(route('session-replay.token'))->assertOk();
+    expect($response->json('expires_in'))->toBe(172800)
+        ->and($response->json('expires_at'))->toBe('2026-11-26T10:00:00+00:00');
+
+    // The same count the upload routes go by (the token's own clock is time(), not the test's).
+    $aged = fn (int $seconds): string => (new ContextToken(issuedAt: time() - $seconds))->encode();
+
+    expect(ContextToken::decode($aged(172800 - 60)))->not->toBeNull()
+        ->and(ContextToken::decode($aged(172800 + 1)))->toBeNull();
 });
 
 it('signs a pseudonym instead of the person with privacy.anonymous', function () {
@@ -60,7 +76,8 @@ it('records guests only with guests on, and their token never expires with guest
 
     expect($response->json('record'))->toBeTrue()
         ->and($response->json('config.identity'))->toBeNull()
-        ->and($response->json('expires_at'))->toBeNull();
+        ->and($response->json('expires_at'))->toBeNull()
+        ->and($response->json('expires_in'))->toBeNull();
 });
 
 it('leaves out Assist, shared snapshots and, across origins, the cookie', function () {

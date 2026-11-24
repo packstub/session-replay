@@ -25,9 +25,12 @@ final class TokenController
     {
         $config = $replay->recorderConfig([], $request, page: false);
 
+        $lifetime = $config === null ? null : $this->lifetime($config);
+
+        // expires_in is what the package schedules its renewal by: seconds need no clock in common with the browser's.
         $body = $config === null
             ? ['record' => false]
-            : ['record' => true, 'config' => $config, 'expires_at' => $this->expiresAt($config)];
+            : ['record' => true, 'config' => $config, 'expires_at' => $lifetime === null ? null : now()->addSeconds($lifetime)->toIso8601String(), 'expires_in' => $lifetime];
 
         return response()->json($body, 200, [
             'Cache-Control' => 'no-store, private',
@@ -36,19 +39,18 @@ final class TokenController
     }
 
     /**
-     * When the token stops being taken (ingest.token_days), as ISO 8601; null for a token that names nobody while
-     * ingest.guest_tokens_expire is off (identity null is the directive's word for such a token).
+     * For how many seconds the token is taken (ingest.token_days, as ContextToken::isExpired() counts them); null
+     * for a token that names nobody while ingest.guest_tokens_expire is off (identity null is the directive's word
+     * for such a token).
      *
      * @param  array<string, mixed>  $config
      */
-    private function expiresAt(array $config): ?string
+    private function lifetime(array $config): ?int
     {
         if ($config['identity'] === null && ! config('session-replay.ingest.guest_tokens_expire', true)) {
             return null;
         }
 
-        $days = max(1, (int) config('session-replay.ingest.token_days', ContextToken::DEFAULT_DAYS));
-
-        return now()->addDays($days)->toIso8601String();
+        return max(1, (int) config('session-replay.ingest.token_days', ContextToken::DEFAULT_DAYS)) * 24 * 60 * 60;
     }
 }
