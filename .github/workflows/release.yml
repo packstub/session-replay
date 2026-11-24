@@ -74,8 +74,10 @@ jobs:
             --verify-tag $prerelease
 
   # The recorder for a frontend on another origin (docs/standalone.md), from the same sources as resources/dist:
-  # @packstub/session-replay at the tag's version. Needs the NPM_TOKEN secret (an npm automation token with publish
-  # rights on @packstub). Only on a tag push; a manual run for an old tag leaves npm alone.
+  # @packstub/session-replay at the tag's version. No token: npm trusted publishing (OIDC) for this repo and
+  # release.yml, set on the package at npmjs.com, which also adds provenance; the package refuses tokens.
+  # Only on a tag push; a manual run for an old tag leaves npm alone. A version already on npm (published by
+  # hand) is skipped, not failed.
   npm:
     name: Publish @packstub/session-replay to npm
     if: github.event_name == 'push'
@@ -87,13 +89,25 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
+      # Node 24 ships npm 11, which trusted publishing needs (11.5.1 or later).
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
-          node-version: 22
+          node-version: 24
           cache: npm
           registry-url: https://registry.npmjs.org
 
+      - name: Skip a version already on npm
+        id: published
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          if npm view "@packstub/session-replay@${TAG#v}" version >/dev/null 2>&1; then
+            echo "@packstub/session-replay@${TAG#v} is already on npm; nothing to publish."
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Build at the tag's version
+        if: steps.published.outputs.skip != 'true'
         env:
           TAG: ${{ github.ref_name }}
         run: |
@@ -105,12 +119,13 @@ jobs:
 
       # npm takes the README beside package.json, which is the Composer package's: the npm package has its own.
       - name: Use the npm package's README
+        if: steps.published.outputs.skip != 'true'
         run: cp npm/README.md README.md
 
       - name: Publish with provenance
+        if: steps.published.outputs.skip != 'true'
         env:
           TAG: ${{ github.ref_name }}
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: |
           # A tag with a suffix (v1.3.0-beta.1) goes out under "next", never as "latest".
           dist_tag="latest"
