@@ -75,10 +75,11 @@ jobs:
             --verify-tag $prerelease
 
   # The recorder for a frontend on another origin (docs/standalone.md), from the same sources as resources/dist:
-  # @packstub/session-replay at the tag's version. No token: npm trusted publishing (OIDC) for this repo and
-  # release.yml, set on the package at npmjs.com, which also adds provenance; the package refuses tokens.
-  # Only on a tag push; a manual run for an old tag leaves npm alone. A version already on npm (published by
-  # hand) is skipped, not failed.
+  # @packstub/session-replay at the tag's version, staged: no token, npm trusted publishing (OIDC) for this repo and
+  # release.yml, set on the package at npmjs.com with stage only (neither npm publish nor npm dist-tag allowed), which
+  # also adds provenance; the package refuses tokens. The version goes live when a maintainer approves it with 2FA
+  # (npmjs.com, the package's Staged Packages tab, or `npm stage approve <stage-id>`). Only on a tag push; a manual
+  # run for an old tag leaves npm alone. A version already on npm (published by hand) is skipped, not failed.
   npm:
     name: Publish @packstub/session-replay to npm
     if: github.event_name == 'push'
@@ -90,12 +91,17 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      # Node 24 ships npm 11, which trusted publishing needs (11.5.1 or later).
+      # Staged publishing needs npm 11.15.0 or later (trusted publishing alone 11.5.1); Node 24 ships npm 11.
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 24
           cache: npm
           registry-url: https://registry.npmjs.org
+
+      - name: Check the npm version
+        run: |
+          npm --version
+          node -e 'const [a, b] = process.argv[1].split(".").map(Number); if (a < 11 || (a === 11 && b < 15)) { console.error("npm " + process.argv[1] + " cannot stage a publish; 11.15.0 or later is needed."); process.exit(1) }' "$(npm --version)"
 
       - name: Skip a version already on npm
         id: published
@@ -123,7 +129,7 @@ jobs:
         if: steps.published.outputs.skip != 'true'
         run: cp npm/README.md README.md
 
-      - name: Publish with provenance
+      - name: Stage for approval on npmjs.com
         if: steps.published.outputs.skip != 'true'
         env:
           TAG: ${{ github.ref_name }}
@@ -131,4 +137,5 @@ jobs:
           # A tag with a suffix (v1.3.0-beta.1) goes out under "next", never as "latest".
           dist_tag="latest"
           if [[ "$TAG" == *-* ]]; then dist_tag="next"; fi
-          npm publish --provenance --access public --tag "$dist_tag" --ignore-scripts
+          npm stage publish --provenance --access public --tag "$dist_tag" --ignore-scripts
+          echo "Staged @packstub/session-replay@${TAG#v} under \"$dist_tag\": approve it on npmjs.com (Staged Packages) with 2FA." >> "$GITHUB_STEP_SUMMARY"
