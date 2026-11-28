@@ -94,6 +94,45 @@ php artisan vendor:publish --tag=session-replay-migrations
 
 The models and the migrations both follow `storage.connection`. Keep the disk central too.
 
+The people stay where they are: the recorded user, the workspace and the impersonator load on their model's own connection, or on the default one when the model declares none. With [stancl/tenancy](https://tenancyforlaravel.com), users that live in each tenant's database are found once tenancy is initialised, so run your tenancy middleware before `auth` on the viewer:
+
+```php
+use Stancl\Tenancy\Middleware\InitializeTenancyByDomain;
+
+'viewer' => ['middleware' => ['web', InitializeTenancyByDomain::class, 'auth']],
+```
+
+Then return the tenant model itself from `tenantUsing()` (not its id: a bare id is dropped), and keep each workspace to its own recordings in both places, the gate for a single recording and `visibleUsing()` for the list. The list rule alone is not enough: the player and its files ask only the gate, and a recording of another workspace would show the person of this workspace who has the same id.
+
+```php
+use Illuminate\Database\Eloquent\Builder;
+use Illuminate\Support\Facades\Gate;
+use Packstub\SessionReplay\Models\ReplaySession;
+
+SessionReplay::tenantUsing(fn ($request) => tenant());
+
+Gate::define('viewSessionReplay', function ($user, ?ReplaySession $session = null): bool {
+    $tenant = tenant();
+
+    if ($tenant === null || ! $user->is_support) { // is_support: your own rule
+        return false;
+    }
+
+    // No recording: the gate is asked for the list itself, which visibleUsing() below scopes to the tenant.
+    if ($session === null) {
+        return true;
+    }
+
+    return $session->tenant_type === $tenant->getMorphClass()
+        && $session->tenant_id === (string) $tenant->getKey();
+});
+
+SessionReplay::visibleUsing(function (Builder $query): void {
+    $query->where('tenant_type', tenant()->getMorphClass())
+        ->where('tenant_id', (string) tenant()->getKey());
+});
+```
+
 ## Sizes
 
 A full snapshot of a server-rendered page is mostly stylesheet. Four things keep recordings small:

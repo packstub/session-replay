@@ -1,14 +1,19 @@
 <?php
 
+use Illuminate\Database\Eloquent\Relations\Relation;
+use Illuminate\Database\Schema\Blueprint;
 use Illuminate\Support\Arr;
 use Illuminate\Support\Facades\Blade;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Gate;
+use Illuminate\Support\Facades\Schema;
 use Illuminate\Support\Facades\Vite;
 use Illuminate\Support\Str;
 use Packstub\SessionReplay\Facades\SessionReplay;
 use Packstub\SessionReplay\Models\ReplayMarker;
 use Packstub\SessionReplay\Models\ReplaySession;
 use Packstub\SessionReplay\Models\ReplaySessionAsset;
+use Packstub\SessionReplay\Tests\Fixtures\Models\Team;
 use Packstub\SessionReplay\Tests\Fixtures\Policies\ReplaySessionPolicy;
 
 it('lets nobody in outside the local environment until the app defines the gate', function () {
@@ -382,4 +387,57 @@ it('answers an id that is no recording like one the gate denies', function () {
     $this->getJson(route('session-replay.manifest', (string) Str::uuid()))->assertForbidden();
     $this->get(route('session-replay.chunk', [(string) Str::uuid(), 0]))->assertForbidden();
     $this->get(route('session-replay.asset', [(string) Str::uuid(), str_repeat('a', 64)]))->assertForbidden();
+});
+
+it('looks up the recorded people on the default connection, not the replay tables\' own', function () {
+    Gate::define('viewSessionReplay', fn () => true);
+
+    // A database per tenant: the replay tables stay central, the tenant's users live where tenancy points the default.
+    config()->set('session-replay.storage.connection', 'sqlite');
+    $customer = $this->user(['email' => 'central@example.com']);
+    $support = $this->user(['email' => 'central-support@example.com']);
+    $team = $this->team('Central Acme');
+    $session = $this->recording($customer, [
+        'impersonator_type' => $support->getMorphClass(), 'impersonator_id' => (string) $support->getKey(),
+        'tenant_type' => $team->getMorphClass(), 'tenant_id' => (string) $team->getKey(),
+    ]);
+
+    config()->set('database.connections.tenant', ['driver' => 'sqlite', 'database' => ':memory:', 'prefix' => '']);
+    Schema::connection('tenant')->create('users', function (Blueprint $table) {
+        $table->id();
+        $table->string('email');
+    });
+    DB::connection('tenant')->table('users')->insert([
+        ['id' => $customer->getKey(), 'email' => 'tenant@example.com'],
+        ['id' => $support->getKey(), 'email' => 'tenant-support@example.com'],
+    ]);
+    DB::setDefaultConnection('tenant');
+
+    try {
+        $this->actingAs($customer);
+
+        $this->get(route('session-replay.index'))->assertOk()->assertSee('tenant@example.com')->assertDontSee('central@example.com');
+        $this->get(route('session-replay.show', $session))->assertOk()->assertSee('tenant@example.com')->assertSee('tenant-support@example.com');
+
+        $fresh = ReplaySession::query()->findOrFail($session->id);
+        expect($fresh->user->email)->toBe('tenant@example.com')
+            ->and($fresh->user->getConnectionName())->toBe('tenant')
+            ->and($fresh->impersonator->email)->toBe('tenant-support@example.com')
+            ->and($fresh->getConnectionName())->toBe('sqlite');
+
+        // A model that names its own connection keeps it, lazily and eagerly.
+        $centralTeam = new class extends Team
+        {
+            protected $connection = 'sqlite';
+
+            protected $table = 'teams';
+        };
+        Relation::morphMap(['pinned-team' => $centralTeam::class]);
+        $fresh->forceFill(['tenant_type' => 'pinned-team'])->save();
+
+        expect(ReplaySession::query()->findOrFail($session->id)->tenant->name)->toBe('Central Acme')
+            ->and(ReplaySession::query()->with('tenant')->findOrFail($session->id)->tenant->name)->toBe('Central Acme');
+    } finally {
+        DB::setDefaultConnection('sqlite');
+    }
 });
