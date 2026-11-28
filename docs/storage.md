@@ -112,12 +112,19 @@ use Packstub\SessionReplay\Models\ReplaySession;
 SessionReplay::tenantUsing(fn ($request) => tenant());
 
 Gate::define('viewSessionReplay', function ($user, ?ReplaySession $session = null): bool {
-    if (tenant() === null || ! $user->is_support) { // is_support: your own rule
+    $tenant = tenant();
+
+    if ($tenant === null || ! $user->is_support) { // is_support: your own rule
         return false;
     }
 
-    return $session === null
-        || ($session->tenant_type === tenant()->getMorphClass() && $session->tenant_id === (string) tenant()->getKey());
+    // No recording: the gate is asked for the list itself, which visibleUsing() below scopes to the tenant.
+    if ($session === null) {
+        return true;
+    }
+
+    return $session->tenant_type === $tenant->getMorphClass()
+        && $session->tenant_id === (string) $tenant->getKey();
 });
 
 SessionReplay::visibleUsing(function (Builder $query): void {
