@@ -1,8 +1,11 @@
 <?php
 
+use Illuminate\Database\Schema\Blueprint;
 use Illuminate\Support\Arr;
 use Illuminate\Support\Facades\Blade;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Gate;
+use Illuminate\Support\Facades\Schema;
 use Illuminate\Support\Facades\Vite;
 use Illuminate\Support\Str;
 use Packstub\SessionReplay\Facades\SessionReplay;
@@ -382,4 +385,33 @@ it('answers an id that is no recording like one the gate denies', function () {
     $this->getJson(route('session-replay.manifest', (string) Str::uuid()))->assertForbidden();
     $this->get(route('session-replay.chunk', [(string) Str::uuid(), 0]))->assertForbidden();
     $this->get(route('session-replay.asset', [(string) Str::uuid(), str_repeat('a', 64)]))->assertForbidden();
+});
+
+it('looks up the recorded people on the default connection, not the replay tables\' own', function () {
+    Gate::define('viewSessionReplay', fn () => true);
+
+    // A database per tenant: the replay tables stay central, the tenant's users live where tenancy points the default.
+    config()->set('session-replay.storage.connection', 'sqlite');
+    $customer = $this->user(['email' => 'central@example.com']);
+    $session = $this->recording($customer);
+
+    config()->set('database.connections.tenant', ['driver' => 'sqlite', 'database' => ':memory:', 'prefix' => '']);
+    Schema::connection('tenant')->create('users', function (Blueprint $table) {
+        $table->id();
+        $table->string('email');
+    });
+    DB::connection('tenant')->table('users')->insert(['id' => $customer->getKey(), 'email' => 'tenant@example.com']);
+    DB::setDefaultConnection('tenant');
+
+    try {
+        $this->actingAs($customer);
+
+        $this->get(route('session-replay.index'))->assertOk()->assertSee('tenant@example.com')->assertDontSee('central@example.com');
+        $this->get(route('session-replay.show', $session))->assertOk()->assertSee('tenant@example.com');
+
+        expect(ReplaySession::query()->findOrFail($session->id)->user->email)->toBe('tenant@example.com')
+            ->and(ReplaySession::query()->findOrFail($session->id)->getConnectionName())->toBe('sqlite');
+    } finally {
+        DB::setDefaultConnection('sqlite');
+    }
 });

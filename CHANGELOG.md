@@ -2,6 +2,10 @@
 
 All notable changes to `packstub/session-replay` are documented here.
 
+## Unreleased
+
+- The viewer finds the recorded people in a database-per-tenant app: users without a connection of their own now load on the app's default connection (the tenant's), not on the replay tables' central one
+
 ## 1.3.1 — 2026-11-24
 
 - The npm recorder (`@packstub/session-replay`) now renews its token before it expires, so the last moments of a tab that stayed open for days are no longer lost

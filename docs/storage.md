@@ -94,6 +94,23 @@ php artisan vendor:publish --tag=session-replay-migrations
 
 The models and the migrations both follow `storage.connection`. Keep the disk central too.
 
+The people stay where they are: the recorded user, the workspace and the impersonator load on their model's own connection, or on the default one when the model declares none. With [stancl/tenancy](https://tenancyforlaravel.com), users that live in each tenant's database are found once tenancy is initialised, so put the viewer behind your tenancy middleware, return the tenant model itself (not its id; `tenantUsing()` keeps only a model) and scope the list to it:
+
+```php
+use Illuminate\Database\Eloquent\Builder;
+
+SessionReplay::tenantUsing(fn ($request) => tenant());
+
+SessionReplay::visibleUsing(function (Builder $query): void {
+    $query->where('tenant_type', tenant()->getMorphClass())
+        ->where('tenant_id', (string) tenant()->getKey());
+});
+```
+
+```php
+'viewer' => ['middleware' => ['web', 'auth', 'tenant']],
+```
+
 ## Sizes
 
 A full snapshot of a server-rendered page is mostly stylesheet. Four things keep recordings small:
